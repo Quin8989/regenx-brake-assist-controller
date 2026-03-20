@@ -49,7 +49,7 @@ class TestPageSelection:
         s.system_state = SystemState.READY
         s.cap_voltage_v = 20.5
         dm.update()
-        assert "READY" in lcd.lines[0]
+        assert "COAST" in lcd.lines[0]
         assert "20.5" in lcd.lines[0]
 
     def test_run_page_in_assist(self):
@@ -118,8 +118,8 @@ class TestRunPageContent:
         s.cap_voltage_v = 25.0
         s.cap_energy_percent = 67.0
         dm.update()
-        assert "67" in lcd.lines[1]
-        assert "%" in lcd.lines[1]
+        assert "67" in lcd.lines[0]
+        assert "%" in lcd.lines[0]
 
     def test_assist_shows_current(self):
         s, f, lcd, dm = _make()
