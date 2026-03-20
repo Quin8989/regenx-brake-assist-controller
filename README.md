@@ -436,6 +436,46 @@ scripts/
 
 ## 12. Setup and Deployment
 
+### 12.0 Prerequisites
+
+| Requirement | Version | Purpose |
+|---|---|---|
+| Python | 3.10+ | Running the pytest test suite on your PC |
+| Git | any | Version control |
+| mpremote | any | Uploading files and running scripts on the Pico |
+| VESC Tool | 3.01+ | Configuring the FSESC motor controller |
+
+**Linux serial permissions:**
+The Pico appears as `/dev/ttyACM0`.  Your user must be in the `dialout`
+group or you'll get "permission denied" when connecting with mpremote.
+
+```bash
+sudo usermod -aG dialout $USER
+```
+
+Log out and back in (or reboot) for the group change to take effect.
+
+### 12.0.1 Development Environment (PC)
+
+Set up a virtual environment for running the test suite locally:
+
+```bash
+cd regenx-brake-assist-controller
+python3 -m venv .venv
+source .venv/bin/activate      # Linux/macOS
+# .venv\Scripts\activate       # Windows
+pip install pytest mpremote
+```
+
+Run the test suite:
+
+```bash
+python -m pytest tests/ -q
+```
+
+All 263 tests should pass.  The test suite uses mock hardware
+(see `tests/conftest.py`) and does not require a connected Pico.
+
 ### 12.1 Flash MicroPython
 
 1. Unplug the Pico from USB.
@@ -567,11 +607,92 @@ PASS
 - Motor current may show small offset noise (~±0.5 A) with no motor (normal).
 - Fault code 0 = no fault.
 
-### 12.4 Full Deployment
+### 12.4 VESC Tool Configuration
+
+VESC Tool is the official desktop app for configuring the FSESC4.20.
+Download it from https://vesc-project.com/vesc_tool (free version works).
+
+Connect the FSESC to your computer via USB (the FSESC has its own USB port,
+separate from the Pico).  Open VESC Tool and click **Connect** (top-left).
+
+#### 12.4.1 Motor Detection (do this first)
+
+Go to **Motor Settings → FOC → General**.
+
+1. Click **Detect and Calculate** (the wizard icon or RL button).
+2. Enter a small detection current (2–5 A is safe for bench testing).
+3. Set the motor pole pair count: the Puyan H01 has **15 pole pairs** (30
+   magnets).  If unsure, the wizard will measure this — verify it matches.
+4. Click **Apply** and then the **Write Motor Configuration** button (the
+   down-arrow icon in the toolbar) to save to the VESC.
+
+This writes the motor resistance, inductance, and flux linkage values.
+The VESC needs these for FOC (Field-Oriented Control) to work correctly.
+
+> **Important:** If detection fails or the motor stutters, double-check
+> phase wire connections.  All 3 motor phase wires must be connected.
+
+#### 12.4.2 Current Limits
+
+Go to **Motor Settings → General → Current**.
+
+| Setting | Value | Notes |
+|---|---|---|
+| Motor Current Max | 40.0 A | Must match `ASSIST_CURRENT_LIMIT_A` in settings.py |
+| Motor Current Max Brake | 40.0 A | Must match `REGEN_CURRENT_LIMIT_A` in settings.py |
+| Absolute Maximum Current | 50.0 A | FSESC4.20 hardware limit — leave as default |
+| Battery Current Max | 40.0 A | Max current drawn from the supercap bank |
+| Battery Current Max Regen | 40.0 A | Max regen charging current into the supercap bank |
+
+Click **Write Motor Configuration** to save.
+
+> **Safety:** The VESC enforces its own current limits independently of the
+> Pico firmware.  Always set VESC limits **equal to or lower than** the
+> firmware limits.  The VESC limits are the hardware safety net.
+
+#### 12.4.3 Voltage Limits
+
+Go to **Motor Settings → General → Voltage**.
+
+| Setting | Value | Notes |
+|---|---|---|
+| Minimum Input Voltage | 14.0 V | VESC shuts down below this (protects supercaps) |
+| Maximum Input Voltage | 42.0 V | Must not exceed supercap bank absolute max |
+
+Click **Write Motor Configuration** to save.
+
+> These limits protect the supercapacitor bank.  The Pico firmware has its
+> own software limits (`VCAP_MIN_OPERATING` = 15 V, `VCAP_ABSOLUTE_MAX` = 42 V)
+> but the VESC hardware limits are the last line of defense.
+
+#### 12.4.4 Enable UART App
+
+Go to **App Settings → General**.
+
+1. Set **App to Use** to **UART**.  This tells the VESC to listen for
+   commands on its UART pins instead of PPM/ADC/NRF.
+2. Go to **App Settings → UART** and confirm:
+   - **Baud Rate:** 115200 (must match `VESC_BAUD_RATE` in settings.py)
+3. Click **Write App Configuration** to save.
+
+> **Without this step**, the VESC ignores all UART commands from the Pico.
+> This is the most commonly missed setting.
+
+#### 12.4.5 Verify Configuration
+
+After writing both motor and app configs:
+
+1. Power-cycle the VESC (disconnect and reconnect power).
+2. Reconnect in VESC Tool and go to **Realtime Data**.
+3. You should see live voltage, temperature, and fault status.
+4. If the Pico is connected via UART, run the telemetry test script
+   (§12.3.4) to confirm the Pico can also read these values.
+
+### 12.5 Full Deployment
 
 1. Confirm hardware pin mapping in `config/settings.py`.
-2. Set motor pole pairs in VESC Tool and verify with FOC detection.
-3. Set current limits in both VESC Tool and `config/settings.py`.
+2. Complete VESC Tool configuration (§12.4).
+3. Verify UART communication with test scripts (§12.3).
 4. Power cycle or reset the board; `boot.py` then `main.py` run automatically.
 
 ---
