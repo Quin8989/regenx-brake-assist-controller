@@ -17,21 +17,18 @@
 from app.controller import AppController
 from app.state_machine import StateMachine
 from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION
-from core import FaultCode, FaultManager, SharedState, SystemState
+from core import FaultCode, FaultManager, SharedState, SystemState, EnergyEstimator
 from drivers.lcd_driver import LCDDriver
-from drivers.precharge_io import PrechargeIO
-from drivers.reset_button import ResetButton
+from drivers.gpio_io import PrechargeIO, ResetButton
 from drivers.throttle import Throttle
-from drivers.uart_port import UARTPort
 from drivers.wheel_speed_hall import WheelSpeedHall
 from services.control_loop import ControlLoop
 from services.display_manager import DisplayManager
-from services.energy_estimator import EnergyEstimator
 from services.input_manager import InputManager
 from services.precharge_manager import PrechargeManager
 from services.safety_supervisor import SafetySupervisor
 from services.bench_logger import BenchLogger
-from services.vesc_comm import CommandManager, VESCComm
+from services.vesc_comm import CommandManager, UARTPort, VESCComm
 from utils import Logger
 
 

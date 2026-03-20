@@ -11,13 +11,13 @@ Each entry describes the expected behavior and its pass criteria.
 
 ### TC-01: Startup from already-charged state
 - **Precondition:** Capacitor voltage ≥ 15 V, no faults
-- **Expected:** System transitions OFF → READY, LCD shows READY status
+- **Expected:** System transitions OFF → COAST, LCD shows COAST status
 - **Pass:** Motor commands are allowed, display shows energy level
 
 ### TC-02: Startup from low-voltage precharge state
 - **Precondition:** Capacitor voltage < 15 V, precharge hardware available
-- **Expected:** System transitions OFF → PRECHARGE → READY
-- **Pass:** Precharge relay activates, voltage rises, READY reached within timeout
+- **Expected:** System transitions OFF → PRECHARGE → COAST
+- **Pass:** Precharge relay activates, voltage rises, COAST reached within timeout
 
 ### TC-03: Startup with disconnected VESC
 - **Precondition:** VESC UART not connected
@@ -29,18 +29,18 @@ Each entry describes the expected behavior and its pass criteria.
 ## Assist
 
 ### TC-04: Assist inhibit below minimum voltage
-- **Precondition:** System in READY, cap voltage < 15 V
+- **Precondition:** System in COAST, cap voltage < 15 V
 - **Expected:** Throttle input does not produce motor command
 - **Pass:** Assist command request remains zero
 
 ### TC-05: Normal assist operation
-- **Precondition:** System in READY, cap voltage ≥ 15 V, VESC telemetry healthy
+- **Precondition:** System in COAST, cap voltage ≥ 15 V, VESC telemetry healthy
 - **Expected:** Throttle input produces proportional assist current command
 - **Pass:** VESC receives current command, state transitions to ASSIST
 
-### TC-06: Assist release returns to READY
+### TC-06: Assist release returns to COAST
 - **Precondition:** System in ASSIST, rider releases throttle
-- **Expected:** Assist command drops to zero, state returns to READY
+- **Expected:** Assist command drops to zero, state returns to COAST
 - **Pass:** Zero command sent to VESC
 
 ---
@@ -53,7 +53,7 @@ Each entry describes the expected behavior and its pass criteria.
 - **Pass:** No brake current sent to VESC
 
 ### TC-08: Normal regen operation
-- **Precondition:** System in READY or REGEN, regen requested, cap voltage < 40 V
+- **Precondition:** System in COAST or REGEN, regen requested, cap voltage < 40 V
 - **Expected:** Brake current command sent to VESC
 - **Pass:** State transitions to REGEN, VESC receives brake command
 
@@ -95,8 +95,8 @@ Each entry describes the expected behavior and its pass criteria.
 
 ## Display
 
-### TC-15: Display page correctness — READY
-- **Precondition:** System in READY
+### TC-15: Display page correctness — COAST
+- **Precondition:** System in COAST
 - **Expected:** LCD shows state, cap voltage, energy percentage
 - **Pass:** Values match measured values within rounding
 

@@ -46,7 +46,7 @@ clutch on the planetary carrier disengages.  The wheel spins freely and the
 motor sits nearly still.  No current is commanded — true zero-drag coast.
 
 The system enters the NEUTRAL command mode, and the state machine returns to
-READY (no active motor state).
+COAST (no active motor state).
 
 ### 2.3 REGEN (throttle off, mechanical brake applied)
 
@@ -154,7 +154,7 @@ no callbacks, no interrupts (except the wheel hall edge ISR for timing).
 |---|---|---|
 | OFF | Initial state after boot | Inhibited |
 | PRECHARGE | Precharge relay active, waiting for cap ≥ 15.0 V | Inhibited |
-| READY | Electrically ready, no rider request active | Inhibited |
+| COAST | Electrically ready, no rider request active | Inhibited |
 | ASSIST | Rider requesting forward power | Active (assist) |
 | REGEN | Rider braking, carrier locked | Active (regen) |
 | FAULT | One or more faults latched | Inhibited |
@@ -162,11 +162,11 @@ no callbacks, no interrupts (except the wheel hall edge ISR for timing).
 Transitions:
 
 ```
-OFF → PRECHARGE → READY ⇄ ASSIST
-                  READY ⇄ REGEN
+OFF → PRECHARGE → COAST ⇄ ASSIST
+                  COAST ⇄ REGEN
                   ASSIST ⇄ REGEN   (direct transitions allowed)
               Any state → FAULT    (when faults present)
-                  FAULT → READY    (when all faults clear)
+                  FAULT → COAST    (when all faults clear)
 ```
 
 ---
@@ -206,7 +206,7 @@ The SafetySupervisor runs at 100 Hz and checks:
 | Fault | Trigger | Latching? |
 |---|---|---|
 | OVERVOLTAGE | Cap voltage ≥ VCAP_ABSOLUTE_MAX (42.0 V) | Yes |
-| UNDERVOLTAGE | Cap voltage < VCAP_MIN_OPERATING (15.0 V) while in READY+ | No |
+| UNDERVOLTAGE | Cap voltage < VCAP_MIN_OPERATING (15.0 V) while in COAST+ | No |
 | VESC_TIMEOUT | No valid telemetry for 500 ms | No |
 | THROTTLE_RANGE | ADC below 100 or above 4000 (open/short circuit) | No |
 | PRECHARGE_STALL | Voltage rise stalls for 3 consecutive 60 s windows | Yes |
@@ -365,7 +365,7 @@ fast.
 | # | Field | Source |
 |---|---|---|
 | 0 | `tick_ms` | `ticks_ms()` at capture time |
-| 1 | `system_state` | OFF / PRECHARGE / READY / ASSIST / REGEN / FAULT |
+| 1 | `system_state` | OFF / PRECHARGE / COAST / ASSIST / REGEN / FAULT |
 | 2 | `cap_voltage_v` | Supercap bus voltage from VESC telemetry |
 | 3 | `wheel_speed_rpm` | Fork-mounted hall sensor |
 | 4 | `vesc_mech_rpm` | VESC back-EMF mechanical RPM |
@@ -403,25 +403,22 @@ config/
 drivers/
   throttle.py        # ADC read → deadband → normalized fraction
   wheel_speed_hall.py  # Hall edge timing → RPM with debounce/timeout
-  uart_port.py       # Raw UART read/write wrapper
-  precharge_io.py    # GPIO pin control for precharge + boost relays
+  gpio_io.py         # PrechargeIO (relay/boost GPIO) + ResetButton (edge-detect)
   lcd_driver.py      # RG1602A HD44780 4-bit parallel GPIO driver
-  reset_button.py    # Soft reset button edge-detect driver (GP8)
 
 services/
   input_manager.py      # Reads throttle + wheel, decides ASSIST/REGEN/NEUTRAL
   control_loop.py       # Assist current mapping + regen PI slip controller
   vesc_protocol.py      # VESC UART packet framing, CRC, command builders, parsing
-  vesc_comm.py          # VESCComm (telemetry service) + CommandManager (TX gate)
+  vesc_comm.py          # UARTPort + VESCComm (telemetry) + CommandManager (TX gate)
   safety_supervisor.py  # Overvoltage, undervoltage, timeout, throttle checks
   precharge_manager.py  # Precharge ON/OFF + watchdog (grace, progress, timeout)
-  energy_estimator.py   # ½CV² energy + percentage calculation
   display_manager.py    # LCD page rendering (run/precharge/fault pages)
   bench_logger.py       # RAM ring-buffer data logger for bench debugging
 
 app/
   controller.py      # Orchestrator — sequences services via PeriodicTimers
-  state_machine.py   # State transitions: OFF→PRECHARGE→READY→ASSIST/REGEN, FAULT
+  state_machine.py   # State transitions: OFF→PRECHARGE→COAST→ASSIST/REGEN, FAULT
 
 tests/               # pytest suite (263 tests)
 

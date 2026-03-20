@@ -21,12 +21,12 @@ class TestOffTransitions:
         sm.update()
         assert s.system_state == SystemState.PRECHARGE
 
-    def test_off_to_ready_when_voltage_ok(self):
+    def test_off_to_coast_when_voltage_ok(self):
         s, f, sm = _make()
         s.system_state = SystemState.OFF
         s.cap_voltage_v = 20.0
         sm.update()
-        assert s.system_state == SystemState.READY
+        assert s.system_state == SystemState.COAST
 
     def test_off_to_precharge_at_exactly_threshold(self):
         s, f, sm = _make()
@@ -35,12 +35,12 @@ class TestOffTransitions:
         sm.update()
         assert s.system_state == SystemState.PRECHARGE
 
-    def test_off_to_ready_at_exactly_threshold(self):
+    def test_off_to_coast_at_exactly_threshold(self):
         s, f, sm = _make()
         s.system_state = SystemState.OFF
         s.cap_voltage_v = 15.0
         sm.update()
-        assert s.system_state == SystemState.READY
+        assert s.system_state == SystemState.COAST
 
 
 # ---- PRECHARGE transitions ----
@@ -53,40 +53,40 @@ class TestPrechargeTransitions:
         sm.update()
         assert s.system_state == SystemState.PRECHARGE
 
-    def test_precharge_to_ready(self):
+    def test_precharge_to_coast(self):
         s, f, sm = _make()
         s.system_state = SystemState.PRECHARGE
         s.cap_voltage_v = 16.0
         sm.update()
-        assert s.system_state == SystemState.READY
+        assert s.system_state == SystemState.COAST
 
 
-# ---- READY transitions ----
+# ---- COAST transitions ----
 
-class TestReadyTransitions:
-    def test_ready_to_assist(self):
+class TestCoastTransitions:
+    def test_coast_to_assist(self):
         s, f, sm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.requested_mode = CommandMode.ASSIST
         sm.update()
         assert s.system_state == SystemState.ASSIST
 
-    def test_ready_to_regen(self):
+    def test_coast_to_regen(self):
         s, f, sm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.requested_mode = CommandMode.REGEN
         sm.update()
         assert s.system_state == SystemState.REGEN
 
-    def test_ready_stays_on_neutral(self):
+    def test_coast_stays_on_neutral(self):
         s, f, sm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.requested_mode = CommandMode.NEUTRAL
         sm.update()
-        assert s.system_state == SystemState.READY
+        assert s.system_state == SystemState.COAST
 
 
 # ---- ASSIST transitions ----
@@ -100,13 +100,13 @@ class TestAssistTransitions:
         sm.update()
         assert s.system_state == SystemState.REGEN
 
-    def test_assist_to_ready_on_neutral(self):
+    def test_assist_to_coast_on_neutral(self):
         s, f, sm = _make()
         s.system_state = SystemState.ASSIST
         s.cap_voltage_v = 20.0
         s.requested_mode = CommandMode.NEUTRAL
         sm.update()
-        assert s.system_state == SystemState.READY
+        assert s.system_state == SystemState.COAST
 
     def test_assist_stays_on_assist(self):
         s, f, sm = _make()
@@ -128,13 +128,13 @@ class TestRegenTransitions:
         sm.update()
         assert s.system_state == SystemState.ASSIST
 
-    def test_regen_to_ready_on_neutral(self):
+    def test_regen_to_coast_on_neutral(self):
         s, f, sm = _make()
         s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         s.requested_mode = CommandMode.NEUTRAL
         sm.update()
-        assert s.system_state == SystemState.READY
+        assert s.system_state == SystemState.COAST
 
     def test_regen_stays_on_regen(self):
         s, f, sm = _make()
@@ -150,7 +150,7 @@ class TestRegenTransitions:
 class TestFaultTransitions:
     def test_any_state_to_fault(self):
         for start in (SystemState.OFF, SystemState.PRECHARGE,
-                      SystemState.READY, SystemState.ASSIST, SystemState.REGEN):
+                      SystemState.COAST, SystemState.ASSIST, SystemState.REGEN):
             s, f, sm = _make()
             s.system_state = start
             s.cap_voltage_v = 20.0
@@ -176,7 +176,7 @@ class TestFaultTransitions:
 
     def test_fault_inhibits_motor(self):
         s, f, sm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.inhibit_motor_commands = False
         f.set_fault(FaultCode.INTERNAL)

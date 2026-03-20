@@ -4,9 +4,9 @@
 # This module gates those requests with safety checks before allowing
 # the system state to change:
 #
-#   OFF → PRECHARGE → READY → ASSIST / REGEN
+#   OFF → PRECHARGE → COAST → ASSIST / REGEN
 #   Any state → FAULT (when faults are present)
-#   FAULT → READY (when all faults clear)
+#   FAULT → COAST (when all faults clear)
 #   Direct ASSIST ↔ REGEN transitions are allowed.
 
 from config.settings import VCAP_MIN_OPERATING
@@ -37,8 +37,8 @@ class StateMachine:
         elif current == SystemState.PRECHARGE:
             self._handle_precharge()
 
-        elif current == SystemState.READY:
-            self._handle_ready()
+        elif current == SystemState.COAST:
+            self._handle_coast()
 
         elif current == SystemState.ASSIST:
             self._handle_assist()
@@ -52,16 +52,16 @@ class StateMachine:
     def _handle_off(self):
         s = self._state
         if s.cap_voltage_v >= VCAP_MIN_OPERATING:
-            s.system_state = SystemState.READY
+            s.system_state = SystemState.COAST
         else:
             s.system_state = SystemState.PRECHARGE
 
     def _handle_precharge(self):
         s = self._state
         if s.cap_voltage_v >= VCAP_MIN_OPERATING:
-            s.system_state = SystemState.READY
+            s.system_state = SystemState.COAST
 
-    def _handle_ready(self):
+    def _handle_coast(self):
         s = self._state
         if s.requested_mode == CommandMode.REGEN:
             s.system_state = SystemState.REGEN
@@ -73,14 +73,14 @@ class StateMachine:
         if s.requested_mode == CommandMode.REGEN:
             s.system_state = SystemState.REGEN
         elif s.requested_mode != CommandMode.ASSIST:
-            s.system_state = SystemState.READY
+            s.system_state = SystemState.COAST
 
     def _handle_regen(self):
         s = self._state
         if s.requested_mode == CommandMode.ASSIST:
             s.system_state = SystemState.ASSIST
         elif s.requested_mode != CommandMode.REGEN:
-            s.system_state = SystemState.READY
+            s.system_state = SystemState.COAST
 
     def _handle_fault(self):
         if not self._faults.has_fault():

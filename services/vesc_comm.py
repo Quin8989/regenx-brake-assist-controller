@@ -1,11 +1,19 @@
 # services/vesc_comm.py — VESC telemetry service and command output
 #
+# UARTPort: low-level UART access (raw serial read/write).
 # VESCComm: reads UART, parses telemetry into SharedState, sends commands.
 # CommandManager: final gate between control requests and VESC transmissions.
 
+from machine import UART, Pin
 from time import ticks_ms
 
-from config.settings import VESC_ERPM_TO_MECH_RPM
+from config.settings import (
+    VESC_BAUD_RATE,
+    VESC_ERPM_TO_MECH_RPM,
+    VESC_UART_ID,
+    VESC_UART_RX,
+    VESC_UART_TX,
+)
 from services.vesc_protocol import (
     _build_set_brake_current,
     _build_set_current,
@@ -13,6 +21,35 @@ from services.vesc_protocol import (
     _extract_payload,
     _parse_telemetry,
 )
+
+
+# =============================================================================
+# UARTPort — low-level UART for VESC communication
+# =============================================================================
+
+
+class UARTPort:
+    def __init__(self):
+        self._uart = UART(
+            VESC_UART_ID,
+            baudrate=VESC_BAUD_RATE,
+            tx=Pin(VESC_UART_TX),
+            rx=Pin(VESC_UART_RX),
+        )
+
+    def write(self, data):
+        """Write bytes to the UART. Returns number of bytes written."""
+        return self._uart.write(data)
+
+    def read(self, nbytes=None):
+        """Non-blocking read. Returns bytes or None."""
+        if nbytes is None:
+            return self._uart.read()
+        return self._uart.read(nbytes)
+
+    def any(self):
+        """Return number of bytes waiting in the receive buffer."""
+        return self._uart.any()
 
 
 # =============================================================================

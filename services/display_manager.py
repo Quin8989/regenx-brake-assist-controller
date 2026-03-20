@@ -11,7 +11,7 @@
 #   RUN (REGEN):     "REGEN   25.2V 68%"
 #                    "  12.3A   124RPM"
 #
-#   RUN (READY):     "COAST   25.2V 68%"
+#   RUN (COAST):     "COAST   25.2V 68%"
 #                    "   0.0A     0RPM"
 #
 #   PRECHARGE:       "PRECHARGE...    "
@@ -64,7 +64,7 @@ class DisplayManager:
 
         self._show_run_page()
 
-    # ----- RUN page (READY / ASSIST / REGEN) -----
+    # ----- RUN page (COAST / ASSIST / REGEN) -----
 
     def _show_run_page(self):
         s = self._state
@@ -74,7 +74,7 @@ class DisplayManager:
         elif s.system_state == SystemState.REGEN:
             mode = "REGEN"
         else:
-            mode = "COAST"
+            mode = s.system_state
 
         # Line 0: "ASSIST  25.2V 68%"   (mode 6, gap, voltage 5, space, pct 3)
         volts = f"{s.cap_voltage_v:.1f}V"

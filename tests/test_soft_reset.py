@@ -77,7 +77,7 @@ class TestSoftReset:
 
         assert fm.has_fault() is False
         assert s.system_state == SystemState.OFF
-        assert s.inhibit_motor_commands is True  # inhibited until READY
+        assert s.inhibit_motor_commands is True  # inhibited until COAST
 
     def test_reset_zeros_command_requests(self):
         s, fm, cl, btn, app = _make_app()
@@ -102,7 +102,7 @@ class TestSoftReset:
         btn.press()
         app.update()
 
-        assert s.requested_mode == "NEUTRAL"
+        assert s.requested_mode == CommandMode.NEUTRAL
         assert s.requested_level == 0.0
 
     def test_no_reset_without_press(self):

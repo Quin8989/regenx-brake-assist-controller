@@ -46,7 +46,7 @@ class TestPageSelection:
 
     def test_run_page_in_ready(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.5
         dm.update()
         assert "COAST" in lcd.lines[0]
@@ -81,7 +81,7 @@ class TestLcdFaultTolerance:
     def test_oserror_caught_silently(self):
         lcd = _FailLCD()
         s, f, _, dm = _make(lcd=lcd)
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         # Should not raise
         dm.update()
@@ -100,21 +100,21 @@ class TestLcdFaultTolerance:
         dm.update()  # should not raise
 
 
-# ---- TC-15: Display page correctness — READY ----
+# ---- TC-15: Display page correctness — COAST ----
 
 class TestRunPageContent:
-    """TC-15: READY page shows state, voltage, and energy percentage."""
+    """TC-15: COAST page shows state, voltage, and energy percentage."""
 
     def test_ready_shows_voltage_value(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 22.3
         dm.update()
         assert "22.3" in lcd.lines[0]
 
     def test_ready_shows_energy_percent(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 25.0
         s.cap_energy_percent = 67.0
         dm.update()
@@ -198,5 +198,5 @@ class TestFaultPageContent:
         dm.update()
         assert "FAULT" in lcd.lines[0]
         # Run page content should NOT appear
-        assert "READY" not in lcd.lines[0]
+        assert "COAST" not in lcd.lines[0]
         assert "ASSIST" not in lcd.lines[0]

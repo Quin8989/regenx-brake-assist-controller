@@ -77,7 +77,7 @@ class TestUndervoltage:
 class TestTelemetryHealth:
     def test_timeout_in_ready(self):
         s, f, sv = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.last_vesc_rx_ms = 0
         set_clock_ms(100)
@@ -88,7 +88,7 @@ class TestTelemetryHealth:
 
     def test_no_timeout_when_fresh(self):
         s, f, sv = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         set_clock_ms(100)
         s.last_vesc_rx_ms = 100
@@ -114,7 +114,7 @@ class TestTelemetryHealth:
 
     def test_no_fault_before_first_packet(self):
         s, f, sv = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.last_vesc_rx_ms = 0  # never received
         set_clock_ms(10000)
@@ -123,7 +123,7 @@ class TestTelemetryHealth:
 
     def test_timeout_clears_when_packet_arrives(self):
         s, f, sv = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         set_clock_ms(100)
         s.last_vesc_rx_ms = 100
@@ -184,7 +184,7 @@ class TestThrottleValidity:
 class TestInhibits:
     def test_inhibit_on_fault(self):
         s, f, sv = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.throttle_valid = True
         f.set_fault(FaultCode.INTERNAL)
@@ -209,7 +209,7 @@ class TestInhibits:
 
     def test_no_inhibit_in_ready(self):
         s, f, sv = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.cap_voltage_v = 20.0
         s.throttle_valid = True
         sv.update()

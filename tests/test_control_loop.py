@@ -169,7 +169,7 @@ class TestRegen:
 class TestNeutralStates:
     def test_ready_state_zeros_output(self):
         s, cl = _make()
-        s.system_state = SystemState.READY
+        s.system_state = SystemState.COAST
         s.inhibit_motor_commands = False
         s.requested_level = 1.0
         cl.update()
@@ -192,8 +192,8 @@ class TestNeutralStates:
         regen_val = s.regen_command_request
         assert regen_val > 0.0
 
-        # Switch to READY — should reset dynamics
-        s.system_state = SystemState.READY
+        # Switch to COAST — should reset dynamics
+        s.system_state = SystemState.COAST
         cl.update()
 
         # Re-enter REGEN — should start fresh (low value, not the previous accumulated)

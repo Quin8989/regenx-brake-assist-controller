@@ -1,7 +1,6 @@
 # tests/test_energy_estimator.py — EnergyEstimator ½CV² and percentage
 
-from core import SharedState
-from services.energy_estimator import EnergyEstimator
+from core import EnergyEstimator, SharedState
 
 
 def _make():

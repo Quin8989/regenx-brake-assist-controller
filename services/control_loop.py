@@ -14,8 +14,8 @@
 #    When coasting, the freewheel clutch disengages and motor RPM ≈ 0.
 #
 # 2. StateMachine gates transitions with safety checks (cap voltage, faults):
-#      READY + ASSIST request → ASSIST state
-#      READY + REGEN request  → REGEN state
+#      COAST + ASSIST request → ASSIST state
+#      COAST + REGEN request  → REGEN state
 #      Direct ASSIST ↔ REGEN transitions are allowed.
 #
 # 3. This module (ControlLoop) converts state + intent into current commands:
@@ -111,7 +111,7 @@ class ControlLoop:
             self._reset_assist()
             self._compute_regen()
         else:
-            # READY / OFF / PRECHARGE / FAULT: remain neutral and clear dynamics.
+            # COAST / OFF / PRECHARGE / FAULT: remain neutral and clear dynamics.
             # Next entry into ASSIST/REGEN starts from a known smooth baseline.
             self._reset_assist()
             self._reset_regen()
