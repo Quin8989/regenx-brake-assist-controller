@@ -4,8 +4,8 @@
 # decide motor commands, or hold application state.
 
 from machine import UART, Pin
-from config.pins import VESC_UART_ID, VESC_UART_TX, VESC_UART_RX
-from config.vesc_config import VESC_BAUD_RATE
+
+from config.settings import VESC_BAUD_RATE, VESC_UART_ID, VESC_UART_RX, VESC_UART_TX
 
 
 class UARTPort:
@@ -30,7 +30,3 @@ class UARTPort:
     def any(self):
         """Return number of bytes waiting in the receive buffer."""
         return self._uart.any()
-
-    # TODO: Decide buffer size
-    # TODO: Decide whether to implement a ring buffer or simple polling reads
-    # TODO: Decide how to recover from UART framing errors or garbage bytes

@@ -4,22 +4,22 @@
 # and returns data only — does NOT decide whether assist is allowed.
 
 from machine import ADC, Pin
-from config.pins import THROTTLE_ADC_PIN
-from config.thresholds import (
-    THROTTLE_RAW_MIN,
-    THROTTLE_RAW_MAX,
+
+from config.settings import (
+    THROTTLE_ADC_PIN,
     THROTTLE_DEADBAND,
-    THROTTLE_FAULT_LOW,
     THROTTLE_FAULT_HIGH,
+    THROTTLE_FAULT_LOW,
+    THROTTLE_RAW_MAX,
+    THROTTLE_RAW_MIN,
 )
-from utils.math_helpers import linear_map, clamp
+from utils import clamp, linear_map
 
 
 class Throttle:
     def __init__(self):
         self._adc = ADC(Pin(THROTTLE_ADC_PIN))
         self.raw = 0
-        self.voltage = 0.0
         self.fraction = 0.0      # 0.0 – 1.0 normalized command
         self.is_valid = True
 
@@ -46,9 +46,3 @@ class Throttle:
         # Apply deadband near zero
         if self.fraction < THROTTLE_DEADBAND:
             self.fraction = 0.0
-
-    # TODO: Measure actual throttle idle and full-scale voltage range
-    # TODO: Decide acceptable range limits and fault thresholds
-    # TODO: Decide the deadband value
-    # TODO: Decide whether throttle fault should immediately force FAULT state
-    #       or only inhibit assist

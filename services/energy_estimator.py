@@ -3,11 +3,19 @@
 # Uses measured capacitor voltage and known capacitance to estimate
 # stored energy in joules and usable percentage.
 
-from config.thresholds import (
+from config.settings import (
     CAPACITANCE_F,
     VCAP_MIN_OPERATING,
     VCAP_SOFT_REGEN_CUTOFF,
 )
+from utils import clamp
+
+
+# Precomputed energy bounds (constant for given capacitance and voltage window)
+_HALF_C = 0.5 * CAPACITANCE_F
+_E_MIN = _HALF_C * VCAP_MIN_OPERATING * VCAP_MIN_OPERATING
+_E_MAX = _HALF_C * VCAP_SOFT_REGEN_CUTOFF * VCAP_SOFT_REGEN_CUTOFF
+_E_RANGE = _E_MAX - _E_MIN if _E_MAX > _E_MIN else 0.0
 
 
 class EnergyEstimator:
@@ -18,19 +26,11 @@ class EnergyEstimator:
         """Recompute energy estimates from current cap voltage."""
         v = self._state.cap_voltage_v
 
-        # E = 0.5 * C * V^2
-        self._state.cap_energy_j = 0.5 * CAPACITANCE_F * v * v
+        energy_j = _HALF_C * v * v
+        self._state.cap_energy_j = energy_j
 
-        # Usable percentage relative to operating window
-        e_min = 0.5 * CAPACITANCE_F * VCAP_MIN_OPERATING * VCAP_MIN_OPERATING
-        e_max = 0.5 * CAPACITANCE_F * VCAP_SOFT_REGEN_CUTOFF * VCAP_SOFT_REGEN_CUTOFF
-        if e_max > e_min:
-            pct = (self._state.cap_energy_j - e_min) / (e_max - e_min) * 100.0
-            self._state.cap_energy_percent = max(0.0, min(100.0, pct))
+        if _E_RANGE > 0.0:
+            pct = (energy_j - _E_MIN) / _E_RANGE * 100.0
+            self._state.cap_energy_percent = clamp(pct, 0.0, 100.0)
         else:
             self._state.cap_energy_percent = 0.0
-
-    # TODO: Confirm whether total effective capacitance is exactly 20 F
-    # TODO: Define energy percentage scaling range
-    # TODO: Decide whether to use local cap voltage or VESC bus voltage as energy source
-    # TODO: Decide display rounding

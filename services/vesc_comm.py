@@ -1,26 +1,37 @@
-# services/vesc_comm.py — High-level VESC communication service
+# services/vesc_comm.py — VESC telemetry service and command output
 #
-# Periodically requests telemetry, feeds inbound bytes to the parser,
-# and sends motor commands. Does NOT decide when assist/regen is allowed,
-# render display text, or own the state machine.
+# VESCComm: reads UART, parses telemetry into SharedState, sends commands.
+# CommandManager: final gate between control requests and VESC transmissions.
 
-from time import ticks_ms, ticks_diff
-from config.thresholds import VESC_TELEMETRY_TIMEOUT_MS
+from time import ticks_ms
+
+from config.settings import VESC_ERPM_TO_MECH_RPM
+from services.vesc_protocol import (
+    _build_set_brake_current,
+    _build_set_current,
+    _build_telemetry_request,
+    _extract_payload,
+    _parse_telemetry,
+)
+
+
+# =============================================================================
+# VESCComm — high-level communication service
+# =============================================================================
 
 
 class VESCComm:
-    def __init__(self, uart_port, vesc_packets, shared_state):
+    """UART telemetry service and motor command transmitter."""
+
+    def __init__(self, uart_port, shared_state):
         self._uart = uart_port
-        self._packets = vesc_packets
         self._state = shared_state
         self._rx_buf = bytearray()
 
     # --- Telemetry ---
 
     def request_telemetry(self):
-        """Send a telemetry request frame to the VESC."""
-        frame = self._packets.build_telemetry_request()
-        self._uart.write(frame)
+        self._uart.write(_build_telemetry_request())
 
     def service_rx(self):
         """Read available UART bytes and attempt to parse complete frames."""
@@ -28,56 +39,71 @@ class VESCComm:
         if data:
             self._rx_buf.extend(data)
 
-        # Try to extract and process frames
         while True:
-            payload, self._rx_buf = self._packets.extract_payload(self._rx_buf)
+            payload, self._rx_buf = _extract_payload(self._rx_buf)
             if payload is None:
                 break
             self._handle_payload(payload)
 
-        # Limit buffer growth if no valid frames are found
         if len(self._rx_buf) > 512:
             self._rx_buf = self._rx_buf[-256:]
 
     def _handle_payload(self, payload):
-        """Process a decoded payload and update shared state."""
-        result = self._packets.parse_telemetry(payload)
-        if result is not None:
-            self._state.vesc_bus_voltage_v = result.get("bus_voltage", 0.0)
-            self._state.vesc_motor_current_a = result.get("motor_current", 0.0)
-            self._state.vesc_input_current_a = result.get("input_current", 0.0)
-            self._state.vesc_rpm = result.get("rpm", 0)
-            self._state.vesc_duty_cycle = result.get("duty_cycle", 0.0)
-            self._state.vesc_fault_code = result.get("fault_code", 0)
-            self._state.last_vesc_rx_ms = ticks_ms()
+        vals = _parse_telemetry(payload)
+        if vals is None:
+            return
+        s = self._state
+        (
+            s.vesc_temp_fet_c, s.vesc_temp_motor_c,
+            s.vesc_motor_current_a, s.vesc_input_current_a,
+            s.vesc_duty_cycle, s.vesc_rpm, s.vesc_bus_voltage_v,
+            s.vesc_ah, s.vesc_ah_charged,
+            s.vesc_wh, s.vesc_wh_charged,
+            s.vesc_tach, s.vesc_tach_abs,
+            s.vesc_fault_code,
+        ) = vals
+        s.cap_voltage_v = s.vesc_bus_voltage_v
+        s.vesc_mech_rpm = s.vesc_rpm * VESC_ERPM_TO_MECH_RPM
+        s.last_vesc_rx_ms = ticks_ms()
 
     # --- Commands ---
 
     def send_assist(self, current_a):
-        """Send an assist (positive motor current) command."""
-        frame = self._packets.build_set_current(current_a)
-        self._uart.write(frame)
+        self._uart.write(_build_set_current(current_a))
         self._state.last_command_tx_ms = ticks_ms()
 
     def send_regen(self, current_a):
-        """Send a regen (brake current) command."""
-        frame = self._packets.build_set_brake_current(current_a)
-        self._uart.write(frame)
+        self._uart.write(_build_set_brake_current(current_a))
         self._state.last_command_tx_ms = ticks_ms()
 
     def send_neutral(self):
-        """Send a zero / neutral command."""
-        frame = self._packets.build_set_current(0.0)
-        self._uart.write(frame)
+        self._uart.write(_build_set_current(0.0))
         self._state.last_command_tx_ms = ticks_ms()
 
-    # --- Health ---
 
-    def is_telemetry_healthy(self):
-        """Return True if telemetry has been received recently."""
-        return ticks_diff(ticks_ms(), self._state.last_vesc_rx_ms) < VESC_TELEMETRY_TIMEOUT_MS
+# =============================================================================
+# CommandManager — final gate between control requests and VESC transmissions
+# =============================================================================
 
-    # TODO: Define retry / timeout behavior
-    # TODO: Define how packet parsing resynchronizes after corrupted data
-    # TODO: Define whether commands are sent every cycle or only when changed + heartbeat
-    # TODO: Decide what happens if the VESC reports its own fault
+
+class CommandManager:
+    def __init__(self, vesc_comm, shared_state):
+        self._vesc = vesc_comm
+        self._state = shared_state
+
+    def update(self):
+        s = self._state
+
+        if s.inhibit_motor_commands:
+            self._vesc.send_neutral()
+            return
+
+        if s.assist_command_request > 0.0:
+            self._vesc.send_assist(s.assist_command_request)
+            return
+
+        if s.regen_command_request > 0.0:
+            self._vesc.send_regen(s.regen_command_request)
+            return
+
+        self._vesc.send_neutral()

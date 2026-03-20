@@ -3,14 +3,23 @@
 # Runs frequently and overrides all non-safety logic.
 # Ensures safe shutdown within the target of < 100 ms on detected fault.
 
-from time import ticks_ms, ticks_diff
-from core.enums import SystemState, FaultCode
-from config.thresholds import (
+from time import ticks_diff, ticks_ms
+
+from config.settings import (
     VCAP_ABSOLUTE_MAX,
-    VCAP_SOFT_REGEN_CUTOFF,
     VCAP_MIN_OPERATING,
     VESC_TELEMETRY_TIMEOUT_MS,
 )
+from core import FaultCode, SystemState
+
+# VESC fault codes (from datatypes.h mc_fault_code enum):
+#   0 = NONE, 1 = OVER_VOLTAGE, 2 = UNDER_VOLTAGE, 3 = DRV, 4 = ABS_OVER_CURRENT,
+#   5 = OVER_TEMP_FET, 6 = OVER_TEMP_MOTOR
+
+# Prebuilt sets for state membership checks (avoid recreating each call)
+_TELEMETRY_EXEMPT_STATES = {SystemState.OFF, SystemState.PRECHARGE, SystemState.FAULT}
+_UNDERVOLTAGE_STATES = {SystemState.ASSIST, SystemState.REGEN}
+_INHIBIT_STATES = {SystemState.OFF, SystemState.PRECHARGE, SystemState.FAULT}
 
 
 class SafetySupervisor:
@@ -23,41 +32,67 @@ class SafetySupervisor:
         self._check_overvoltage()
         self._check_undervoltage()
         self._check_telemetry_health()
+        self._check_vesc_fault()
         self._check_throttle_validity()
         self._apply_inhibits()
 
     def _check_overvoltage(self):
         if self._state.cap_voltage_v >= VCAP_ABSOLUTE_MAX:
             self._faults.set_fault(FaultCode.OVERVOLTAGE)
-            self._state.inhibit_motor_commands = True
 
     def _check_undervoltage(self):
-        if self._state.cap_voltage_v < VCAP_MIN_OPERATING:
-            # Not necessarily a FAULT — but motor assist should be inhibited
-            self._state.inhibit_motor_commands = True
-            # Only raise a fault if we were previously in an operating state
-            if self._state.system_state in (SystemState.ASSIST, SystemState.REGEN):
-                self._faults.set_fault(FaultCode.UNDERVOLTAGE)
+        if (
+            self._state.cap_voltage_v < VCAP_MIN_OPERATING
+            and self._state.system_state in _UNDERVOLTAGE_STATES
+        ):
+            self._faults.set_fault(FaultCode.UNDERVOLTAGE)
+        else:
+            self._faults.clear_fault(FaultCode.UNDERVOLTAGE)
 
     def _check_telemetry_health(self):
+        if self._state.system_state in _TELEMETRY_EXEMPT_STATES:
+            self._faults.clear_fault(FaultCode.VESC_TIMEOUT)
+            return
+        if self._state.last_vesc_rx_ms == 0:
+            return  # Haven't received any packet yet — not a fault
         age = ticks_diff(ticks_ms(), self._state.last_vesc_rx_ms)
-        if age > VESC_TELEMETRY_TIMEOUT_MS and self._state.last_vesc_rx_ms != 0:
+        if age > VESC_TELEMETRY_TIMEOUT_MS:
             self._faults.set_fault(FaultCode.VESC_TIMEOUT)
-            self._state.inhibit_motor_commands = True
+        else:
+            self._faults.clear_fault(FaultCode.VESC_TIMEOUT)
+
+    def _check_vesc_fault(self):
+        """Inhibit motor commands when the VESC reports an internal fault.
+
+        VESC fault_code 0 = no fault.  Any non-zero value (over-temp, DRV error,
+        over-current, etc.) means the VESC has shut down its motor output.
+        Auto-clears once the VESC reports fault_code 0 again.
+        """
+        if self._state.vesc_fault_code != 0:
+            self._faults.set_fault(FaultCode.VESC_FAULT)
+        else:
+            self._faults.clear_fault(FaultCode.VESC_FAULT)
 
     def _check_throttle_validity(self):
-        # Throttle validity is set by the throttle driver
-        # If invalid, inhibit assist but don't necessarily force full FAULT
-        # TODO: Decide policy — immediate FAULT or just inhibit?
-        pass
+        """Invalid throttle (wire open/shorted) inhibits motor and sets a
+        non-latching fault that clears automatically once the sensor recovers."""
+        if not self._state.throttle_valid:
+            self._faults.set_fault(FaultCode.THROTTLE_RANGE)
+        else:
+            self._faults.clear_fault(FaultCode.THROTTLE_RANGE)
 
     def _apply_inhibits(self):
-        """Force FAULT state if critical faults are present."""
-        if self._faults.has_critical_fault():
-            self._state.system_state = SystemState.FAULT
+        """Single source of truth for motion inhibit policy."""
+        if self._faults.has_fault():
             self._state.inhibit_motor_commands = True
+            return
 
-    # TODO: Finalize which events are immediate FAULTs vs warnings
-    # TODO: Define recovery behavior after transient issues
-    # TODO: Define maximum allowed time from fault detection to command disable
-    # TODO: Decide whether supervisor uses local voltage, VESC telemetry, or both
+        if self._state.cap_voltage_v < VCAP_MIN_OPERATING:
+            self._state.inhibit_motor_commands = True
+            return
+
+        if self._state.system_state in _INHIBIT_STATES:
+            self._state.inhibit_motor_commands = True
+            return
+
+        self._state.inhibit_motor_commands = False
