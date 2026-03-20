@@ -19,8 +19,8 @@ stored in a supercapacitor bank rather than a battery.
 | Puyan H01 geared hub motor | 250–350 W class, 15 pole pairs, planetary gearbox with one-way freewheel clutch |
 | Supercapacitor bank (20 F) | Energy storage — charges via regen braking, discharges during assist |
 | Hall throttle | 3-wire analog (0.8–4.2 V typical), read on Pico ADC0 |
-| Wheel speed hall sensor | Fork-mounted, 6 spoke magnets, digital pulse input on GP5 |
-| 16×2 I2C LCD | Status display via PCF8574 backpack on I2C1 |
+| Wheel speed hall sensor | Fork-mounted, 6 spoke magnets, digital pulse input on GP9 |
+| RG1602A 16×2 LCD | Status display via 4-bit parallel GPIO (RS, E, D4–D7) |
 
 Communication between the Pico and VESC is over UART at 115200 baud.  Both
 devices use 3.3 V logic, so no level-shifter is needed.
@@ -250,13 +250,21 @@ alongside the precharge relay.
 |---|---|---|
 | 1 | GP0 | UART0 TX → VESC RX |
 | 2 | GP1 | UART0 RX ← VESC TX |
-| 4 | GP2 | I2C1 SDA (LCD) |
-| 5 | GP3 | I2C1 SCL (LCD) |
-| 6 | GP4 | (available) |
-| 7 | GP5 | Wheel speed hall sensor (digital input) |
+| 11 | GP8 | Soft reset button (active-low, internal pull-up) |
+| 12 | GP9 | Wheel speed hall sensor (digital input) |
 | 20 | GP15 | Precharge enable (active-high) |
 | 21 | GP16 | Boost enable (active-high) |
+| 22 | GP17 | LCD RS (Register Select) |
+| 24 | GP18 | LCD E (Enable) |
+| 25 | GP19 | LCD D4 |
+| 26 | GP20 | LCD D5 |
+| 27 | GP21 | LCD D6 |
+| 29 | GP22 | LCD D7 |
 | 31 | GP26 | ADC0 — Hall throttle |
+| 34 | GP28 | LCD backlight enable (active-high) |
+| 36 | 3V3(OUT) | LCD VDD (3.3 V power) |
+| 38 | GND | Common ground |
+| 39 | VSYS | 5 V external power input |
 
 All Pico GPIO are 3.3 V logic.  The FSESC4.20 UART is also 3.3 V (STM32F4),
 so no level-shifter is needed.
@@ -278,19 +286,25 @@ Fork-mounted hall sensor with 6 spoke magnets.
 
 | Parameter | Value |
 |---|---|
-| GPIO | GP5 (digital input with internal pull-up) |
+| GPIO | GP9 (digital input with internal pull-up) |
 | Magnets | 6 per revolution |
 | Timeout | 1200 ms (wheel stopped if no edge) |
 | Min edge spacing | 1500 µs (debounce) |
 
 ### 8.4 LCD
 
-HD44780-compatible 16×2 character display via PCF8574 I2C backpack.
+RG1602A (ST7066U / HD44780-compatible) 16×2 character display driven
+directly via 4-bit parallel GPIO.  No I2C backpack required.  RW pin is tied
+to GND (write-only).  V0 (contrast) tied directly to GND (optimal at 3.3 V).
+VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 
 | Parameter | Value |
 |---|---|
-| I2C bus | I2C1 |
-| Address | 0x27 |
+| Interface | 4-bit parallel GPIO (RS, E, D4–D7) |
+| GPIO pins | GP17 (RS), GP18 (E), GP19–GP22 (D4–D7), GP28 (backlight) |
+| Power | 3.3 V from Pico 3V3(OUT) |
+| Contrast (V0) | Tied to GND |
+| Backlight | GP28 direct (no resistor) |
 | Geometry | 16 columns × 2 rows |
 
 ---
@@ -342,7 +356,7 @@ fast.
 2. Each record is a tuple of 11 values (timestamp + 10 state fields) stored in a
    fixed-size circular buffer (`BENCH_LOG_MAX_RECORDS` = 2000, ~160 KB).
 3. When the buffer is full, the oldest record is silently overwritten.
-4. Pressing the **soft reset button** (GP4) automatically dumps the entire
+4. Pressing the **soft reset button** (GP8) automatically dumps the entire
    buffer as CSV to the serial console, then clears it.
 5. The `dump()` method can also be called manually from the REPL.
 
@@ -391,8 +405,8 @@ drivers/
   wheel_speed_hall.py  # Hall edge timing → RPM with debounce/timeout
   uart_port.py       # Raw UART read/write wrapper
   precharge_io.py    # GPIO pin control for precharge + boost relays
-  lcd_driver.py      # HD44780 via PCF8574 I2C backpack
-  reset_button.py    # Soft reset button edge-detect driver (GP4)
+  lcd_driver.py      # RG1602A HD44780 4-bit parallel GPIO driver
+  reset_button.py    # Soft reset button edge-detect driver (GP8)
 
 services/
   input_manager.py      # Reads throttle + wheel, decides ASSIST/REGEN/NEUTRAL
@@ -410,18 +424,155 @@ app/
   state_machine.py   # State transitions: OFF→PRECHARGE→READY→ASSIST/REGEN, FAULT
 
 tests/               # pytest suite (263 tests)
+
+scripts/
+  test_lcd.py              # LCD display test (backlight + text)
+  test_uart_loopback.py    # UART self-test (GP0→GP1 jumper)
+  test_vesc_fw_version.py  # Read VESC firmware version over UART
+  test_vesc_telemetry.py   # Read VESC telemetry (voltage, temp, fault)
 ```
 
 ---
 
 ## 12. Setup and Deployment
 
-1. Flash MicroPython UF2 onto the Pico.
-2. Copy this project onto the Pico filesystem.
-3. Confirm hardware pin mapping in `config/settings.py`.
-4. Set motor pole pairs in VESC Tool and verify with FOC detection.
-5. Set current limits in both VESC Tool and `config/settings.py`.
-6. Power cycle or reset the board; `boot.py` then `main.py` run automatically.
+### 12.1 Flash MicroPython
+
+1. Unplug the Pico from USB.
+2. Hold the **BOOTSEL** button on the Pico.
+3. While holding BOOTSEL, plug the Pico into USB.
+4. Release BOOTSEL — the Pico mounts as a USB drive called **RPI-RP2**.
+5. Download the MicroPython UF2 firmware from
+   https://micropython.org/download/RPI_PICO/ (choose the latest stable `.uf2`).
+6. Copy the `.uf2` file onto the RPI-RP2 drive:
+   ```bash
+   cp RPI_PICO-<version>.uf2 /media/$USER/RPI-RP2/
+   ```
+7. The Pico reboots automatically and reappears as `/dev/ttyACM0` (Linux)
+   or a COM port (Windows).
+
+### 12.2 Upload Project Files
+
+Install `mpremote` (the official MicroPython remote tool):
+
+```bash
+pip install mpremote
+```
+
+Create directories and copy project files to the Pico:
+
+```bash
+mpremote connect /dev/ttyACM0 fs mkdir :config
+mpremote connect /dev/ttyACM0 fs mkdir :drivers
+mpremote connect /dev/ttyACM0 fs cp config/__init__.py :config/__init__.py
+mpremote connect /dev/ttyACM0 fs cp config/settings.py :config/settings.py
+mpremote connect /dev/ttyACM0 fs cp drivers/__init__.py :drivers/__init__.py
+mpremote connect /dev/ttyACM0 fs cp drivers/lcd_driver.py :drivers/lcd_driver.py
+```
+
+Repeat for all remaining project directories and files (`services/`, `app/`,
+`core.py`, `utils.py`, `main.py`, `boot.py`).
+
+### 12.3 Hardware Test Scripts
+
+Test scripts live in `scripts/` and are run on the Pico via `mpremote`.
+Upload the required project files first (§12.2).  Each script prints
+`PASS` or `FAIL` with details.
+
+#### 12.3.1 LCD Test
+
+**Wiring:** LCD connected per §8.4 pin map.
+
+```bash
+mpremote connect /dev/ttyACM0 run scripts/test_lcd.py
+```
+
+**Expected result:**
+- Terminal prints `LCD test complete`
+- Backlight turns on (GP28)
+- Line 1: `Hello ReGenX!`
+- Line 2: `LCD test OK`
+
+**Troubleshooting:**
+- Backlight off → check LCD pin 15 wiring to GP28 and pin 16 to GND.
+- Backlight on but no text → V0 not connected to GND, or data pins miswired.
+- Garbled text → check D4–D7 pin order (GP19=D4, GP20=D5, GP21=D6, GP22=D7).
+
+#### 12.3.2 UART Loopback Test
+
+**Wiring:** Connect GP0 (TX, pin 1) directly to GP1 (RX, pin 2) with a
+jumper wire.  No VESC needed.
+
+```bash
+mpremote connect /dev/ttyACM0 run scripts/test_uart_loopback.py
+```
+
+**Expected result:**
+```
+PASS: received b'hello'
+```
+
+Remove the jumper wire before proceeding to VESC tests.
+
+#### 12.3.3 VESC Firmware Version
+
+**Wiring:** Pico GP0 (TX) → VESC RX, Pico GP1 (RX) → VESC TX,
+Pico GND → VESC GND.  VESC must be powered.  Motor may be disconnected.
+
+```bash
+mpremote connect /dev/ttyACM0 run scripts/test_vesc_fw_version.py
+```
+
+**Expected result (example):**
+```
+FW Version: 5.2
+Hardware: 410
+PASS
+```
+
+The firmware version and hardware name will vary by VESC board and firmware.
+Any response confirms UART communication is working.
+
+#### 12.3.4 VESC Telemetry
+
+**Wiring:** Same as §12.3.3.  Motor may be disconnected.
+
+```bash
+mpremote connect /dev/ttyACM0 run scripts/test_vesc_telemetry.py
+```
+
+**Expected result (example, motor disconnected):**
+```
+--- VESC Telemetry ---
+FET temp:       25.1 C
+Motor temp:     -72.6 C
+Motor current:  -0.38 A
+Input current:  0.00 A
+Duty cycle:     0.0 %
+ERPM:           0
+Bus voltage:    17.4 V
+Ah drawn:       0.0000
+Ah charged:     0.0000
+Wh drawn:       0.0000
+Wh charged:     0.0000
+Tachometer:     2
+Tach (abs):     2
+Fault code:     0
+PASS
+```
+
+**Notes:**
+- Bus voltage reflects the supercapacitor bank / power supply voltage.
+- Motor temp reads ~-72°C when no temperature sensor is connected (normal).
+- Motor current may show small offset noise (~±0.5 A) with no motor (normal).
+- Fault code 0 = no fault.
+
+### 12.4 Full Deployment
+
+1. Confirm hardware pin mapping in `config/settings.py`.
+2. Set motor pole pairs in VESC Tool and verify with FOC detection.
+3. Set current limits in both VESC Tool and `config/settings.py`.
+4. Power cycle or reset the board; `boot.py` then `main.py` run automatically.
 
 ---
 

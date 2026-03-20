@@ -11,12 +11,17 @@
 # Pico physical pin → GPIO map (physical / GPIO / function)
 #   Pin 1  / GP0  / UART0 TX → FSESC UART RX
 #   Pin 2  / GP1  / UART0 RX ← FSESC UART TX
-#   Pin 4  / GP2  / I2C1 SDA (LCD)
-#   Pin 5  / GP3  / I2C1 SCL (LCD)
-#   Pin 6  / GP4  / Soft reset button (active-low, internal pull-up)
-#   Pin 7  / GP5  / Wheel speed hall sensor input (digital)
+#   Pin 11 / GP8  / Soft reset button (active-low, internal pull-up)
+#   Pin 12 / GP9  / Wheel speed hall sensor input (digital)
 #   Pin 20 / GP15 / PRECHARGE ENABLE (active-high)
 #   Pin 21 / GP16 / BOOST ENABLE (active-high)
+#   Pin 22 / GP17 / LCD RS (Register Select)
+#   Pin 24 / GP18 / LCD E  (Enable)
+#   Pin 25 / GP19 / LCD D4
+#   Pin 26 / GP20 / LCD D5
+#   Pin 27 / GP21 / LCD D6
+#   Pin 29 / GP22 / LCD D7
+#   Pin 34 / GP28 / LCD backlight enable (active-high)
 #   Pin 31 / GP26 / ADC0 — Hall throttle
 
 # --- UART0 to FSESC ---
@@ -28,10 +33,10 @@ VESC_UART_RX = 1              # GP1, Pico pin 2 ← FSESC UART TX
 THROTTLE_ADC_PIN = 26         # GP26 / ADC0
 
 # --- Soft reset button (active-low, normally-open to GND, internal pull-up) ---
-RESET_BUTTON_PIN = 4          # GP4, Pico pin 6
+RESET_BUTTON_PIN = 8          # GP8, Pico pin 11
 
 # --- Wheel speed hall sensor (fork-mounted, 6 spoke magnets) ---
-WHEEL_HALL_PIN = 5            # GP5, Pico pin 7 — digital input
+WHEEL_HALL_PIN = 9            # GP9, Pico pin 12 — digital input
 WHEEL_HALL_ACTIVE_HIGH = True
 WHEEL_HALL_USE_PULLUP = True
 WHEEL_MAGNET_COUNT = 6
@@ -42,11 +47,14 @@ WHEEL_HALL_MIN_EDGE_US = 1500
 PRECHARGE_ENABLE_PIN = 15     # GP15, Pico pin 20 — active-high
 BOOST_ENABLE_PIN = 16         # GP16, Pico pin 21 — DC/DC boost enable (active-high)
 
-# --- LCD (I2C character display, default PCF8574 backpack address) ---
-LCD_I2C_ID = 1                # Pico I2C1
-LCD_SDA_PIN = 2               # GP2, Pico pin 4
-LCD_SCL_PIN = 3               # GP3, Pico pin 5
-LCD_I2C_ADDR = 0x27           # PCF8574 default; confirm with I2C scan if needed
+# --- LCD (RG1602A, ST7066U/HD44780, 4-bit parallel GPIO, no I2C backpack) ---
+LCD_RS_PIN = 17               # GP17, Pico pin 22
+LCD_E_PIN = 18                # GP18, Pico pin 24
+LCD_D4_PIN = 19               # GP19, Pico pin 25
+LCD_D5_PIN = 20               # GP20, Pico pin 26
+LCD_D6_PIN = 21               # GP21, Pico pin 27
+LCD_D7_PIN = 22               # GP22, Pico pin 29
+LCD_BL_PIN = 28               # GP28, Pico pin 34 — backlight enable (active-high)
 LCD_COLS = 16
 LCD_ROWS = 2
 
