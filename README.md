@@ -685,7 +685,122 @@ After writing both motor and app configs:
 4. If the Pico is connected via UART, run the telemetry test script
    (§12.3.4) to confirm the Pico can also read these values.
 
-### 12.5 Full Deployment
+### 12.5 VESC Configuration via Pico UART
+
+The VESC can also be configured directly from the Pico over UART, without
+needing VESC Tool or a USB connection to a PC.  Three scripts in `scripts/`
+handle reading, writing, and storing the motor controller configuration.
+
+#### 12.5.1 Read Current Configuration
+
+```bash
+mpremote run scripts/test_vesc_read_config.py
+```
+
+This reads the full MCCONF binary blob from the VESC and decodes key fields:
+
+```
+--- Motor Configuration (MCCONF) ---
+  Config signature: 0x83D6207A
+
+  [Motor Config]
+  Motor type:     FOC
+  Sensor mode:    Sensorless
+
+  [Current Limits]
+  Motor max:      40.0 A
+  Motor min:      -40.0 A
+  Battery max:    40.0 A
+  Battery min:    -40.0 A
+  Absolute max:   130.0 A
+
+  [Voltage Limits]
+  Min input V:    15.0 V
+  Max input V:    42.0 V
+  Batt cut start: 15.0 V
+  Batt cut end:   14.0 V
+  ...
+```
+
+Use this to verify the current VESC settings at any time.
+
+#### 12.5.2 Write Configuration (RAM Only)
+
+```bash
+mpremote run scripts/vesc_write_config.py
+```
+
+This script:
+1. Reads the current MCCONF from the VESC
+2. Shows a diff of current vs. target values (marked with `***`)
+3. Patches the binary blob at known field offsets
+4. Sends the patched config with `COMM_SET_MCCONF` (command 13)
+5. Re-reads the config to verify all changes took effect
+
+**The changes are applied to RAM only** — they take effect immediately but
+are lost if the VESC is power-cycled.  This is intentional: you can test
+the new settings risk-free, and power-cycle to revert if anything is wrong.
+
+The target values are defined in the `PATCHES` list inside the script:
+
+| Field | Target | Offset | Type |
+|---|---|---|---|
+| Motor type | FOC (2) | 6 | u8 |
+| Motor max current | 40.0 A | 8 | f32 |
+| Motor min current | -40.0 A | 12 | f32 |
+| Battery max current | 40.0 A | 16 | f32 |
+| Battery min current | -40.0 A | 20 | f32 |
+| Min input voltage | 15.0 V | 48 | f32 |
+| Max input voltage | 42.0 V | 52 | f32 |
+| Battery cutoff start | 15.0 V | 56 | f32 |
+| Battery cutoff end | 14.0 V | 60 | f32 |
+| Max watts | 500 W | 93 | f32 |
+| Min watts (regen) | -500 W | 97 | f32 |
+
+To change a target value, edit the `PATCHES` list in the script and re-run.
+
+#### 12.5.3 Store to Flash (Permanent)
+
+```bash
+mpremote run scripts/vesc_store_config.py
+```
+
+**Only run this after verifying the RAM config is correct** (§12.5.2).
+
+This script:
+1. Reads the RAM config and verifies all expected values match
+2. Sends `COMM_STORE_MCCONF` (command 15) to write to flash
+3. Re-reads to confirm the flash write succeeded
+
+After storing, the config persists across VESC power cycles.
+
+> **Reverting:** If you need to undo a flash write, either run the write
+> script with the old values, or use VESC Tool to restore defaults.
+
+#### 12.5.4 Protocol Details
+
+The VESC UART protocol uses framed packets with CRC-16:
+
+| Frame type | Start byte | Length field | Max payload |
+|---|---|---|---|
+| Short | `0x02` | 1 byte | 255 bytes |
+| Long | `0x03` | 2 bytes (big-endian) | 65535 bytes |
+
+MCCONF is ~458 bytes, so it uses long frames.  The MicroPython UART
+`rxbuf` must be set to at least 1024 bytes (default 256 is insufficient).
+
+Relevant VESC commands:
+
+| Command | ID | Direction | Description |
+|---|---|---|---|
+| `COMM_SET_MCCONF` | 13 | Pico → VESC | Apply motor config to RAM |
+| `COMM_GET_MCCONF` | 14 | Pico → VESC | Read motor config |
+| `COMM_STORE_MCCONF` | 15 | Pico → VESC | Save RAM config to flash |
+
+Config data is big-endian, with `float32` (IEEE 754), `int32`, and `uint8`
+fields.  Field offsets depend on firmware version (currently tested with FW 5.2).
+
+### 12.6 Full Deployment
 
 1. Confirm hardware pin mapping in `config/settings.py`.
 2. Complete VESC Tool configuration (§12.4).
