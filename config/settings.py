@@ -73,9 +73,12 @@ ASSIST_CURRENT_LIMIT_A = 40.0  # Max assist current (amps)
 REGEN_CURRENT_LIMIT_A = 40.0   # Max regen braking current (amps)
 
 # --- Throttle ---
-THROTTLE_RAW_MIN = 300
-THROTTLE_RAW_MAX = 3800
-THROTTLE_DEADBAND = 0.03        # Fraction of range — suppress creep near zero
+# Calibrated from measured WUXING 300X sweep at 3.3 V supply:
+#   idle ~1073 counts, full ~3238 counts.
+# Rounded to practical setpoints for stable 0-100% mapping.
+THROTTLE_RAW_MIN = 1070
+THROTTLE_RAW_MAX = 3240
+THROTTLE_DEADBAND = 0.03        # Fraction of range — intentional grace zone near zero
 THROTTLE_FAULT_LOW = 100        # Below this raw count → open-circuit / fault
 THROTTLE_FAULT_HIGH = 4000      # Above this raw count → short-circuit / fault
 

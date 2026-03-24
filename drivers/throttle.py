@@ -43,6 +43,10 @@ class Throttle:
         )
         self.fraction = clamp(self.fraction, 0.0, 1.0)
 
-        # Apply deadband near zero
+        # Apply deadband near zero, then re-scale so output remains linear
+        # from 0.0 to 1.0 above the deadband threshold.
         if self.fraction < THROTTLE_DEADBAND:
             self.fraction = 0.0
+        elif THROTTLE_DEADBAND < 1.0:
+            self.fraction = (self.fraction - THROTTLE_DEADBAND) / (1.0 - THROTTLE_DEADBAND)
+            self.fraction = clamp(self.fraction, 0.0, 1.0)
