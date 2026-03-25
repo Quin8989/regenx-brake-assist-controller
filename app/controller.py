@@ -19,7 +19,7 @@ from utils import PeriodicTimer
 
 class AppController:
     def __init__(self, state, input_mgr, vesc_comm,
-                 safety, precharge_mgr, state_machine, control_loop,
+                 safety, state_machine, control_loop,
                  command_mgr, energy, display_mgr, logger,
                  reset_button=None, fault_manager=None,
                  bench_logger=None):
@@ -27,7 +27,6 @@ class AppController:
         self._input_mgr = input_mgr
         self._vesc_comm = vesc_comm
         self._safety = safety
-        self._precharge_mgr = precharge_mgr
         self._state_machine = state_machine
         self._control_loop = control_loop
         self._command_mgr = command_mgr
@@ -73,25 +72,22 @@ class AppController:
         if self._t_safety.ready():
             self._safety.update()
 
-        # 6. Precharge manager
-        self._precharge_mgr.update()
-
-        # 7. State machine
+        # 6. State machine
         self._state_machine.update()
 
-        # 8. Control loop
+        # 7. Control loop
         if self._t_control.ready():
             self._control_loop.update()
 
-        # 9. Command manager (transmit)
+        # 8. Command manager (transmit)
         if self._t_command.ready():
             self._command_mgr.update()
 
-        # 10. Display
+        # 9. Display
         if self._t_display.ready():
             self._display_mgr.update()
 
-        # 11. Debug logging (low rate)
+        # 10. Debug logging (low rate)
         if self._t_debug.ready():
             self._logger.debug(
                 "loop",
@@ -100,7 +96,7 @@ class AppController:
                 f"e={self._state.cap_energy_percent:.0f}%",
             )
 
-        # 12. Bench data capture (RAM ring buffer)
+        # 11. Bench data capture (RAM ring buffer)
         if self._bench_logger is not None and self._t_bench.ready():
             self._bench_logger.snapshot()
 

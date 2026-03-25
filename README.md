@@ -117,12 +117,11 @@ service is called once per main-loop cycle at its configured period.
 | 3 | VESCComm (TX) | 50 ms | Request telemetry from VESC |
 | 4 | EnergyEstimator | 10 ms | Compute ½CV² stored energy and percentage |
 | 5 | SafetySupervisor | 10 ms | Check voltage limits, telemetry freshness, throttle validity |
-| 6 | PrechargeManager | 10 ms | Control precharge relay + boost, run watchdog |
-| 7 | StateMachine | 10 ms | Gate mode transitions with safety checks |
-| 8 | ControlLoop | 10 ms | Compute assist/regen current commands (slew + PI) |
-| 9 | CommandManager | 20 ms | Transmit current commands to VESC over UART |
-| 10 | DisplayManager | 200 ms | Update 16×2 LCD with status/fault info |
-| 11 | Logger | 500 ms | Debug output to serial console |
+| 6 | StateMachine | 10 ms | Gate mode transitions with safety checks |
+| 7 | ControlLoop | 10 ms | Compute assist/regen current commands (slew + PI) |
+| 8 | CommandManager | 20 ms | Transmit current commands to VESC over UART |
+| 9 | DisplayManager | 200 ms | Update 16×2 LCD with status/fault info |
+| 10 | Logger | 500 ms | Debug output to serial console |
 
 ### 3.2 Data Flow
 
@@ -403,7 +402,7 @@ config/
 drivers/
   throttle.py        # ADC read → deadband → normalized fraction
   wheel_speed_hall.py  # Hall edge timing → RPM with debounce/timeout
-  gpio_io.py         # PrechargeIO (relay/boost GPIO) + ResetButton (edge-detect)
+  gpio_io.py         # ResetButton (edge-detect soft reset)
   lcd_driver.py      # RG1602A HD44780 4-bit parallel GPIO driver
 
 services/
@@ -412,7 +411,6 @@ services/
   vesc_protocol.py      # VESC UART packet framing, CRC, command builders, parsing
   vesc_comm.py          # UARTPort + VESCComm (telemetry) + CommandManager (TX gate)
   safety_supervisor.py  # Overvoltage, undervoltage, timeout, throttle checks
-  precharge_manager.py  # Precharge ON/OFF + watchdog (grace, progress, timeout)
   display_manager.py    # LCD page rendering (run/precharge/fault pages)
   bench_logger.py       # RAM ring-buffer data logger for bench debugging
 
@@ -799,6 +797,44 @@ Relevant VESC commands:
 
 Config data is big-endian, with `float32` (IEEE 754), `int32`, and `uint8`
 fields.  Field offsets depend on firmware version (currently tested with FW 5.2).
+
+#### 12.5.5 Keep a Full Backup on the Pico (Recommended)
+
+If you always use the same motor+VESC combination, store a full MCCONF backup
+file on the Pico so you can quickly restore after a VESC reflash.
+
+Save backup to Pico filesystem:
+
+```bash
+mpremote run scripts/vesc_backup_save_to_pico.py
+```
+
+This creates `/vesc_mcconf_backup.bin` on the Pico and stores:
+- Magic (`VMCF`)
+- Backup format version
+- MCCONF payload length
+- CRC16 of MCCONF payload
+- Full MCCONF binary payload
+
+Restore from Pico backup to VESC RAM+flash:
+
+```bash
+mpremote run scripts/vesc_backup_restore_from_pico.py
+```
+
+The restore script validates magic/version/length/CRC before writing, then:
+1. Sends `COMM_SET_MCCONF` (apply to RAM)
+2. Sends `COMM_STORE_MCCONF` (save to flash)
+3. Reads back MCCONF and checks it matches the backup exactly
+
+Quick check that backup file exists on Pico:
+
+```bash
+mpremote fs ls
+```
+
+> Keep this backup updated whenever you intentionally retune VESC settings.
+> Re-run `vesc_backup_save_to_pico.py` after tuning changes are finalized.
 
 ### 12.6 Full Deployment
 

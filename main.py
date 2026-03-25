@@ -19,13 +19,12 @@ from app.state_machine import StateMachine
 from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION
 from core import FaultCode, FaultManager, SharedState, SystemState, EnergyEstimator
 from drivers.lcd_driver import LCDDriver
-from drivers.gpio_io import PrechargeIO, ResetButton
+from drivers.gpio_io import ResetButton
 from drivers.throttle import Throttle
 from drivers.wheel_speed_hall import WheelSpeedHall
 from services.control_loop import ControlLoop
 from services.display_manager import DisplayManager
 from services.input_manager import InputManager
-from services.precharge_manager import PrechargeManager
 from services.safety_supervisor import SafetySupervisor
 from services.bench_logger import BenchLogger
 from services.vesc_comm import CommandManager, UARTPort, VESCComm
@@ -46,7 +45,6 @@ def main():
     uart = UARTPort()
     throttle = Throttle()
     wheel_speed = WheelSpeedHall()
-    precharge_io = PrechargeIO()
     reset_button = ResetButton()
     lcd = LCDDriver()
 
@@ -55,7 +53,6 @@ def main():
     input_mgr = InputManager(throttle, state, wheel_speed)
     control_loop = ControlLoop(state)
     command_mgr = CommandManager(vesc_comm, state)
-    precharge_mgr = PrechargeManager(precharge_io, state, faults)
     safety = SafetySupervisor(state, faults)
     energy = EnergyEstimator(state)
     display_mgr = DisplayManager(lcd, state)
@@ -68,7 +65,6 @@ def main():
         input_mgr=input_mgr,
         vesc_comm=vesc_comm,
         safety=safety,
-        precharge_mgr=precharge_mgr,
         state_machine=state_machine,
         control_loop=control_loop,
         command_mgr=command_mgr,

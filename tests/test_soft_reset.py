@@ -52,7 +52,6 @@ def _make_app():
         input_mgr=noop,
         vesc_comm=noop,
         safety=noop,
-        precharge_mgr=noop,
         state_machine=noop,
         control_loop=cl,
         command_mgr=noop,
