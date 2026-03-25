@@ -1,6 +1,6 @@
 # scripts/test_vesc_telemetry.py — Read VESC telemetry (COMM_GET_VALUES)
 #
-# Wiring: Pico GP0 (TX) -> VESC RX, Pico GP1 (RX) -> VESC TX, GND -> GND.
+# Wiring: Pico GP4 (TX) -> VESC RX, Pico GP5 (RX) -> VESC TX, GND -> GND.
 # Motor may be disconnected.  VESC must be powered.
 #
 # Run on the Pico via mpremote:
@@ -18,7 +18,7 @@ COMM_GET_VALUES = 0x04
 TELEMETRY_FMT = ">hhiiiihihiiiiiiB"
 TELEMETRY_SIZE = 53  # bytes after opcode
 
-uart = UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1))
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
 uart.read()  # flush
 
 

@@ -247,8 +247,8 @@ alongside the precharge relay.
 
 | Pico Pin | GPIO | Function |
 |---|---|---|
-| 1 | GP0 | UART0 TX → VESC RX |
-| 2 | GP1 | UART0 RX ← VESC TX |
+| 6 | GP4 | UART1 TX → VESC RX |
+| 7 | GP5 | UART1 RX ← VESC TX |
 | 11 | GP8 | Soft reset button (active-low, internal pull-up) |
 | 12 | GP9 | Wheel speed hall sensor (digital input) |
 | 20 | GP15 | Precharge enable (active-high) |
@@ -422,7 +422,7 @@ tests/               # pytest suite (263 tests)
 
 scripts/
   test_lcd.py              # LCD display test (backlight + text)
-  test_uart_loopback.py    # UART self-test (GP0→GP1 jumper)
+   test_uart_loopback.py    # UART self-test (GP4→GP5 jumper)
   test_vesc_fw_version.py  # Read VESC firmware version over UART
   test_vesc_telemetry.py   # Read VESC telemetry (voltage, temp, fault)
 ```
@@ -535,7 +535,7 @@ mpremote connect /dev/ttyACM0 run scripts/test_lcd.py
 
 #### 12.3.2 UART Loopback Test
 
-**Wiring:** Connect GP0 (TX, pin 1) directly to GP1 (RX, pin 2) with a
+**Wiring:** Connect GP4 (TX, pin 6) directly to GP5 (RX, pin 7) with a
 jumper wire.  No VESC needed.
 
 ```bash
@@ -551,7 +551,7 @@ Remove the jumper wire before proceeding to VESC tests.
 
 #### 12.3.3 VESC Firmware Version
 
-**Wiring:** Pico GP0 (TX) → VESC RX, Pico GP1 (RX) → VESC TX,
+**Wiring:** Pico GP4 (TX) → VESC RX, Pico GP5 (RX) → VESC TX,
 Pico GND → VESC GND.  VESC must be powered.  Motor may be disconnected.
 
 ```bash

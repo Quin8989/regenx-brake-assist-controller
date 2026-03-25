@@ -16,7 +16,7 @@ COMM_SET_MCCONF = 13
 COMM_GET_MCCONF = 14
 COMM_STORE_MCCONF = 15
 
-uart = UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1), rxbuf=1024)
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
 
 
 def crc16(data):

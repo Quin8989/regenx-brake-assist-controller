@@ -10,7 +10,7 @@ from time import sleep_ms, ticks_ms, ticks_diff
 from machine import UART, Pin
 
 # ---- UART setup ----
-uart = UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1), rxbuf=1024)
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
 
 # ---- VESC protocol helpers (inline to keep script self-contained) ----
 

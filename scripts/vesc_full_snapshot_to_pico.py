@@ -20,7 +20,7 @@ COMM_GET_MCCONF = 14
 # Try known candidates and keep the first valid large response.
 APPCONF_CANDIDATES = [17, 16, 18]
 
-uart = UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1), rxbuf=1024)
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
 
 MCCONF_FILE = "vesc_snapshot_mcconf.bin"
 APPCONF_FILE = "vesc_snapshot_appconf.bin"

@@ -9,8 +9,8 @@
 # =============================================================================
 #
 # Pico physical pin → GPIO map (physical / GPIO / function)
-#   Pin 1  / GP0  / UART0 TX → FSESC UART RX
-#   Pin 2  / GP1  / UART0 RX ← FSESC UART TX
+#   Pin 6  / GP4  / UART1 TX → FSESC UART RX
+#   Pin 7  / GP5  / UART1 RX ← FSESC UART TX
 #   Pin 11 / GP8  / Soft reset button (active-low, internal pull-up)
 #   Pin 12 / GP9  / Wheel speed hall sensor input (digital)
 #   Pin 20 / GP15 / PRECHARGE ENABLE (active-high)
@@ -24,10 +24,10 @@
 #   Pin 34 / GP28 / LCD backlight enable (active-high)
 #   Pin 31 / GP26 / ADC0 — Hall throttle
 
-# --- UART0 to FSESC ---
-VESC_UART_ID = 0              # Pico hardware UART0
-VESC_UART_TX = 0              # GP0, Pico pin 1 → FSESC UART RX
-VESC_UART_RX = 1              # GP1, Pico pin 2 ← FSESC UART TX
+# --- UART1 to FSESC ---
+VESC_UART_ID = 1              # Pico hardware UART1
+VESC_UART_TX = 4              # GP4, Pico pin 6 → FSESC UART RX
+VESC_UART_RX = 5              # GP5, Pico pin 7 ← FSESC UART TX
 
 # --- Hall throttle (3-wire, 5 V supply, analog out 0.8–4.2 V typical) ---
 THROTTLE_ADC_PIN = 26         # GP26 / ADC0
