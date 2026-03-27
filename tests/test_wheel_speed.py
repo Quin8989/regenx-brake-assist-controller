@@ -106,7 +106,7 @@ class TestTimeout:
 
 class TestRPMCalculation:
     def test_known_speed(self):
-        """60 RPM with 6 magnets → 10 edges/rev → period per edge = 1s/10 = 100ms."""
+        """60 RPM with 3 magnets → 3 edges/rev → period per edge = 1s/3 ≈ 333ms."""
         ws = _make()
         period_ms = 100  # 100_000 us per edge
         set_clock_ms(1000)

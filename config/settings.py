@@ -35,11 +35,11 @@ THROTTLE_ADC_PIN = 26         # GP26 / ADC0
 # --- Soft reset button (active-low, normally-open to GND, internal pull-up) ---
 RESET_BUTTON_PIN = 8          # GP8, Pico pin 11
 
-# --- Wheel speed hall sensor (fork-mounted, 6 spoke magnets) ---
+# --- Wheel speed hall sensor (fork-mounted, 3 spoke magnets) ---
 WHEEL_HALL_PIN = 9            # GP9, Pico pin 12 — digital input
 WHEEL_HALL_ACTIVE_HIGH = True
 WHEEL_HALL_USE_PULLUP = True
-WHEEL_MAGNET_COUNT = 6
+WHEEL_MAGNET_COUNT = 3
 WHEEL_SPEED_TIMEOUT_MS = 1200
 WHEEL_HALL_MIN_EDGE_US = 1500
 
@@ -145,8 +145,8 @@ REGEN_LOCKED_RATIO = 5.0               # motor_rpm / wheel_rpm when carrier full
 REGEN_ENGAGE_SLIP_FRAC = 0.30          # Enter REGEN when carrier slip below this
 REGEN_DISENGAGE_SLIP_FRAC = 0.50       # Exit REGEN when carrier slip above this
 REGEN_TARGET_SLIP_FRAC = 0.02          # Carrier slip target (2% of wheel speed)
-REGEN_PI_KP_A_PER_RPM = 0.35           # PI proportional gain
-REGEN_PI_KI_A_PER_RPM_S = 0.12         # PI integral gain
+REGEN_PI_KP_A_PER_RPM = 3.5             # PI proportional gain
+REGEN_PI_KI_A_PER_RPM_S = 2.5           # PI integral gain
 REGEN_PI_INTEGRAL_LIMIT_A = 25.0       # Anti-windup clamp (amps)
 
 # --- Bench debug logger (RAM ring buffer) ---
