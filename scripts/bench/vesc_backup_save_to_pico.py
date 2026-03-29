@@ -1,9 +1,9 @@
-# scripts/vesc_backup_save_to_pico.py
+# scripts/bench/vesc_backup_save_to_pico.py
 #
 # Save full VESC MCCONF to Pico filesystem so it can be restored later.
 # This is a full binary backup (not just selected fields).
 #
-# Run: mpremote run scripts/vesc_backup_save_to_pico.py
+# Run: mpremote run scripts/bench/vesc_backup_save_to_pico.py
 
 import struct
 from time import sleep_ms, ticks_ms, ticks_diff

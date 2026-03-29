@@ -1,4 +1,4 @@
-# scripts/test_lcd_throttle_percent.py
+# scripts/legacy/test_lcd_throttle_percent.py
 #
 # Live throttle-to-percent display on LCD for bench testing.
 # Uses the same mapping behavior as firmware:
@@ -7,7 +7,7 @@
 #   3) re-scale linearly above dead-zone
 #
 # Run:
-#   mpremote run scripts/test_lcd_throttle_percent.py
+#   mpremote run scripts/legacy/test_lcd_throttle_percent.py
 
 from machine import ADC, Pin
 from time import sleep_ms, ticks_ms, ticks_diff

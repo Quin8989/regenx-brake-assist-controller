@@ -1,10 +1,10 @@
-# scripts/test_lcd_pages.py — Cycle through all LCD display pages on real hardware
+# scripts/legacy/test_lcd_pages.py — Cycle through all LCD display pages on real hardware
 #
 # Reproduces the exact formatting from services/display_manager.py
 # Uses only lcd_driver (already on Pico) + config/settings.py.
 # Upload: mpremote cp config/settings.py :config/settings.py
 #         mpremote cp drivers/lcd_driver.py :drivers/lcd_driver.py
-#    Run: mpremote run scripts/test_lcd_pages.py
+#    Run: mpremote run scripts/legacy/test_lcd_pages.py
 
 from time import sleep
 

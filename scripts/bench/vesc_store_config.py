@@ -1,9 +1,13 @@
-# scripts/vesc_store_config.py — Save VESC RAM config to flash
+# scripts/bench/vesc_store_config.py — Re-verify the stored ReGenX policy overlay
 #
-# ONLY run this after vesc_write_config.py has verified all changes.
-# This writes the current RAM config to permanent flash storage.
+# ONLY run this after vesc_flash_config.py has verified all changes.
+# This script now performs an extra delayed verification pass only.
 #
-# Run: mpremote run scripts/vesc_store_config.py
+# This script verifies only the project-level policy fields that
+# vesc_flash_config.py patches. It does not verify whether the VESC has valid
+# motor detection data or a valid hall table.
+#
+# Run: mpremote run scripts/bench/vesc_store_config.py
 
 import struct
 from time import sleep_ms, ticks_ms, ticks_diff
@@ -99,8 +103,10 @@ EXPECTED = [
 
 print()
 print("=" * 50)
-print("  VESC Config — Store to Flash")
+print("  VESC Config — Delayed Verify")
 print("=" * 50)
+print("\nOnly the ReGenX policy overlay is validated here.")
+print("Motor commissioning and hall detection must already be correct.")
 
 print("\n[1/2] Pre-flight check: reading RAM config...")
 payload = read_mcconf()
@@ -125,23 +131,18 @@ for offset, dtype, expected, name in EXPECTED:
 
 if not all_ok:
     print("\n  ABORT: RAM config does not match expected values!")
-    print("  Run vesc_write_config.py first to apply changes.")
+    print("  Run vesc_flash_config.py first to apply changes.")
     raise SystemExit
 
 print("\n  All values match. RAM config is correct.")
 
-print("\n[2/2] Storing config to flash...")
-uart.read()
-sleep_ms(20)
-uart.write(wrap_frame(bytes([15])))  # COMM_STORE_MCCONF
+print("\n[2/2] Waiting before delayed re-read...")
 sleep_ms(1000)
 
-# Verify by re-reading (flash → RAM happens on store)
-print("  Verifying flash write...")
+print("  Verifying stored config...")
 verify = read_mcconf()
 if verify is None:
-    print("  WARNING: Could not re-read after store")
-    print("  VESC may be rebooting — wait and try reading again")
+    print("  WARNING: Could not re-read after delay")
 else:
     vv = verify[1:]
     flash_ok = True
@@ -157,10 +158,9 @@ else:
             print("  MISMATCH: %s" % name)
 
     if flash_ok:
-        print("  FLASH WRITE VERIFIED — all values persisted!")
-        print("\n  Config will survive VESC power cycles.")
+        print("  STORED CONFIG VERIFIED — all values still match!")
     else:
-        print("  WARNING: Some values may not have persisted!")
+        print("  WARNING: Some values may not have persisted")
 
 print("\n" + "=" * 50)
 print("  Done")

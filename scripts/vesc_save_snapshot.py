@@ -1,23 +1,22 @@
-# scripts/vesc_full_snapshot_to_pico.py
+# scripts/vesc_save_snapshot.py - Save the final live VESC config snapshot
 #
-# Capture a full VESC snapshot to Pico filesystem:
+# This script captures the live VESC state after preparation and flashing:
 # - Firmware version / hardware string
 # - MCCONF raw blob
 # - APPCONF raw blob (if supported)
 # - Metadata report with payload sizes and CRC16 checksums
 #
-# Run: mpremote run scripts/vesc_full_snapshot_to_pico.py
+# It saves those files on the Pico and prints the exact mpremote commands
+# needed to copy them into the repo.
+#
+# Run: mpremote run scripts/vesc_save_snapshot.py
 
 import struct
 from time import sleep_ms, ticks_ms, ticks_diff
 from machine import UART, Pin
 
-# Command IDs used in this project / common VESC FW 5.x mappings
 COMM_FW_VERSION = 0
 COMM_GET_MCCONF = 14
-
-# APPCONF command IDs can vary by firmware branch.
-# Try known candidates and keep the first valid large response.
 APPCONF_CANDIDATES = [17, 16, 18]
 
 uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
@@ -29,8 +28,8 @@ META_FILE = "vesc_snapshot_meta.txt"
 
 def crc16(data):
     crc = 0
-    for b in data:
-        crc ^= b << 8
+    for byte in data:
+        crc ^= byte << 8
         for _ in range(8):
             if crc & 0x8000:
                 crc = (crc << 1) ^ 0x1021
@@ -66,7 +65,9 @@ def try_extract(buf):
                 if crc16(payload) == crc_recv:
                     return payload
             idx += 1
-        elif buf[idx] == 0x03 and idx + 5 < len(buf):
+            continue
+
+        if buf[idx] == 0x03 and idx + 5 < len(buf):
             length = (buf[idx + 1] << 8) | buf[idx + 2]
             if length > 0 and length < 10000:
                 frame_size = length + 6
@@ -76,8 +77,9 @@ def try_extract(buf):
                     if crc16(payload) == crc_recv:
                         return payload
             idx += 1
-        else:
-            idx += 1
+            continue
+
+        idx += 1
     return None
 
 
@@ -129,18 +131,19 @@ def get_conf_blob(cmd_id):
         return None
     if len(payload) < 30:
         return None
-    return payload[1:]  # strip command byte
+    return payload[1:]
 
 
 print()
 print("=" * 50)
-print("  VESC Full Snapshot -> Pico")
+print("  VESC Save Snapshot")
+print("  ReGenX Brake-Assist Controller")
 print("=" * 50)
 
 fw_major, fw_minor, hw_name = get_fw_info()
 if fw_major is None:
     print("FAILED: Could not read firmware version")
-    raise SystemExit
+    raise SystemExit(1)
 
 print("Firmware: %d.%d" % (fw_major, fw_minor))
 print("Hardware: %s" % hw_name)
@@ -148,10 +151,10 @@ print("Hardware: %s" % hw_name)
 mcconf = get_conf_blob(COMM_GET_MCCONF)
 if mcconf is None:
     print("FAILED: Could not read MCCONF")
-    raise SystemExit
+    raise SystemExit(1)
 
-with open(MCCONF_FILE, "wb") as f:
-    f.write(mcconf)
+with open(MCCONF_FILE, "wb") as handle:
+    handle.write(mcconf)
 
 mc_crc = crc16(mcconf)
 print("Saved %s (%d bytes, crc=%04X)" % (MCCONF_FILE, len(mcconf), mc_crc))
@@ -168,32 +171,38 @@ for cmd in APPCONF_CANDIDATES:
 app_len = 0
 app_crc = 0
 if appconf is not None:
-    with open(APPCONF_FILE, "wb") as f:
-        f.write(appconf)
+    with open(APPCONF_FILE, "wb") as handle:
+        handle.write(appconf)
     app_len = len(appconf)
     app_crc = crc16(appconf)
     print("Saved %s (%d bytes, crc=%04X, cmd=%d)" % (APPCONF_FILE, app_len, app_crc, app_cmd_used))
 else:
     print("WARNING: APPCONF read not supported by tested command IDs")
 
-with open(META_FILE, "w") as f:
-    f.write("vesc_snapshot_version=1\n")
-    f.write("fw_major=%d\n" % fw_major)
-    f.write("fw_minor=%d\n" % fw_minor)
-    f.write("hw_name=%s\n" % hw_name)
-    f.write("mcconf_file=%s\n" % MCCONF_FILE)
-    f.write("mcconf_len=%d\n" % len(mcconf))
-    f.write("mcconf_crc16=%04X\n" % mc_crc)
+with open(META_FILE, "w") as handle:
+    handle.write("vesc_snapshot_version=1\n")
+    handle.write("fw_major=%d\n" % fw_major)
+    handle.write("fw_minor=%d\n" % fw_minor)
+    handle.write("hw_name=%s\n" % hw_name)
+    handle.write("mcconf_file=%s\n" % MCCONF_FILE)
+    handle.write("mcconf_len=%d\n" % len(mcconf))
+    handle.write("mcconf_crc16=%04X\n" % mc_crc)
     if appconf is not None:
-        f.write("appconf_file=%s\n" % APPCONF_FILE)
-        f.write("appconf_cmd_id=%d\n" % app_cmd_used)
-        f.write("appconf_len=%d\n" % app_len)
-        f.write("appconf_crc16=%04X\n" % app_crc)
+        handle.write("appconf_file=%s\n" % APPCONF_FILE)
+        handle.write("appconf_cmd_id=%d\n" % app_cmd_used)
+        handle.write("appconf_len=%d\n" % app_len)
+        handle.write("appconf_crc16=%04X\n" % app_crc)
     else:
-        f.write("appconf_file=\n")
-        f.write("appconf_cmd_id=\n")
-        f.write("appconf_len=0\n")
-        f.write("appconf_crc16=\n")
+        handle.write("appconf_file=\n")
+        handle.write("appconf_cmd_id=\n")
+        handle.write("appconf_len=0\n")
+        handle.write("appconf_crc16=\n")
 
 print("Saved %s" % META_FILE)
+print("\nCopy into the repo with:")
+print("  mpremote fs cp :%s config/%s" % (MCCONF_FILE, MCCONF_FILE))
+print("  mpremote fs cp :%s config/%s" % (META_FILE, META_FILE))
+if appconf is not None:
+    print("  mpremote fs cp :%s config/%s" % (APPCONF_FILE, APPCONF_FILE))
+
 print("\nDone")

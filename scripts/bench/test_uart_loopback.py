@@ -1,9 +1,9 @@
-# scripts/test_uart_loopback.py — UART loopback test (no VESC needed)
+# scripts/bench/test_uart_loopback.py — UART loopback test (no VESC needed)
 #
 # Wiring: connect GP4 (TX, pin 6) directly to GP5 (RX, pin 7) with a jumper.
 #
 # Run on the Pico via mpremote:
-#   mpremote connect /dev/ttyACM0 run scripts/test_uart_loopback.py
+#   mpremote connect /dev/ttyACM0 run scripts/bench/test_uart_loopback.py
 #
 # Expected output: "PASS: received b'hello'" (Pico echoes back to itself).
 

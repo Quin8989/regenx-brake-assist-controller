@@ -1,9 +1,9 @@
-# scripts/test_vesc_read_config.py — Read VESC motor configuration via UART
+# scripts/bench/test_vesc_read_config.py — Read VESC motor configuration via UART
 #
 # Sends COMM_GET_MCCONF (14) and decodes key motor/battery parameters.
 # Also pulls live telemetry for current state reference.
 #
-# Run: mpremote run scripts/test_vesc_read_config.py
+# Run: mpremote run scripts/bench/test_vesc_read_config.py
 
 import struct
 from time import sleep_ms, ticks_ms, ticks_diff

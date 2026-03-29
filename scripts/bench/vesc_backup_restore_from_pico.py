@@ -1,8 +1,8 @@
-# scripts/vesc_backup_restore_from_pico.py
+# scripts/bench/vesc_backup_restore_from_pico.py
 #
-# Restore full VESC MCCONF from Pico filesystem backup and store to flash.
+# Restore full VESC MCCONF from Pico filesystem backup.
 #
-# Run: mpremote run scripts/vesc_backup_restore_from_pico.py
+# Run: mpremote run scripts/bench/vesc_backup_restore_from_pico.py
 
 import struct
 from time import sleep_ms, ticks_ms, ticks_diff
@@ -14,8 +14,6 @@ EXPECTED_VERSION = 1
 
 COMM_SET_MCCONF = 13
 COMM_GET_MCCONF = 14
-COMM_STORE_MCCONF = 15
-
 uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
 
 
@@ -139,25 +137,18 @@ print("Backup file valid")
 print("Config bytes: %d" % len(mcconf_data))
 print("Data CRC16: %04X" % calc_crc)
 
-# Apply to RAM
+# Apply config
 uart.read()
 sleep_ms(20)
 uart.write(wrap_frame(bytes([COMM_SET_MCCONF]) + mcconf_data))
 sleep_ms(800)
-print("Applied backup to VESC RAM")
-
-# Store to flash
-uart.read()
-sleep_ms(20)
-uart.write(wrap_frame(bytes([COMM_STORE_MCCONF])))
-sleep_ms(1000)
-print("Stored RAM config to VESC flash")
+print("Applied backup with COMM_SET_MCCONF")
 
 # Verify by reading back exactly
 live = read_mcconf_payload()
 if live is None:
     print("WARNING: Could not read back config for verification")
-    print("Wait a moment and run test_vesc_read_config.py")
+    print("Wait a moment and run scripts/bench/test_vesc_read_config.py")
 else:
     if live == mcconf_data:
         print("VERIFY OK: Live MCCONF matches backup exactly")

@@ -1,4 +1,4 @@
-# scripts/test_uart_pins_gpio.py — GPIO sanity test for Pico UART header pins
+# scripts/bench/test_uart_pins_gpio.py — GPIO sanity test for Pico UART header pins
 #
 # SAFETY:
 #   Disconnect the VESC UART wires from GP4 and GP5 before running this test.

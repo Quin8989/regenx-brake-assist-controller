@@ -421,10 +421,23 @@ app/
 tests/               # pytest suite (263 tests)
 
 scripts/
-  test_lcd.py              # LCD display test (backlight + text)
-   test_uart_loopback.py    # UART self-test (GP4→GP5 jumper)
-  test_vesc_fw_version.py  # Read VESC firmware version over UART
-  test_vesc_telemetry.py   # Read VESC telemetry (voltage, temp, fault)
+   test_system_check.py         # Main integrated hardware check
+   test_throttle_characterize.py # Throttle ADC characterization
+   test_vesc_fw_version.py      # Quick VESC UART connectivity check
+   test_vesc_telemetry.py       # VESC telemetry snapshot
+   vesc_flash_config.py         # Single-step ReGenX VESC config flash script
+   bench/                       # Low-level or infrequent diagnostics
+      test_uart_loopback.py
+      test_uart_pins_gpio.py
+      test_vesc_read_config.py
+      vesc_full_snapshot_to_pico.py
+      vesc_store_config.py
+      vesc_backup_save_to_pico.py
+      vesc_backup_restore_from_pico.py
+   legacy/                      # Older one-off demos kept for reference
+      test_lcd.py
+      test_lcd_pages.py
+      test_lcd_throttle_percent.py
 ```
 
 ---
@@ -510,16 +523,17 @@ Repeat for all remaining project directories and files (`services/`, `app/`,
 
 ### 12.3 Hardware Test Scripts
 
-Test scripts live in `scripts/` and are run on the Pico via `mpremote`.
-Upload the required project files first (§12.2).  Each script prints
-`PASS` or `FAIL` with details.
+The supported day-to-day scripts stay at the top level of `scripts/`.
+Low-level diagnostics live in `scripts/bench/`, and older one-off demos live
+in `scripts/legacy/`.  Upload the required project files first (§12.2).
+Each script prints `PASS` or `FAIL` with details.
 
 #### 12.3.1 LCD Test
 
 **Wiring:** LCD connected per §8.4 pin map.
 
 ```bash
-mpremote connect /dev/ttyACM0 run scripts/test_lcd.py
+mpremote connect /dev/ttyACM0 run scripts/legacy/test_lcd.py
 ```
 
 **Expected result:**
@@ -539,7 +553,7 @@ mpremote connect /dev/ttyACM0 run scripts/test_lcd.py
 jumper wire.  No VESC needed.
 
 ```bash
-mpremote connect /dev/ttyACM0 run scripts/test_uart_loopback.py
+mpremote connect /dev/ttyACM0 run scripts/bench/test_uart_loopback.py
 ```
 
 **Expected result:**
@@ -686,13 +700,14 @@ After writing both motor and app configs:
 ### 12.5 VESC Configuration via Pico UART
 
 The VESC can also be configured directly from the Pico over UART, without
-needing VESC Tool or a USB connection to a PC.  Three scripts in `scripts/`
-handle reading, writing, and storing the motor controller configuration.
+needing VESC Tool or a USB connection to a PC.  The supported write/store
+workflow stays at the top level of `scripts/`.  The deeper inspection script
+for reading and decoding the full config now lives in `scripts/bench/`.
 
 #### 12.5.1 Read Current Configuration
 
 ```bash
-mpremote run scripts/test_vesc_read_config.py
+mpremote run scripts/bench/test_vesc_read_config.py
 ```
 
 This reads the full MCCONF binary blob from the VESC and decodes key fields:
@@ -722,10 +737,48 @@ This reads the full MCCONF binary blob from the VESC and decodes key fields:
 
 Use this to verify the current VESC settings at any time.
 
-#### 12.5.2 Write Configuration (RAM Only)
+#### 12.5.2 Shared VESC Config
+
+The VESC scripts now share a single config file:
+
+- Shared repo module: `config/vesc_config.py`
+
+Run the VESC scripts with a mounted repo so the Pico can import that shared
+Python module at runtime.
+
+#### 12.5.3 Prepare And Characterize Motor
 
 ```bash
-mpremote run scripts/vesc_write_config.py
+mpremote mount . run scripts/vesc_characterize_motor.py
+```
+
+This script:
+1. Confirms UART communication by reading the VESC firmware version
+2. Reads the VESC firmware default MCCONF with `COMM_GET_MCCONF_DEFAULT`
+3. Applies a conservative startup baseline from `config/vesc_config.py`
+4. Verifies the stored baseline
+5. Runs the VESC built-in FOC commissioning command over UART
+6. Confirms the VESC still responds after detection
+
+It does not write any characterization data back to the Pico or into the repo.
+The shared module provides both the startup baseline and the commissioning
+input values.
+
+Use it for:
+- controllers with unknown prior settings
+- new controllers you want to normalize before detection
+- motor resistance / inductance / flux characterization
+- hall or encoder detection
+- initial motor setup after rewiring or controller replacement
+
+Run it with the driven wheel off the ground and the motor unloaded.
+
+If characterization fails, the conservative baseline remains applied.
+
+#### 12.5.4 Flash ReGenX Configuration
+
+```bash
+mpremote mount . run scripts/vesc_flash_config.py
 ```
 
 This script:
@@ -733,13 +786,26 @@ This script:
 2. Shows a diff of current vs. target values (marked with `***`)
 3. Patches the binary blob at known field offsets
 4. Sends the patched config with `COMM_SET_MCCONF` (command 13)
-5. Re-reads the config to verify all changes took effect
+5. Re-reads the config immediately to verify the changes took effect
+6. Re-reads the config again after a short delay to verify persistence
 
-**The changes are applied to RAM only** — they take effect immediately but
-are lost if the VESC is power-cycled.  This is intentional: you can test
-the new settings risk-free, and power-cycle to revert if anything is wrong.
+This script flashes the repo-defined VESC target values and then re-reads the
+live VESC config twice to verify the stored result.
 
-The target values are defined in the `PATCHES` list inside the script:
+It reads the ReGenX overlay patch list from `config/vesc_config.py` and always
+uses the live MCCONF read from the connected VESC as the base config before
+applying the overlay.
+
+It does **not** run motor detection or hall-sensor commissioning. Run
+`scripts/vesc_characterize_motor.py` first when you need to rebuild the
+motor-specific FOC parameters.
+
+On current VESC firmware, `COMM_SET_MCCONF` stores the motor configuration as
+part of the set operation, so this script does not send a separate store
+command. The script exits with failure if either read-back does not match the
+defined target values.
+
+The target values are defined in `config/vesc_config.py`:
 
 | Field | Target | Offset | Type |
 |---|---|---|---|
@@ -755,27 +821,102 @@ The target values are defined in the `PATCHES` list inside the script:
 | Max watts | 500 W | 93 | f32 |
 | Min watts (regen) | -500 W | 97 | f32 |
 
-To change a target value, edit the `PATCHES` list in the script and re-run.
+To change target values, edit `VESC_BASELINE_PATCHES`,
+`VESC_CHARACTERIZATION`, or `VESC_OVERLAY_PATCHES` in `config/vesc_config.py`
+and re-run the relevant script.
 
-#### 12.5.3 Store to Flash (Permanent)
+Recommended order without VESC Tool:
+
+1. `mpremote mount . run scripts/vesc_characterize_motor.py`
+2. `mpremote mount . run scripts/vesc_flash_config.py`
+3. `mpremote run scripts/vesc_save_snapshot.py`
+
+#### 12.5.5 Save Final Snapshot
 
 ```bash
-mpremote run scripts/vesc_store_config.py
+mpremote run scripts/vesc_save_snapshot.py
 ```
 
-**Only run this after verifying the RAM config is correct** (§12.5.2).
+This script captures the final live VESC state after preparation and flashing.
+It saves these files on the Pico:
 
-This script:
-1. Reads the RAM config and verifies all expected values match
-2. Sends `COMM_STORE_MCCONF` (command 15) to write to flash
-3. Re-reads to confirm the flash write succeeded
+- `vesc_snapshot_mcconf.bin`
+- `vesc_snapshot_meta.txt`
+- `vesc_snapshot_appconf.bin` when APPCONF read succeeds
 
-After storing, the config persists across VESC power cycles.
+At the end it prints the exact `mpremote fs cp` commands needed to copy those
+files into the repo `config/` directory.
 
-> **Reverting:** If you need to undo a flash write, either run the write
-> script with the old values, or use VESC Tool to restore defaults.
+#### 12.5.6 Get And Set MCCONF
 
-#### 12.5.4 Protocol Details
+Use these repo scripts when you want to read or write the full VESC motor
+configuration (`MCCONF`) over UART without using VESC Tool.
+
+Get the current live MCCONF from the VESC:
+
+1. Read and save the final live config snapshot:
+
+```bash
+mpremote run scripts/vesc_save_snapshot.py
+```
+
+2. Copy the saved files from the Pico into the repo:
+
+```bash
+mpremote fs cp :vesc_snapshot_mcconf.bin config/vesc_snapshot_mcconf.bin
+mpremote fs cp :vesc_snapshot_meta.txt config/vesc_snapshot_meta.txt
+```
+
+3. If APPCONF was captured too, copy it as well:
+
+```bash
+mpremote fs cp :vesc_snapshot_appconf.bin config/vesc_snapshot_appconf.bin
+```
+
+Set MCCONF on the VESC from this repo workflow:
+
+1. Prepare a sane firmware-default-based baseline and run motor detection:
+
+```bash
+mpremote mount . run scripts/vesc_characterize_motor.py
+```
+
+2. Apply the ReGenX project overlay to the live VESC config:
+
+```bash
+mpremote mount . run scripts/vesc_flash_config.py
+```
+
+3. Verify the final result and save the full live MCCONF back into the repo:
+
+```bash
+mpremote run scripts/vesc_save_snapshot.py
+```
+
+How the repo uses VESC MCCONF commands:
+
+- `scripts/vesc_characterize_motor.py`
+   - reads firmware defaults with `COMM_GET_MCCONF_DEFAULT`
+   - writes the baseline with `COMM_SET_MCCONF`
+   - re-reads live config with `COMM_GET_MCCONF`
+- `scripts/vesc_flash_config.py`
+   - reads live config with `COMM_GET_MCCONF`
+   - patches selected fields in the binary blob
+   - writes with `COMM_SET_MCCONF`
+   - verifies by reading live config again with `COMM_GET_MCCONF`
+- `scripts/vesc_save_snapshot.py`
+   - reads live config with `COMM_GET_MCCONF`
+   - saves the raw MCCONF blob for the repo
+
+Important:
+
+- This repo does not rely on a separate `COMM_STORE_MCCONF` command.
+- On the tested firmware path, `COMM_SET_MCCONF` is treated as the write/store
+   operation and is always followed by read-back verification.
+- The saved `.bin` files are raw binary config blobs, not human-edited config
+   sources.
+
+#### 12.5.7 Protocol Details
 
 The VESC UART protocol uses framed packets with CRC-16:
 
@@ -791,14 +932,14 @@ Relevant VESC commands:
 
 | Command | ID | Direction | Description |
 |---|---|---|---|
-| `COMM_SET_MCCONF` | 13 | Pico → VESC | Apply motor config to RAM |
+| `COMM_SET_MCCONF` | 13 | Pico → VESC | Apply motor config and store it |
 | `COMM_GET_MCCONF` | 14 | Pico → VESC | Read motor config |
-| `COMM_STORE_MCCONF` | 15 | Pico → VESC | Save RAM config to flash |
+| `COMM_GET_MCCONF_DEFAULT` | 15 | Pico → VESC | Read default motor config |
 
 Config data is big-endian, with `float32` (IEEE 754), `int32`, and `uint8`
 fields.  Field offsets depend on firmware version (currently tested with FW 5.2).
 
-#### 12.5.5 Keep a Full Backup on the Pico (Recommended)
+#### 12.5.8 Bench-Only Backup Utilities
 
 If you always use the same motor+VESC combination, store a full MCCONF backup
 file on the Pico so you can quickly restore after a VESC reflash.
@@ -806,7 +947,7 @@ file on the Pico so you can quickly restore after a VESC reflash.
 Save backup to Pico filesystem:
 
 ```bash
-mpremote run scripts/vesc_backup_save_to_pico.py
+mpremote run scripts/bench/vesc_backup_save_to_pico.py
 ```
 
 This creates `/vesc_mcconf_backup.bin` on the Pico and stores:
@@ -816,16 +957,15 @@ This creates `/vesc_mcconf_backup.bin` on the Pico and stores:
 - CRC16 of MCCONF payload
 - Full MCCONF binary payload
 
-Restore from Pico backup to VESC RAM+flash:
+Restore from Pico backup to VESC:
 
 ```bash
-mpremote run scripts/vesc_backup_restore_from_pico.py
+mpremote run scripts/bench/vesc_backup_restore_from_pico.py
 ```
 
 The restore script validates magic/version/length/CRC before writing, then:
-1. Sends `COMM_SET_MCCONF` (apply to RAM)
-2. Sends `COMM_STORE_MCCONF` (save to flash)
-3. Reads back MCCONF and checks it matches the backup exactly
+1. Sends `COMM_SET_MCCONF`
+2. Reads back MCCONF and checks it matches the backup exactly
 
 Quick check that backup file exists on Pico:
 
@@ -834,7 +974,7 @@ mpremote fs ls
 ```
 
 > Keep this backup updated whenever you intentionally retune VESC settings.
-> Re-run `vesc_backup_save_to_pico.py` after tuning changes are finalized.
+> Re-run `scripts/bench/vesc_backup_save_to_pico.py` after tuning changes are finalized.
 
 ### 12.6 Full Deployment
 

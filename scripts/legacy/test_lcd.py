@@ -1,7 +1,7 @@
-# scripts/test_lcd.py — LCD hardware test
+# scripts/legacy/test_lcd.py — LCD hardware test
 #
 # Run on the Pico via mpremote:
-#   mpremote connect /dev/ttyACM0 run scripts/test_lcd.py
+#   mpremote connect /dev/ttyACM0 run scripts/legacy/test_lcd.py
 #
 # Expected: backlight turns on, line 1 shows "Hello ReGenX!",
 #           line 2 shows "LCD test OK".
