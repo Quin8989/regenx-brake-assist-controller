@@ -6,13 +6,13 @@
 # Page layouts (16 columns × 2 rows):
 #
 #   RUN (ASSIST):    "ASSIST  25.2V 68%"
-#                    "  12.3A   124RPM"
+#                    " +12.3A   124RPM"
 #
 #   RUN (REGEN):     "REGEN   25.2V 68%"
-#                    "  12.3A   124RPM"
+#                    " -12.3A   124RPM"
 #
 #   RUN (COAST):     "COAST   25.2V 68%"
-#                    "   0.0A     0RPM"
+#                    "  +0.0A     0RPM"
 #
 #   PRECHARGE:       "PRECHARGE...    "
 #                    "Vcap: 12.4V  31%"
@@ -25,9 +25,14 @@
 
 from time import ticks_ms, ticks_diff
 
+from config.settings import WHEEL_CIRCUMFERENCE_M
 from core import FAULT_LABELS, CommandMode, SystemState
 
 _FAULT_FLASH_MS = 800  # Toggle period for fault page header
+
+
+def _rpm_to_kmh(rpm):
+    return (rpm * WHEEL_CIRCUMFERENCE_M * 60.0) / 1000.0
 
 
 class DisplayManager:
@@ -82,11 +87,16 @@ class DisplayManager:
         pad0 = 16 - len(mode) - len(volts) - len(pct)
         line0 = mode + " " * max(pad0 - 1, 1) + volts + " " + pct
 
-        # Line 1: "  12.3A   124RPM"   (current right-aligned 6, gap, RPM right-aligned)
-        amps = f"{abs(s.vesc_motor_current_a):.1f}A"
-        rpm = f"{int(s.wheel_speed_rpm)}RPM" if s.wheel_speed_valid else f"{int(abs(s.vesc_mech_rpm))}RPM"
-        pad1 = 16 - len(amps) - len(rpm)
-        line1 = " " * max(pad1 // 2, 1) + amps + " " * max(pad1 - pad1 // 2, 1) + rpm
+        # Line 1: " +12.3A  12.4km/h"   (current right-aligned, speed in km/h)
+        # Show one signed VESC-side current value across all run states.
+        # avg_iq from COMM_GET_VALUES is the closest available current-loop signal.
+        amps = f"{s.vesc_iq_current_a:+.1f}A"
+        if s.wheel_speed_valid:
+            speed_text = f"{_rpm_to_kmh(s.wheel_speed_rpm):.1f}km/h"
+        else:
+            speed_text = "--.-km/h"
+        pad1 = 16 - len(amps) - len(speed_text)
+        line1 = " " * max(pad1 // 2, 1) + amps + " " * max(pad1 - pad1 // 2, 1) + speed_text
 
         self._lcd.write_line(0, line0[:16])
         self._lcd.write_line(1, line1[:16])

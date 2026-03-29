@@ -10,45 +10,22 @@
 # and fault code.  Motor current may show small offset noise with no
 # motor connected.  Motor temp will read ~-72 C if no sensor is wired.
 
-from machine import UART, Pin
 import struct
-import time
+
+from scripts.lib.vesc_uart_template import VescUartTemplate
 
 COMM_GET_VALUES = 0x04
 TELEMETRY_FMT = ">hhiiiihihiiiiiiB"
 TELEMETRY_SIZE = 53  # bytes after opcode
 
-uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
-uart.read()  # flush
+vesc = VescUartTemplate(rxbuf=1024)
 
-
-def crc16(data):
-    crc = 0
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
-            else:
-                crc <<= 1
-            crc &= 0xFFFF
-    return crc
-
-
-payload = bytes([COMM_GET_VALUES])
-frame = bytes([0x02, len(payload)]) + payload + struct.pack(">H", crc16(payload)) + bytes([0x03])
-
-uart.write(frame)
-time.sleep_ms(200)
-
-resp = uart.read()
-if not resp:
+payload = vesc.request(COMM_GET_VALUES, timeout_ms=1500)
+if not payload:
     print("FAIL: no response — check wiring and VESC power")
-elif resp[0] == 0x02 and len(resp) > 4:
-    plen = resp[1]
-    p = resp[2 : 2 + plen]
-    if p[0] == COMM_GET_VALUES and len(p) >= 1 + TELEMETRY_SIZE:
-        vals = struct.unpack_from(TELEMETRY_FMT, p, 1)
+else:
+    if payload[0] == COMM_GET_VALUES and len(payload) >= 1 + TELEMETRY_SIZE:
+        vals = struct.unpack_from(TELEMETRY_FMT, payload, 1)
         print("--- VESC Telemetry ---")
         print("FET temp:       {:.1f} C".format(vals[0] / 10.0))
         print("Motor temp:     {:.1f} C".format(vals[1] / 10.0))
@@ -66,6 +43,4 @@ elif resp[0] == 0x02 and len(resp) > 4:
         print("Fault code:     {}".format(vals[15]))
         print("PASS")
     else:
-        print("FAIL: unexpected payload (cmd={}, len={})".format(p[0], len(p)))
-else:
-    print("FAIL: malformed response:", resp.hex())
+        print("FAIL: unexpected payload (cmd={}, len={})".format(payload[0], len(payload)))

@@ -52,6 +52,7 @@ from config.settings import (
     REGEN_PI_INTEGRAL_LIMIT_A,
     REGEN_PI_KI_A_PER_RPM_S,
     REGEN_PI_KP_A_PER_RPM,
+    REGEN_SLEW_A_PER_S,
     REGEN_TARGET_SLIP_FRAC,
     VCAP_SOFT_REGEN_CUTOFF,
 )
@@ -62,6 +63,7 @@ from utils import SlewLimiter, clamp
 _DT_S = CONTROL_LOOP_PERIOD_MS / 1000.0
 _SLEW_A_PER_S = 20.0
 _SLEW_DELTA = _SLEW_A_PER_S * _DT_S
+_REGEN_SLEW_DELTA = REGEN_SLEW_A_PER_S * _DT_S
 
 
 class ControlLoop:
@@ -77,7 +79,7 @@ class ControlLoop:
         # Slew limiters prevent abrupt torque/current steps that feel harsh and can
         # stress drivetrain/electronics.
         self._assist_slew = SlewLimiter(max_delta=_SLEW_DELTA)
-        self._regen_slew = SlewLimiter(max_delta=_SLEW_DELTA)
+        self._regen_slew = SlewLimiter(max_delta=_REGEN_SLEW_DELTA)
         # Integral state for regen PI loop. Represents accumulated correction (A).
         self._regen_integral_a = 0.0
 
@@ -96,6 +98,7 @@ class ControlLoop:
         # Default to neutral each cycle; active modes explicitly write non-zero values.
         s.assist_command_request = 0.0
         s.regen_command_request = 0.0
+        s.regen_pi_command_a = 0.0
 
         # Inhibit is the master safety gate:
         # no current commands and no integrator windup.
@@ -147,9 +150,12 @@ class ControlLoop:
         target_rpm = wheel_rpm * REGEN_TARGET_SLIP_FRAC
 
         # PI controller
-        error_rpm = carrier_rpm - target_rpm
+        # When carrier slip falls below target (carrier_rpm too low), increase
+        # regen torque to open the slip back toward target.
+        error_rpm = target_rpm - carrier_rpm
         s.regen_speed_error_rpm = error_rpm
         base_current_a = self._pi_update(error_rpm)
+        s.regen_pi_command_a = base_current_a
 
         # Scale by rider authority and smooth
         rider = clamp(s.requested_level, 0.0, 1.0)
@@ -167,7 +173,7 @@ class ControlLoop:
         When coasting, the freewheel disengages and motor RPM ≈ 0
         (lock_fraction → 0, carrier_rpm → wheel_rpm = full slip).
         """
-        motor_rpm = max(0.0, motor_rpm)
+        motor_rpm = abs(motor_rpm)
         locked_motor_rpm = max(1e-6, wheel_rpm * REGEN_LOCKED_RATIO)
         lock_fraction = clamp(motor_rpm / locked_motor_rpm, 0.0, 1.0)
         return wheel_rpm * (1.0 - lock_fraction)

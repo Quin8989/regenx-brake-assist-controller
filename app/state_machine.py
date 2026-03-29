@@ -84,5 +84,5 @@ class StateMachine:
 
     def _handle_fault(self):
         if not self._faults.has_fault():
-            self._state.system_state = SystemState.OFF
+            self._state.system_state = SystemState.COAST
             self._state.inhibit_motor_commands = True

@@ -1,252 +1,36 @@
-# scripts/vesc_flash_config.py - Flash the defined ReGenX config to the VESC
+# scripts/vesc_flash_config.py - Guarded live-blob MCCONF writer for FW 6.6
 #
-# This is the single top-level VESC config script for this repo.
-# It reads the current MCCONF, patches the ReGenX-defined target values,
-# writes them with COMM_SET_MCCONF, and re-reads the live VESC configuration
-# to verify the stored config actually matches the intended target values.
-#
-# This script does NOT create a full motor commissioning from scratch.
-# It only reapplies the ReGenX project envelope on top of an existing VESC
-# motor configuration that has already been commissioned.
-#
-# It rebuilds these defined project-level settings:
-#   - FOC motor mode
-#   - Current limits
-#   - Voltage limits / battery cutoffs
-#   - Power limits
-#
-# It intentionally does NOT rebuild motor-specific FOC data such as:
-#   - measured motor resistance
-#   - measured motor inductance
-#   - flux linkage
-#   - hall table / hall sensor detection
-#   - observer tuning derived from detection
-#
-# Workflow:
-#   1. Reads current MCCONF from VESC
-#   2. Patches specific policy fields at known byte offsets
-#   3. Sends patched config with COMM_SET_MCCONF
-#   4. Re-reads config to verify the policy overlay took effect
-#   5. Re-reads config again after a short delay to verify persistence
+# This script patches the live serialized MCCONF blob read from the connected
+# VESC and writes it back with COMM_SET_MCCONF. It is intentionally guarded:
+# - validated only for FW 6.6 / HW 410 in this project
+# - only writes fields we can first parse from the live blob
+# - verifies exact live read-back after the write
 #
 # Run: mpremote mount . run scripts/vesc_flash_config.py
-#
-# SAFETY: On current VESC firmware, COMM_SET_MCCONF stores the motor config.
-#         If verification fails, the script exits with failure.
 
+import math
 import struct
 from time import sleep_ms, ticks_ms, ticks_diff
-from machine import UART, Pin
+
+from scripts.lib.vesc_uart_template import VescUartTemplate, crc16
 
 try:
-    from config.vesc_config import get_overlay_patches
+    from config.vesc_config import get_flash_limits
 except ImportError:
     print("FAILED: Could not import config.vesc_config")
     print("Run with: mpremote mount . run scripts/vesc_flash_config.py")
     raise SystemExit(1)
 
-# ---- UART setup ----
-uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
 
-# ---- VESC protocol helpers ----
-
-def crc16(data):
-    crc = 0
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
-            else:
-                crc <<= 1
-            crc &= 0xFFFF
-    return crc
-
-
-def wrap_frame(payload):
-    length = len(payload)
-    if length <= 255:
-        frame = bytes([0x02, length]) + payload
-    else:
-        frame = bytes([0x03, length >> 8, length & 0xFF]) + payload
-    c = crc16(payload)
-    frame += struct.pack(">H", c)
-    frame += bytes([0x03])
-    return frame
-
-
-def try_extract(buf):
-    if len(buf) < 6:
-        return None
-    idx = 0
-    while idx < len(buf):
-        if buf[idx] == 0x02 and idx + 4 < len(buf):
-            length = buf[idx + 1]
-            frame_size = length + 5
-            if idx + frame_size <= len(buf):
-                payload = bytes(buf[idx + 2:idx + 2 + length])
-                crc_recv = (buf[idx + 2 + length] << 8) | buf[idx + 3 + length]
-                if crc16(payload) == crc_recv:
-                    return payload
-            idx += 1
-        elif buf[idx] == 0x03 and idx + 5 < len(buf):
-            length = (buf[idx + 1] << 8) | buf[idx + 2]
-            if length > 0 and length < 10000:
-                frame_size = length + 6
-                if idx + frame_size <= len(buf):
-                    payload = bytes(buf[idx + 3:idx + 3 + length])
-                    crc_recv = (buf[idx + 3 + length] << 8) | buf[idx + 4 + length]
-                    if crc16(payload) == crc_recv:
-                        return payload
-            idx += 1
-        else:
-            idx += 1
-    return None
-
-
-def read_mcconf():
-    """Read full MCCONF payload from VESC. Returns payload bytes or None."""
-    uart.read()
-    sleep_ms(20)
-    uart.write(wrap_frame(bytes([COMM_GET_MCCONF])))
-    sleep_ms(100)
-
-    buf = bytearray()
-    start = ticks_ms()
-    while ticks_diff(ticks_ms(), start) < 5000:
-        data = uart.read()
-        if data:
-            buf.extend(data)
-            start = ticks_ms()
-        sleep_ms(5)
-        if len(buf) >= 6 and buf[0] == 0x03:
-            expected = ((buf[1] << 8) | buf[2]) + 6
-            if len(buf) >= expected:
-                break
-
-    payload = try_extract(buf)
-    if payload and payload[0] == COMM_GET_MCCONF and len(payload) > 50:
-        return payload
-    return None
-
-
-def send_mcconf(config_data):
-    """Send COMM_SET_MCCONF with modified config. Returns True if ACK received."""
-    # Build payload: command byte + config data (skip the original command byte)
-    payload = bytes([COMM_SET_MCCONF]) + config_data
-
-    uart.read()
-    sleep_ms(20)
-    uart.write(wrap_frame(payload))
-    sleep_ms(200)
-
-    # VESC doesn't always send an explicit ACK for SET_MCCONF,
-    # so we verify by re-reading the config
-    return True
-
-
-# ---- Byte offset helpers ----
-# These offsets are into the config data blob (payload[1:], after command byte).
-#
-# IMPORTANT:
-#   The "Typical baseline" values below are documentation only. They came from
-#   one previously observed MCCONF layout and should not be treated as the live
-#   truth for whatever VESC is currently connected.
-#
-#   The only authoritative target values in this script are the entries in
-#   PATCHES below.
-#
-# Based on decoded layout from scripts/bench/test_vesc_read_config.py output:
-#
-# Offset  Field                     Typical baseline  → Target / action
-# ------  -----                     ----------------  -----------------
-#   0-3   Config signature          varies            → keep
-#   4     PWM mode (u8)             1 (Sync)          → keep
-#   5     Comm mode (u8)            0                 → keep
-#   6     Motor type (u8)           0 (BLDC)          → 2 (FOC)
-#   7     Sensor mode (u8)          0 (Sensorless)    → keep as-is here
-#   8-11  Motor max current (f32)   60.0              → 40.0
-#  12-15  Motor min current (f32)   -60.0             → -40.0
-#  16-19  Battery max current (f32) 99.0              → 40.0
-#  20-23  Battery min current (f32) -60.0             → -40.0
-#  24-27  Absolute max current (f32) 130.0            → keep
-#  28-31  Min ERPM (f32)            -100000           → keep
-#  32-35  Max ERPM (f32)            100000            → keep
-#  36-39  ERPM start (f32)          0.8               → keep
-#  40-43  Max ERPM fbrake (f32)     300.0             → keep
-#  44-47  Max ERPM fbrake cc (f32)  1500.0            → keep
-#  48-51  Min input V (f32)         8.0               → 15.0
-#  52-55  Max input V (f32)         57.0              → 42.0
-#  56-59  Batt cut start (f32)      6.0               → 15.0
-#  60-63  Batt cut end (f32)        6.0               → 14.0
-#  64     Slow abs current (bool)   1                 → keep
-#  65-68  FET temp start (f32)      85.0              → keep
-#  69-72  FET temp end (f32)        100.0             → keep
-#  73-76  Motor temp start (f32)    85.0              → keep
-#  77-80  Motor temp end (f32)      100.0             → keep
-#  81-84  Temp accel dec (f32)      0.15              → keep
-#  85-88  Min duty (f32)            0.005             → keep
-#  89-92  Max duty (f32)            0.95              → keep
-#  93-96  Max watts (f32)           1500000           → 500.0
-#  97-100 Min watts (f32)           -1500000          → -500.0
-
-def patch_f32(data, offset, value):
-    """Patch a float32 at the given offset in a bytearray."""
-    struct.pack_into(">f", data, offset, value)
-
-
-def patch_u8(data, offset, value):
-    """Patch a uint8 at the given offset."""
-    data[offset] = value
-
-
-def read_f32(data, offset):
-    return struct.unpack_from(">f", data, offset)[0]
-
-
-def read_u8(data, offset):
-    return data[offset]
-
-
-# ---- Command IDs ----
-COMM_GET_MCCONF = 14
+COMM_FW_VERSION = 0
 COMM_SET_MCCONF = 13
+COMM_GET_MCCONF = 14
 
-# ---- Target configuration values ----
-# These are loaded from the shared VESC config Python module.
-PATCHES = []
+EXPECTED_FW = (6, 6)
+EXPECTED_HW = "410"
+ALLOW_EXPERIMENTAL_WRITE = False
 
-COMMISSIONING_ITEMS = (
-    "Motor resistance detected and saved",
-    "Motor inductance detected and saved",
-    "Flux linkage detected and saved",
-    "Pole pairs confirmed for the actual motor",
-    "Sensor mode chosen deliberately (sensorless or hall)",
-    "Hall table detected and saved if hall sensors are used",
-)
-
-
-def print_commissioning_reminder():
-    print("\nCommissioning items this script does NOT rebuild:")
-    for item in COMMISSIONING_ITEMS:
-        print("  - %s" % item)
-
-
-def verify_expected_fields(config_data):
-    all_ok = True
-    for offset, dtype, new_val, name in PATCHES:
-        if dtype == "f32":
-            actual = struct.unpack_from(">f", config_data, offset)[0]
-            ok = abs(actual - new_val) < 0.01
-            status = "OK" if ok else "FAILED (got %.1f)" % actual
-        else:
-            actual = config_data[offset]
-            ok = actual == new_val
-            status = "OK" if ok else "FAILED (got %d)" % actual
-        if not ok:
-            all_ok = False
-        print("    %-28s %s" % (name, status))
-    return all_ok
+vesc = VescUartTemplate(rxbuf=4096)
 
 
 def abort(message):
@@ -254,106 +38,349 @@ def abort(message):
     raise SystemExit(1)
 
 
-# ================= MAIN =================
-print()
-print("=" * 50)
-print("  VESC Configuration Writer")
-print("  ReGenX Brake-Assist Controller")
-print("=" * 50)
-print("\nThis script flashes the defined ReGenX config to the VESC.")
-print("It verifies the stored config with immediate and delayed read-back.")
-print_commissioning_reminder()
+def read_u32(data, offset):
+    return struct.unpack_from(">I", data, offset)[0]
 
-PATCHES = get_overlay_patches()
 
-if not PATCHES:
-    abort("Shared config does not define any overlay patches")
+def read_f32_be(data, offset):
+    return struct.unpack_from(">f", data, offset)[0]
 
-print("\nShared settings source: config.vesc_config.VESC_OVERLAY_PATCHES")
 
-# ---- Step 1: Load base config ----
-print("\n[1/5] Loading base MCCONF...")
-payload = read_mcconf()
-if payload is None:
-    print("  FAILED: Could not read MCCONF from VESC")
-    print("  Check UART connection and VESC power")
-    raise SystemExit(1)
-print("  OK - %d byte payload from live VESC" % len(payload))
-config = bytearray(payload[1:])
+def read_f32_auto(data, offset):
+    raw = read_u32(data, offset)
+    exponent = (raw >> 23) & 0xFF
+    fraction = raw & 0x7FFFFF
+    negative = raw & (1 << 31)
 
-# ---- Step 2: Show current vs target ----
-print("\n[2/5] Planned changes:")
-print("  %-28s %12s -> %s" % ("Field", "Current", "New"))
-print("  " + "-" * 58)
+    value = 0.0
+    if exponent != 0 or fraction != 0:
+        value = fraction / (8388608.0 * 2.0) + 0.5
+        exponent -= 126
 
-for offset, dtype, new_val, name in PATCHES:
-    if dtype == "f32":
-        cur = read_f32(config, offset)
-        cur_str = "%.1f" % cur
-        new_str = "%.1f" % new_val
-    else:
-        cur = read_u8(config, offset)
-        cur_str = "%d" % cur
-        new_str = "%d" % new_val
+    if negative:
+        value = -value
 
-    changed = " ***" if cur_str != new_str else ""
-    print("  %-28s %12s -> %-12s%s" % (name, cur_str, new_str, changed))
+    return math.ldexp(value, exponent)
 
-# ---- Step 3: Apply patches ----
-print("\n[3/5] Patching config blob...")
-for offset, dtype, new_val, name in PATCHES:
-    if dtype == "f32":
-        patch_f32(config, offset, new_val)
-    else:
-        patch_u8(config, offset, new_val)
-print("  %d fields patched" % len(PATCHES))
 
-# Verify patches by re-reading from patched blob
-print("\n  Verification read-back from patched blob:")
-for offset, dtype, new_val, name in PATCHES:
-    if dtype == "f32":
-        actual = read_f32(config, offset)
-        ok = abs(actual - new_val) < 0.01
-        print("    %-28s = %-12.1f %s" % (name, actual, "OK" if ok else "MISMATCH!"))
-    else:
-        actual = read_u8(config, offset)
-        ok = actual == new_val
-        print("    %-28s = %-12d %s" % (name, actual, "OK" if ok else "MISMATCH!"))
+def read_u16_scaled_10(data, offset):
+    return struct.unpack_from(">H", data, offset)[0] / 10.0
 
-# ---- Step 4: Send to VESC ----
-print("\n[4/5] Sending patched config with COMM_SET_MCCONF...")
-send_mcconf(bytes(config))
-sleep_ms(500)
 
-# Re-read to verify VESC accepted the changes
-print("  Re-reading MCCONF to verify...")
-verify = read_mcconf()
-if verify is None:
-    abort("Could not re-read MCCONF after COMM_SET_MCCONF")
-else:
-    vconfig = verify[1:]  # skip command byte
-    print("\n  Verification against immediate read-back:")
-    all_ok = verify_expected_fields(vconfig)
+def write_f32_be(data, offset, value):
+    struct.pack_into(">f", data, offset, value)
 
-    if all_ok:
-        print("\n  ALL CHANGES VERIFIED IN IMMEDIATE READ-BACK")
-        print("\n[5/5] Re-reading MCCONF after a short delay...")
-        sleep_ms(1000)
 
-        flash_verify = read_mcconf()
-        if flash_verify is None:
-            abort("Could not perform delayed persistence check")
+def write_f32_auto(data, offset, value):
+    if abs(value) < 1.5e-38:
+        value = 0.0
+
+    frac, exponent = math.frexp(value)
+    frac_abs = abs(frac)
+    frac_serialized = 0
+
+    if frac_abs >= 0.5:
+        frac_serialized = int((frac_abs - 0.5) * 2.0 * 8388608.0)
+        exponent += 126
+
+    result = ((exponent & 0xFF) << 23) | (frac_serialized & 0x7FFFFF)
+    if frac < 0:
+        result |= 1 << 31
+
+    struct.pack_into(">I", data, offset, result)
+
+
+def write_u16_scaled_10(data, offset, value):
+    scaled = int(round(value * 10.0))
+    if scaled < 0 or scaled > 0xFFFF:
+        abort("Scaled uint16 value out of range at offset %d" % offset)
+    struct.pack_into(">H", data, offset, scaled)
+
+
+def _plausible_current_limits(limits):
+    return (
+        limits["motor_max_current_a"] > 0.0
+        and limits["motor_min_current_a"] < 0.0
+        and limits["battery_max_current_a"] > 0.0
+        and limits["battery_min_current_a"] < 0.0
+        and abs(limits["motor_max_current_a"]) < 5000.0
+        and abs(limits["motor_min_current_a"]) < 5000.0
+        and abs(limits["battery_max_current_a"]) < 5000.0
+        and abs(limits["battery_min_current_a"]) < 5000.0
+    )
+
+
+def _plausible_voltage_limits(limits):
+    return (
+        0.0 <= limits["min_input_voltage_v"] <= 100.0
+        and 0.0 <= limits["max_input_voltage_v"] <= 100.0
+        and 0.0 <= limits["battery_cut_start_v"] <= 100.0
+        and 0.0 <= limits["battery_cut_end_v"] <= 100.0
+        and limits["max_input_voltage_v"] >= limits["min_input_voltage_v"]
+        and limits["battery_cut_start_v"] >= limits["battery_cut_end_v"]
+    )
+
+
+def _read_limits_at(config_blob, offsets, reader):
+    return {
+        "motor_max_current_a": reader(config_blob, offsets[0]),
+        "motor_min_current_a": reader(config_blob, offsets[1]),
+        "battery_max_current_a": reader(config_blob, offsets[2]),
+        "battery_min_current_a": reader(config_blob, offsets[3]),
+    }
+
+
+def _read_voltage_at(config_blob, offsets, reader):
+    return {
+        "min_input_voltage_v": reader(config_blob, offsets[0]),
+        "max_input_voltage_v": reader(config_blob, offsets[1]),
+        "battery_cut_start_v": reader(config_blob, offsets[2]),
+        "battery_cut_end_v": reader(config_blob, offsets[3]),
+    }
+
+
+def detect_current_layout(config_blob):
+    candidates = (
+        ((8, 12, 16, 20), read_f32_auto, write_f32_auto, "auto-float@8"),
+        ((8, 12, 16, 20), read_f32_be, write_f32_be, "ieee-float@8"),
+        ((4, 8, 12, 16), read_f32_be, write_f32_be, "ieee-float@4"),
+    )
+
+    for offsets, reader, writer, label in candidates:
+        limits = _read_limits_at(config_blob, offsets, reader)
+        if _plausible_current_limits(limits):
+            return {
+                "offsets": offsets,
+                "reader": reader,
+                "writer": writer,
+                "label": label,
+                "values": limits,
+            }
+
+    return None
+
+
+def detect_voltage_layout(config_blob):
+    candidates = (
+        (
+            (50, 52),
+            (54, 56),
+            (73, 77),
+            read_u16_scaled_10,
+            write_u16_scaled_10,
+            read_f32_be,
+            write_f32_be,
+            "u16x10@50 + f32@73",
+        ),
+        ((48, 52, 56, 60, 93, 97), read_f32_be, write_f32_be, "ieee-float@48"),
+        ((48, 52, 56, 60, 93, 97), read_f32_auto, write_f32_auto, "auto-float@48"),
+    )
+
+    for candidate in candidates:
+        if len(candidate) == 8:
+            vin_offsets, cut_offsets, watt_offsets, voltage_reader, voltage_writer, watt_reader, watt_writer, label = candidate
+            limits = {
+                "min_input_voltage_v": voltage_reader(config_blob, vin_offsets[0]),
+                "max_input_voltage_v": voltage_reader(config_blob, vin_offsets[1]),
+                "battery_cut_start_v": voltage_reader(config_blob, cut_offsets[0]),
+                "battery_cut_end_v": voltage_reader(config_blob, cut_offsets[1]),
+                "watt_max": watt_reader(config_blob, watt_offsets[0]),
+                "watt_min": watt_reader(config_blob, watt_offsets[1]),
+            }
         else:
-            print("  Verification against delayed read-back:")
-            flash_ok = verify_expected_fields(flash_verify[1:])
-            if flash_ok:
-                print("\n  STORED CONFIG VERIFIED - live VESC config matches the defined target values.")
-                print("  Sensor mode and hall setup were intentionally left untouched.")
-            else:
-                abort("Delayed verification failed — live VESC config does not match the defined target values")
-    else:
-        abort("Immediate verification failed")
+            offsets, reader, writer, label = candidate
+            limits = _read_voltage_at(config_blob, offsets[:4], reader)
+            limits["watt_max"] = reader(config_blob, offsets[4])
+            limits["watt_min"] = reader(config_blob, offsets[5])
+            vin_offsets = offsets[:2]
+            cut_offsets = offsets[2:4]
+            watt_offsets = offsets[4:6]
+            voltage_reader = reader
+            voltage_writer = writer
+            watt_reader = reader
+            watt_writer = writer
 
-print("\n" + "=" * 50)
-print("  Done")
-print("=" * 50)
+        if _plausible_voltage_limits(limits):
+            return {
+                "vin_offsets": vin_offsets,
+                "cut_offsets": cut_offsets,
+                "watt_offsets": watt_offsets,
+                "voltage_reader": voltage_reader,
+                "voltage_writer": voltage_writer,
+                "watt_reader": watt_reader,
+                "watt_writer": watt_writer,
+                "label": label,
+                "values": limits,
+            }
+
+    return None
+
+
+def read_fw_info():
+    payload = vesc.request(COMM_FW_VERSION, timeout_ms=2000)
+    if not payload or payload[0] != COMM_FW_VERSION or len(payload) < 3:
+        return None, None, ""
+
+    hw_name = ""
+    if len(payload) > 3:
+        hw_name = payload[3:].split(b"\x00")[0].decode("utf-8", "replace")
+    return payload[1], payload[2], hw_name
+
+
+def read_mcconf_blob(timeout_ms=5000):
+    payload = vesc.request(COMM_GET_MCCONF, timeout_ms=timeout_ms)
+    if payload and payload[0] == COMM_GET_MCCONF and len(payload) > 60:
+        return payload[1:]
+    return None
+
+
+def wait_for_mcconf_blob(total_timeout_ms=12000, retry_delay_ms=250):
+    start = ticks_ms()
+    while ticks_diff(ticks_ms(), start) < total_timeout_ms:
+        blob = read_mcconf_blob(timeout_ms=2500)
+        if blob is not None:
+            return blob
+        sleep_ms(retry_delay_ms)
+    return None
+
+
+def apply_targets(config_blob, current_layout, voltage_layout, targets):
+    patched = bytearray(config_blob)
+
+    current_offsets = current_layout["offsets"]
+    current_writer = current_layout["writer"]
+    current_writer(patched, current_offsets[0], targets["motor_max_current_a"])
+    current_writer(patched, current_offsets[1], targets["motor_min_current_a"])
+    current_writer(patched, current_offsets[2], targets["battery_max_current_a"])
+    current_writer(patched, current_offsets[3], targets["battery_min_current_a"])
+
+    voltage_writer = voltage_layout["voltage_writer"]
+    watt_writer = voltage_layout["watt_writer"]
+    vin_offsets = voltage_layout["vin_offsets"]
+    cut_offsets = voltage_layout["cut_offsets"]
+    watt_offsets = voltage_layout["watt_offsets"]
+    voltage_writer(patched, vin_offsets[0], targets["min_input_voltage_v"])
+    voltage_writer(patched, vin_offsets[1], targets["max_input_voltage_v"])
+    voltage_writer(patched, cut_offsets[0], targets["battery_cut_start_v"])
+    voltage_writer(patched, cut_offsets[1], targets["battery_cut_end_v"])
+    watt_writer(patched, watt_offsets[0], targets["watt_max"])
+    watt_writer(patched, watt_offsets[1], targets["watt_min"])
+
+    return patched
+
+
+def print_before_after(current_layout, voltage_layout, targets):
+    current = current_layout["values"]
+    voltage = voltage_layout["values"]
+
+    print("\nPlanned persistent changes:")
+    print("  %-24s %12s -> %s" % ("Field", "Current", "Target"))
+    print("  " + "-" * 56)
+    print("  %-24s %12.2f -> %.2f" % ("Motor max current", current["motor_max_current_a"], targets["motor_max_current_a"]))
+    print("  %-24s %12.2f -> %.2f" % ("Motor min current", current["motor_min_current_a"], targets["motor_min_current_a"]))
+    print("  %-24s %12.2f -> %.2f" % ("Battery max current", current["battery_max_current_a"], targets["battery_max_current_a"]))
+    print("  %-24s %12.2f -> %.2f" % ("Battery min current", current["battery_min_current_a"], targets["battery_min_current_a"]))
+    print("  %-24s %12.2f -> %.2f" % ("Min input voltage", voltage["min_input_voltage_v"], targets["min_input_voltage_v"]))
+    print("  %-24s %12.2f -> %.2f" % ("Max input voltage", voltage["max_input_voltage_v"], targets["max_input_voltage_v"]))
+    print("  %-24s %12.2f -> %.2f" % ("Battery cut start", voltage["battery_cut_start_v"], targets["battery_cut_start_v"]))
+    print("  %-24s %12.2f -> %.2f" % ("Battery cut end", voltage["battery_cut_end_v"], targets["battery_cut_end_v"]))
+    print("  %-24s %12.2f -> %.2f" % ("Max watts", voltage["watt_max"], targets["watt_max"]))
+    print("  %-24s %12.2f -> %.2f" % ("Min watts", voltage["watt_min"], targets["watt_min"]))
+
+
+def first_different_offsets(before_blob, after_blob, limit=24):
+    out = []
+    bound = min(len(before_blob), len(after_blob))
+    for idx in range(bound):
+        if before_blob[idx] != after_blob[idx]:
+            out.append(idx)
+            if len(out) >= limit:
+                break
+    return out
+
+
+print()
+print("=" * 54)
+print("  Guarded VESC MCCONF Writer")
+print("=" * 54)
+
+fw_major, fw_minor, hw_name = read_fw_info()
+if fw_major is None:
+    abort("Could not read firmware version")
+
+print("FW: %d.%d" % (fw_major, fw_minor))
+print("HW: %s" % hw_name)
+if (fw_major, fw_minor) != EXPECTED_FW:
+    abort("This writer is guarded for FW %d.%d only" % EXPECTED_FW)
+if hw_name != EXPECTED_HW:
+    abort("This writer is guarded for HW %s only" % EXPECTED_HW)
+
+targets = get_flash_limits()
+before_blob = wait_for_mcconf_blob()
+if before_blob is None:
+    abort("Could not read live MCCONF")
+
+current_layout = detect_current_layout(before_blob)
+if current_layout is None:
+    abort("Could not detect current-limit layout in live MCCONF")
+
+voltage_layout = detect_voltage_layout(before_blob)
+if voltage_layout is None:
+    abort("Could not detect voltage-limit layout in live MCCONF")
+
+print("Current layout: %s" % current_layout["label"])
+print("Voltage layout: %s" % voltage_layout["label"])
+print_before_after(current_layout, voltage_layout, targets)
+
+patched_blob = apply_targets(before_blob, current_layout, voltage_layout, targets)
+if patched_blob == before_blob:
+    print("\nNo write needed: live MCCONF already matches the configured targets.")
+    raise SystemExit(0)
+
+before_crc = crc16(before_blob)
+patched_crc = crc16(patched_blob)
+print("\nCRC before:  %04X" % before_crc)
+print("CRC target:  %04X" % patched_crc)
+
+if not ALLOW_EXPERIMENTAL_WRITE:
+    print("\nABORTED: Experimental full COMM_SET_MCCONF write is disabled by default.")
+    print("Reason: on tested FW 6.6 / HW 410 hardware, a live full write caused the")
+    print("controller to stop responding over UART immediately afterward.")
+    print("Use this script only as a dry-run layout/target audit unless you are")
+    print("intentionally re-testing the raw writer after manual hardware recovery.")
+    raise SystemExit(1)
+
+vesc.send_command(bytes([COMM_SET_MCCONF]) + bytes(patched_blob), expected_cmd=None, timeout_ms=0)
+sleep_ms(1200)
+
+after_blob = wait_for_mcconf_blob(total_timeout_ms=15000)
+if after_blob is None:
+    abort("Could not read MCCONF after COMM_SET_MCCONF")
+
+after_crc = crc16(after_blob)
+print("CRC after:   %04X" % after_crc)
+
+if after_blob != bytes(patched_blob):
+    changed = first_different_offsets(bytes(patched_blob), after_blob)
+    if changed:
+        print("First mismatched byte offsets: %s" % ", ".join(str(i) for i in changed))
+
+    after_current = detect_current_layout(after_blob)
+    after_voltage = detect_voltage_layout(after_blob)
+    if after_current is not None and after_voltage is not None:
+        print("\nRead-back values after write:")
+        print("  Motor max current:   %.2f A" % after_current["values"]["motor_max_current_a"])
+        print("  Motor min current:   %.2f A" % after_current["values"]["motor_min_current_a"])
+        print("  Battery max current: %.2f A" % after_current["values"]["battery_max_current_a"])
+        print("  Battery min current: %.2f A" % after_current["values"]["battery_min_current_a"])
+        print("  Min input voltage:   %.2f V" % after_voltage["values"]["min_input_voltage_v"])
+        print("  Max input voltage:   %.2f V" % after_voltage["values"]["max_input_voltage_v"])
+        print("  Battery cut start:   %.2f V" % after_voltage["values"]["battery_cut_start_v"])
+        print("  Battery cut end:     %.2f V" % after_voltage["values"]["battery_cut_end_v"])
+        print("  Max watts:           %.2f W" % after_voltage["values"]["watt_max"])
+        print("  Min watts:           %.2f W" % after_voltage["values"]["watt_min"])
+
+    abort("Exact MCCONF read-back did not match the requested target blob")
+
+print("\nPASS: Persistent MCCONF matches the requested target blob exactly.")
+print("Saved fields now include current, voltage, battery cut, and watt limits.")

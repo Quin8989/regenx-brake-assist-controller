@@ -159,12 +159,12 @@ class TestFaultTransitions:
             assert s.system_state == SystemState.FAULT
             assert s.inhibit_motor_commands is True
 
-    def test_fault_to_off_when_cleared(self):
+    def test_fault_to_coast_when_cleared(self):
         s, f, sm = _make()
         s.system_state = SystemState.FAULT
         # No faults active
         sm.update()
-        assert s.system_state == SystemState.OFF
+        assert s.system_state == SystemState.COAST
         assert s.inhibit_motor_commands is True
 
     def test_fault_stays_while_fault_active(self):

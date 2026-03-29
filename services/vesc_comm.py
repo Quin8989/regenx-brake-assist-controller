@@ -93,6 +93,7 @@ class VESCComm:
         (
             s.vesc_temp_fet_c, s.vesc_temp_motor_c,
             s.vesc_motor_current_a, s.vesc_input_current_a,
+            s.vesc_id_current_a, s.vesc_iq_current_a,
             s.vesc_duty_cycle, s.vesc_rpm, s.vesc_bus_voltage_v,
             s.vesc_ah, s.vesc_ah_charged,
             s.vesc_wh, s.vesc_wh_charged,

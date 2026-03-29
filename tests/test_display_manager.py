@@ -57,17 +57,23 @@ class TestPageSelection:
         s.system_state = SystemState.ASSIST
         s.cap_voltage_v = 25.0
         s.cap_energy_percent = 42.0
-        s.vesc_motor_current_a = 12.3
+        s.vesc_iq_current_a = 12.3
+        s.wheel_speed_valid = True
+        s.wheel_speed_rpm = 100.0
         dm.update()
         assert "ASSIST" in lcd.lines[0]
+        assert "km/h" in lcd.lines[1]
 
-    def test_run_page_shows_current(self):
+    def test_run_page_shows_signed_vesc_iq_in_regen(self):
         s, f, lcd, dm = _make()
         s.system_state = SystemState.REGEN
         s.cap_voltage_v = 30.0
-        s.vesc_motor_current_a = 8.7
+        s.vesc_iq_current_a = -8.7
+        s.wheel_speed_valid = True
+        s.wheel_speed_rpm = 80.0
         dm.update()
-        assert "8.7" in lcd.lines[1]
+        assert "-8.7A" in lcd.lines[1]
+        assert "km/h" in lcd.lines[1]
 
 
 class TestNoneLCD:
@@ -125,9 +131,9 @@ class TestRunPageContent:
         s, f, lcd, dm = _make()
         s.system_state = SystemState.ASSIST
         s.cap_voltage_v = 25.0
-        s.vesc_motor_current_a = 15.2
+        s.vesc_iq_current_a = 15.2
         dm.update()
-        assert "15.2" in lcd.lines[1]
+        assert "+15.2" in lcd.lines[1]
         assert "A" in lcd.lines[1]
 
     def test_regen_shows_state_name(self):
@@ -136,6 +142,14 @@ class TestRunPageContent:
         s.cap_voltage_v = 30.0
         dm.update()
         assert "REGEN" in lcd.lines[0]
+
+    def test_run_page_shows_unknown_speed_when_wheel_invalid(self):
+        s, f, lcd, dm = _make()
+        s.system_state = SystemState.COAST
+        s.cap_voltage_v = 22.0
+        s.wheel_speed_valid = False
+        dm.update()
+        assert "--.-km/h" in lcd.lines[1]
 
 
 # ---- TC-16: Display page correctness — FAULT ----

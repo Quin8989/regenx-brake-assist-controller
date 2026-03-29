@@ -19,6 +19,7 @@ COMM_SET_CURRENT = 6          # Set motor current (amps * 1000)
 COMM_SET_BRAKE_CURRENT = 7    # Set brake/regen current (amps * 1000)
 
 # Telemetry struct: everything after the opcode byte
+# Includes dq current terms reported by VESC (avg_id, avg_iq).
 _TELEMETRY_FMT = ">hhiiiihihiiiiiiB"
 _TELEMETRY_SIZE = 53  # bytes after opcode
 
@@ -100,6 +101,8 @@ def _parse_telemetry(payload):
         temp_motor / 10.0,
         motor_current_raw / 100.0,
         input_current_raw / 100.0,
+        _avg_id / 100.0,
+        _avg_iq / 100.0,
         duty_raw / 1000.0,
         rpm,
         v_in_raw / 10.0,

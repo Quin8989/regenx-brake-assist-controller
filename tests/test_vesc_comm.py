@@ -84,6 +84,13 @@ class TestServiceRxSingleFrame:
         assert abs(state.vesc_motor_current_a - 25.0) < 0.01
         assert abs(state.vesc_input_current_a - 12.0) < 0.01
 
+    def test_populates_dq_currents(self):
+        uart, state, vc = _make()
+        uart._rx_buf.extend(_build_telemetry_frame(avg_id=220, avg_iq=-330))
+        vc.service_rx()
+        assert abs(state.vesc_id_current_a - 2.2) < 0.01
+        assert abs(state.vesc_iq_current_a + 3.3) < 0.01
+
     def test_populates_duty_cycle(self):
         uart, state, vc = _make()
         uart._rx_buf.extend(_build_telemetry_frame(duty=750))

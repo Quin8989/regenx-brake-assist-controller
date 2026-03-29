@@ -61,11 +61,21 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        # Locked motor RPM = 100 × 5 = 500; motor at 480 → 4% slip
-        s.vesc_mech_rpm = 480.0
+        # Locked motor RPM = 100 × 3 = 300; motor at 288 → 4% slip
+        s.vesc_mech_rpm = 288.0
         im.update()
         assert s.requested_mode == CommandMode.REGEN
         assert s.requested_level == 1.0
+
+    def test_regen_when_carrier_locked_negative_motor_rpm(self):
+        """Negative motor RPM sign should still count as coupled lock."""
+        wheel = _FakeWheel(rpm=100.0, valid=True)
+        s, t, im = _make(wheel=wheel)
+        t.fraction = 0.0
+        t.is_valid = True
+        s.vesc_mech_rpm = -288.0
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
 
     def test_assist_overrides_brake(self):
         """Throttle active + carrier locked → ASSIST (throttle always wins)."""
@@ -73,7 +83,7 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.8
         t.is_valid = True
-        s.vesc_mech_rpm = 480.0
+        s.vesc_mech_rpm = 288.0
         im.update()
         assert s.requested_mode == CommandMode.ASSIST
 
@@ -83,7 +93,7 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 48.0  # low slip, but wheel below 20 RPM
+        s.vesc_mech_rpm = 29.0  # low slip, but wheel below min RPM gate
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -93,7 +103,7 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 480.0
+        s.vesc_mech_rpm = 288.0
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -110,7 +120,7 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 300.0  # 300/500 = 60% → 40% slip
+        s.vesc_mech_rpm = 180.0  # 180/300 = 60% → 40% slip
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -120,7 +130,7 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 350.0  # 350/500 = 70% → exactly 30% slip
+        s.vesc_mech_rpm = 210.0  # 210/300 = 70% → exactly 30% slip
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -130,7 +140,7 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 355.0  # 355/500 = 71% → 29% slip
+        s.vesc_mech_rpm = 213.0  # 213/300 = 71% → 29% slip
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
@@ -146,12 +156,12 @@ class TestHysteresis:
         t.is_valid = True
 
         # Enter REGEN: 20% slip
-        s.vesc_mech_rpm = 400.0  # 400/500 = 80% lock → 20% slip
+        s.vesc_mech_rpm = 240.0  # 240/300 = 80% lock → 20% slip
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
         # Slip increases to 40% — between engage (30%) and disengage (50%)
-        s.vesc_mech_rpm = 300.0  # 300/500 = 60% lock → 40% slip
+        s.vesc_mech_rpm = 180.0  # 180/300 = 60% lock → 40% slip
         im.update()
         assert s.requested_mode == CommandMode.REGEN  # hysteresis holds
 
@@ -163,12 +173,12 @@ class TestHysteresis:
         t.is_valid = True
 
         # Enter REGEN
-        s.vesc_mech_rpm = 400.0  # 20% slip
+        s.vesc_mech_rpm = 240.0  # 20% slip
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
         # Slip exceeds 50% → exit
-        s.vesc_mech_rpm = 200.0  # 200/500 = 40% lock → 60% slip
+        s.vesc_mech_rpm = 120.0  # 120/300 = 40% lock → 60% slip
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -180,7 +190,7 @@ class TestHysteresis:
         t.is_valid = True
 
         # Enter REGEN
-        s.vesc_mech_rpm = 400.0
+        s.vesc_mech_rpm = 240.0
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
@@ -192,7 +202,7 @@ class TestHysteresis:
         # Release throttle — motor still at 40% slip (between thresholds)
         # Without hysteresis flag, should NOT re-enter REGEN
         t.fraction = 0.0
-        s.vesc_mech_rpm = 300.0  # 40% slip — above 30% engage threshold
+        s.vesc_mech_rpm = 180.0  # 40% slip — above 30% engage threshold
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -204,12 +214,12 @@ class TestHysteresis:
         t.is_valid = True
 
         # Enter REGEN
-        s.vesc_mech_rpm = 400.0  # 20% slip
+        s.vesc_mech_rpm = 240.0  # 20% slip
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
         # Slip at exactly 50%
-        s.vesc_mech_rpm = 250.0  # 250/500 = 50% lock → 50% slip → not < 50%
+        s.vesc_mech_rpm = 150.0  # 150/300 = 50% lock → 50% slip → not < 50%
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -221,12 +231,12 @@ class TestHysteresis:
         t.is_valid = True
 
         # Enter REGEN
-        s.vesc_mech_rpm = 400.0  # 20% slip
+        s.vesc_mech_rpm = 240.0  # 20% slip
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
         # Slip just below disengage: 49%
-        s.vesc_mech_rpm = 255.0  # 255/500 = 51% lock → 49% slip → stays
+        s.vesc_mech_rpm = 153.0  # 153/300 = 51% lock → 49% slip → stays
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 

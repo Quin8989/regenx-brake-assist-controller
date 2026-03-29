@@ -106,6 +106,8 @@ class SharedState:
         self.vesc_bus_voltage_v = 0.0
         self.vesc_motor_current_a = 0.0
         self.vesc_input_current_a = 0.0
+        self.vesc_id_current_a = 0.0
+        self.vesc_iq_current_a = 0.0
         self.vesc_rpm = 0
         self.vesc_mech_rpm = 0.0
         self.vesc_duty_cycle = 0.0
@@ -124,6 +126,7 @@ class SharedState:
         self.wheel_speed_valid = False
         self.gear_carrier_speed_rpm = 0.0
         self.regen_speed_error_rpm = 0.0
+        self.regen_pi_command_a = 0.0
 
         # --- Command requests ---
         self.assist_command_request = 0.0

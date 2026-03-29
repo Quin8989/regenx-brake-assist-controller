@@ -42,6 +42,9 @@ WHEEL_HALL_USE_PULLUP = True
 WHEEL_MAGNET_COUNT = 3
 WHEEL_SPEED_TIMEOUT_MS = 1200
 WHEEL_HALL_MIN_EDGE_US = 1500
+# Approximate loaded wheel circumference used for LCD speed conversion and
+# km/h-based regen thresholding.
+WHEEL_CIRCUMFERENCE_M = 2.10
 
 # --- Precharge control ---
 PRECHARGE_ENABLE_PIN = 15     # GP15, Pico pin 20 — active-high
@@ -140,14 +143,18 @@ PRECHARGE_TELEMETRY_GRACE_MS = 12 * 60_000  # 12 min — VESC needs ~7.4 min to 
 #
 # Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
 
-REGEN_MIN_WHEEL_RPM = 20.0             # Below this (~walking pace), no regen
-REGEN_LOCKED_RATIO = 5.0               # motor_rpm / wheel_rpm when carrier fully locked
+# Minimum speed to allow regen request detection.
+REGEN_MIN_WHEEL_KPH = 5.0
+REGEN_MIN_WHEEL_RPM = (REGEN_MIN_WHEEL_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
+# Calibrated from auto-spin bench data (scripts/bench/test_regen_ratio_motor_spin.py).
+REGEN_LOCKED_RATIO = 3.0               # motor_rpm / wheel_rpm when carrier fully locked
 REGEN_ENGAGE_SLIP_FRAC = 0.30          # Enter REGEN when carrier slip below this
 REGEN_DISENGAGE_SLIP_FRAC = 0.50       # Exit REGEN when carrier slip above this
-REGEN_TARGET_SLIP_FRAC = 0.02          # Carrier slip target (2% of wheel speed)
-REGEN_PI_KP_A_PER_RPM = 3.5             # PI proportional gain
-REGEN_PI_KI_A_PER_RPM_S = 2.5           # PI integral gain
+REGEN_TARGET_SLIP_FRAC = 0.10          # Carrier slip target (10% of wheel speed)
+REGEN_PI_KP_A_PER_RPM = 10.0            # PI proportional gain
+REGEN_PI_KI_A_PER_RPM_S = 8.0           # PI integral gain
 REGEN_PI_INTEGRAL_LIMIT_A = 25.0       # Anti-windup clamp (amps)
+REGEN_SLEW_A_PER_S = 120.0             # Faster command ramp for stronger brake feel
 
 # --- Bench debug logger (RAM ring buffer) ---
 BENCH_LOG_PERIOD_MS = 500             # Capture rate (~2 Hz), same as DEBUG_LOG_PERIOD_MS

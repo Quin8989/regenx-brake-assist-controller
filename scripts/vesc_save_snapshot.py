@@ -12,99 +12,22 @@
 # Run: mpremote run scripts/vesc_save_snapshot.py
 
 import struct
-from time import sleep_ms, ticks_ms, ticks_diff
-from machine import UART, Pin
+
+from scripts.lib.vesc_terminal import run_terminal_cmd
+from scripts.lib.vesc_uart_template import VescUartTemplate, crc16
 
 COMM_FW_VERSION = 0
 COMM_GET_MCCONF = 14
 APPCONF_CANDIDATES = [17, 16, 18]
-
-uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5), rxbuf=1024)
+vesc = VescUartTemplate(rxbuf=1024)
 
 MCCONF_FILE = "vesc_snapshot_mcconf.bin"
 APPCONF_FILE = "vesc_snapshot_appconf.bin"
 META_FILE = "vesc_snapshot_meta.txt"
 
 
-def crc16(data):
-    crc = 0
-    for byte in data:
-        crc ^= byte << 8
-        for _ in range(8):
-            if crc & 0x8000:
-                crc = (crc << 1) ^ 0x1021
-            else:
-                crc <<= 1
-            crc &= 0xFFFF
-    return crc
-
-
-def wrap_frame(payload):
-    length = len(payload)
-    if length <= 255:
-        frame = bytes([0x02, length]) + payload
-    else:
-        frame = bytes([0x03, length >> 8, length & 0xFF]) + payload
-    frame += struct.pack(">H", crc16(payload))
-    frame += bytes([0x03])
-    return frame
-
-
-def try_extract(buf):
-    if len(buf) < 6:
-        return None
-
-    idx = 0
-    while idx < len(buf):
-        if buf[idx] == 0x02 and idx + 4 < len(buf):
-            length = buf[idx + 1]
-            frame_size = length + 5
-            if idx + frame_size <= len(buf):
-                payload = bytes(buf[idx + 2:idx + 2 + length])
-                crc_recv = (buf[idx + 2 + length] << 8) | buf[idx + 3 + length]
-                if crc16(payload) == crc_recv:
-                    return payload
-            idx += 1
-            continue
-
-        if buf[idx] == 0x03 and idx + 5 < len(buf):
-            length = (buf[idx + 1] << 8) | buf[idx + 2]
-            if length > 0 and length < 10000:
-                frame_size = length + 6
-                if idx + frame_size <= len(buf):
-                    payload = bytes(buf[idx + 3:idx + 3 + length])
-                    crc_recv = (buf[idx + 3 + length] << 8) | buf[idx + 4 + length]
-                    if crc16(payload) == crc_recv:
-                        return payload
-            idx += 1
-            continue
-
-        idx += 1
-    return None
-
-
-def send_and_receive(cmd_payload, timeout_ms=1500):
-    uart.read()
-    sleep_ms(20)
-    uart.write(wrap_frame(cmd_payload))
-    sleep_ms(60)
-
-    buf = bytearray()
-    start = ticks_ms()
-    while ticks_diff(ticks_ms(), start) < timeout_ms:
-        data = uart.read()
-        if data:
-            buf.extend(data)
-            payload = try_extract(buf)
-            if payload is not None:
-                return payload
-        sleep_ms(5)
-
-    return try_extract(buf)
-
-
 def get_fw_info():
-    payload = send_and_receive(bytes([COMM_FW_VERSION]), timeout_ms=1000)
+    payload = vesc.request(COMM_FW_VERSION, timeout_ms=1000)
     if not payload or payload[0] != COMM_FW_VERSION or len(payload) < 3:
         return None, None, ""
 
@@ -124,14 +47,7 @@ def get_fw_info():
 
 
 def get_conf_blob(cmd_id):
-    payload = send_and_receive(bytes([cmd_id]), timeout_ms=2500)
-    if not payload:
-        return None
-    if payload[0] != cmd_id:
-        return None
-    if len(payload) < 30:
-        return None
-    return payload[1:]
+    return vesc.request_blob(cmd_id, min_len=30, timeout_ms=2500)
 
 
 print()
@@ -147,6 +63,24 @@ if fw_major is None:
 
 print("Firmware: %d.%d" % (fw_major, fw_minor))
 print("Hardware: %s" % hw_name)
+
+fault_text = ""
+for line in run_terminal_cmd(vesc, "fault", timeout_ms=1200):
+    stripped = line.strip()
+    if stripped and not stripped.startswith("->"):
+        fault_text = stripped
+        break
+
+offset_line = ""
+for line in run_terminal_cmd(vesc, "hw_status", timeout_ms=2200):
+    if "FOC Current Offsets:" in line:
+        offset_line = line.strip()
+        break
+
+if fault_text:
+    print("Active fault: %s" % fault_text)
+if offset_line:
+    print(offset_line)
 
 mcconf = get_conf_blob(COMM_GET_MCCONF)
 if mcconf is None:
@@ -184,6 +118,8 @@ with open(META_FILE, "w") as handle:
     handle.write("fw_major=%d\n" % fw_major)
     handle.write("fw_minor=%d\n" % fw_minor)
     handle.write("hw_name=%s\n" % hw_name)
+    handle.write("active_fault=%s\n" % fault_text)
+    handle.write("foc_current_offsets=%s\n" % offset_line)
     handle.write("mcconf_file=%s\n" % MCCONF_FILE)
     handle.write("mcconf_len=%d\n" % len(mcconf))
     handle.write("mcconf_crc16=%04X\n" % mc_crc)

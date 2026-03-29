@@ -23,6 +23,7 @@ class WheelSpeedHall:
     def __init__(self):
         self._enabled = False
         self._last_edge_us = None
+        self._last_edge_ms = None
         self._period_us = None
 
         if WHEEL_HALL_PIN is None or Pin is None:
@@ -40,20 +41,23 @@ class WheelSpeedHall:
 
     def _on_edge(self, _):
         now = ticks_us()
+        now_ms = ticks_ms()
         if self._last_edge_us is None:
             self._last_edge_us = now
+            self._last_edge_ms = now_ms
             return
         dt = ticks_diff(now, self._last_edge_us)
         self._last_edge_us = now
+        self._last_edge_ms = now_ms
         if dt >= WHEEL_HALL_MIN_EDGE_US:
             self._period_us = dt
 
     def update(self):
-        if not self._enabled or self._period_us is None or self._last_edge_us is None:
+        if not self._enabled or self._period_us is None or self._last_edge_ms is None:
             return 0.0, False
 
         # If no pulse arrives for too long, wheel is considered stopped/stale.
-        age_ms = ticks_diff(ticks_ms(), self._last_edge_us // 1000)
+        age_ms = ticks_diff(ticks_ms(), self._last_edge_ms)
         if age_ms > WHEEL_SPEED_TIMEOUT_MS:
             return 0.0, False
 

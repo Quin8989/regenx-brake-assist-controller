@@ -425,15 +425,15 @@ scripts/
    test_throttle_characterize.py # Throttle ADC characterization
    test_vesc_fw_version.py      # Quick VESC UART connectivity check
    test_vesc_telemetry.py       # VESC telemetry snapshot
-   vesc_flash_config.py         # Single-step ReGenX VESC config flash script
+   vesc_apply_safety_temp.py    # Apply supported Pico-side safety envelope persistence
+   vesc_characterize_motor.py   # Terminal-assisted dc-cal + FOC characterization
+   vesc_save_snapshot.py        # Save final live VESC snapshot from Pico side
+   vesc_flash_config.py         # Guard script: persistent UART MCCONF flashing disabled
    bench/                       # Low-level or infrequent diagnostics
       test_uart_loopback.py
       test_uart_pins_gpio.py
       test_vesc_read_config.py
-      vesc_full_snapshot_to_pico.py
-      vesc_store_config.py
       vesc_backup_save_to_pico.py
-      vesc_backup_restore_from_pico.py
    legacy/                      # Older one-off demos kept for reference
       test_lcd.py
       test_lcd_pages.py
@@ -754,84 +754,82 @@ mpremote mount . run scripts/vesc_characterize_motor.py
 
 This script:
 1. Confirms UART communication by reading the VESC firmware version
-2. Reads the VESC firmware default MCCONF with `COMM_GET_MCCONF_DEFAULT`
-3. Applies a conservative startup baseline from `config/vesc_config.py`
-4. Verifies the stored baseline
+2. Reads the live MCCONF and derives a conservative temporary runtime envelope
+3. Applies that envelope with `COMM_SET_MCCONF_TEMP`
+4. Verifies the active temporary limits with `COMM_GET_MCCONF_TEMP`
 5. Runs the VESC built-in FOC commissioning command over UART
 6. Confirms the VESC still responds after detection
 
 It does not write any characterization data back to the Pico or into the repo.
-The shared module provides both the startup baseline and the commissioning
-input values.
+The shared module provides both the temporary runtime envelope and the
+commissioning input values.
 
 Use it for:
 - controllers with unknown prior settings
-- new controllers you want to normalize before detection
+- new controllers you want to constrain safely before detection
 - motor resistance / inductance / flux characterization
 - hall or encoder detection
 - initial motor setup after rewiring or controller replacement
 
 Run it with the driven wheel off the ground and the motor unloaded.
 
-If characterization fails, the conservative baseline remains applied.
+If characterization fails, the temporary runtime envelope remains active until
+the VESC is power-cycled or another tool changes it.
 
-#### 12.5.4 Flash ReGenX Configuration
+#### 12.5.4 Store Safety Envelope From Pico
+
+```bash
+mpremote mount . run scripts/vesc_apply_safety_temp.py
+```
+
+This script uses only supported firmware packet paths from the Pico side:
+1. Applies the current/duty/ERPM/watt safety envelope with `COMM_SET_MCCONF_TEMP`
+2. Sets the battery cutoff start/end with `COMM_SET_BATTERY_CUT`
+3. Requests persistent storage for those fields on the VESC
+4. Verifies read-back with `COMM_GET_MCCONF_TEMP` and `COMM_GET_BATTERY_CUT`
+5. Audits the live MCCONF for unexpected serializer-level changes
+
+On tested FW 6.6 this is the safe direct-from-Pico persistence path for:
+- motor current envelope scaling
+- battery current limits
+- ERPM limits
+- duty limits
+- watt limits
+- battery cutoff start/end
+
+It does not write the full serialized MCCONF blob.
+
+Known limitation:
+- `l_min_vin` and `l_max_vin` do not have a dedicated safe UART packet in this workflow
+- if those two fields are already correct on the VESC, the rest of the safety envelope can be stored entirely from the Pico
+- if those two fields need to change, use VESC Tool once, then continue using the Pico workflow for the supported fields
+
+#### 12.5.5 Flash ReGenX Configuration
 
 ```bash
 mpremote mount . run scripts/vesc_flash_config.py
 ```
 
-This script:
-1. Reads the current MCCONF from the VESC
-2. Shows a diff of current vs. target values (marked with `***`)
-3. Patches the binary blob at known field offsets
-4. Sends the patched config with `COMM_SET_MCCONF` (command 13)
-5. Re-reads the config immediately to verify the changes took effect
-6. Re-reads the config again after a short delay to verify persistence
+Persistent UART flashing is intentionally disabled. The previous version of
+this script patched guessed byte offsets inside the serialized MCCONF blob and
+sent them with `COMM_SET_MCCONF`, which is not safe for FW 5.2.
 
-This script flashes the repo-defined VESC target values and then re-reads the
-live VESC config twice to verify the stored result.
+Use `scripts/vesc_apply_safety_temp.py` for supported Pico-side persistence.
+Use VESC Tool only when you need to change unsupported serialized-MCCONF
+fields such as `l_min_vin` or `l_max_vin`.
 
-It reads the ReGenX overlay patch list from `config/vesc_config.py` and always
-uses the live MCCONF read from the connected VESC as the base config before
-applying the overlay.
+To change the safe Pico-side characterization behavior, edit
+`VESC_TEMP_LIMITS` or `VESC_CHARACTERIZATION` in `config/vesc_config.py` and
+re-run the characterization script.
 
-It does **not** run motor detection or hall-sensor commissioning. Run
-`scripts/vesc_characterize_motor.py` first when you need to rebuild the
-motor-specific FOC parameters.
-
-On current VESC firmware, `COMM_SET_MCCONF` stores the motor configuration as
-part of the set operation, so this script does not send a separate store
-command. The script exits with failure if either read-back does not match the
-defined target values.
-
-The target values are defined in `config/vesc_config.py`:
-
-| Field | Target | Offset | Type |
-|---|---|---|---|
-| Motor type | FOC (2) | 6 | u8 |
-| Motor max current | 40.0 A | 8 | f32 |
-| Motor min current | -40.0 A | 12 | f32 |
-| Battery max current | 40.0 A | 16 | f32 |
-| Battery min current | -40.0 A | 20 | f32 |
-| Min input voltage | 15.0 V | 48 | f32 |
-| Max input voltage | 42.0 V | 52 | f32 |
-| Battery cutoff start | 15.0 V | 56 | f32 |
-| Battery cutoff end | 14.0 V | 60 | f32 |
-| Max watts | 500 W | 93 | f32 |
-| Min watts (regen) | -500 W | 97 | f32 |
-
-To change target values, edit `VESC_BASELINE_PATCHES`,
-`VESC_CHARACTERIZATION`, or `VESC_OVERLAY_PATCHES` in `config/vesc_config.py`
-and re-run the relevant script.
-
-Recommended order without VESC Tool:
+Recommended order with the current safe workflow:
 
 1. `mpremote mount . run scripts/vesc_characterize_motor.py`
-2. `mpremote mount . run scripts/vesc_flash_config.py`
-3. `mpremote run scripts/vesc_save_snapshot.py`
+2. `mpremote mount . run scripts/vesc_apply_safety_temp.py`
+3. `mpremote run scripts/bench/test_vesc_read_config.py`
+4. `mpremote run scripts/vesc_save_snapshot.py`
 
-#### 12.5.5 Save Final Snapshot
+#### 12.5.6 Save Final Snapshot
 
 ```bash
 mpremote run scripts/vesc_save_snapshot.py
@@ -847,7 +845,7 @@ It saves these files on the Pico:
 At the end it prints the exact `mpremote fs cp` commands needed to copy those
 files into the repo `config/` directory.
 
-#### 12.5.6 Get And Set MCCONF
+#### 12.5.7 Get And Set MCCONF
 
 Use these repo scripts when you want to read or write the full VESC motor
 configuration (`MCCONF`) over UART without using VESC Tool.
@@ -875,17 +873,22 @@ mpremote fs cp :vesc_snapshot_appconf.bin config/vesc_snapshot_appconf.bin
 
 Set MCCONF on the VESC from this repo workflow:
 
-1. Prepare a sane firmware-default-based baseline and run motor detection:
+1. Run safe temporary-limit characterization and motor detection:
 
 ```bash
 mpremote mount . run scripts/vesc_characterize_motor.py
 ```
 
-2. Apply the ReGenX project overlay to the live VESC config:
+2. Store the final persistent configuration with VESC Tool over USB.
+
+   Preferred path on FW 6.6 for supported safety fields:
 
 ```bash
-mpremote mount . run scripts/vesc_flash_config.py
+mpremote mount . run scripts/vesc_apply_safety_temp.py
 ```
+
+   Use VESC Tool only when unsupported serialized fields such as
+   `l_min_vin` / `l_max_vin` need to change.
 
 3. Verify the final result and save the full live MCCONF back into the repo:
 
@@ -896,27 +899,30 @@ mpremote run scripts/vesc_save_snapshot.py
 How the repo uses VESC MCCONF commands:
 
 - `scripts/vesc_characterize_motor.py`
-   - reads firmware defaults with `COMM_GET_MCCONF_DEFAULT`
-   - writes the baseline with `COMM_SET_MCCONF`
-   - re-reads live config with `COMM_GET_MCCONF`
-- `scripts/vesc_flash_config.py`
    - reads live config with `COMM_GET_MCCONF`
-   - patches selected fields in the binary blob
-   - writes with `COMM_SET_MCCONF`
-   - verifies by reading live config again with `COMM_GET_MCCONF`
+   - applies temporary limits with `COMM_SET_MCCONF_TEMP`
+   - verifies temporary limits with `COMM_GET_MCCONF_TEMP`
+   - re-reads live config with `COMM_GET_MCCONF`
+- `scripts/vesc_apply_safety_temp.py`
+   - applies supported persistent safety fields with `COMM_SET_MCCONF_TEMP`
+   - applies battery cutoff start/end with `COMM_SET_BATTERY_CUT`
+   - verifies with `COMM_GET_MCCONF_TEMP` and `COMM_GET_BATTERY_CUT`
+- `scripts/vesc_flash_config.py`
+   - deliberately blocks the old unsafe UART flash path
 - `scripts/vesc_save_snapshot.py`
    - reads live config with `COMM_GET_MCCONF`
    - saves the raw MCCONF blob for the repo
 
 Important:
 
-- This repo does not rely on a separate `COMM_STORE_MCCONF` command.
-- On the tested firmware path, `COMM_SET_MCCONF` is treated as the write/store
-   operation and is always followed by read-back verification.
+- This repo does not use raw `COMM_SET_MCCONF` writes as part of the supported workflow.
+- On the tested firmware path, the direct Pico-side persistent path is limited
+   to dedicated supported packets such as `COMM_SET_MCCONF_TEMP` and
+   `COMM_SET_BATTERY_CUT`.
 - The saved `.bin` files are raw binary config blobs, not human-edited config
    sources.
 
-#### 12.5.7 Protocol Details
+#### 12.5.8 Protocol Details
 
 The VESC UART protocol uses framed packets with CRC-16:
 
@@ -935,14 +941,19 @@ Relevant VESC commands:
 | `COMM_SET_MCCONF` | 13 | Pico → VESC | Apply motor config and store it |
 | `COMM_GET_MCCONF` | 14 | Pico → VESC | Read motor config |
 | `COMM_GET_MCCONF_DEFAULT` | 15 | Pico → VESC | Read default motor config |
+| `COMM_SET_MCCONF_TEMP` | 48 | Pico → VESC | Apply temporary runtime current/duty/watt limits |
+| `COMM_SET_BATTERY_CUT` | 86 | Pico → VESC | Set battery cutoff start/end |
+| `COMM_GET_MCCONF_TEMP` | 91 | Pico → VESC | Read active temporary runtime limits |
+| `COMM_GET_BATTERY_CUT` | 115 | Pico → VESC | Read battery cutoff start/end |
 
-Config data is big-endian, with `float32` (IEEE 754), `int32`, and `uint8`
-fields.  Field offsets depend on firmware version (currently tested with FW 5.2).
+Serialized MCCONF is firmware-defined and must be handled by the VESC
+serializer rather than guessed byte offsets.
 
-#### 12.5.8 Bench-Only Backup Utilities
+#### 12.5.9 Bench-Only Backup Utilities
 
-If you always use the same motor+VESC combination, store a full MCCONF backup
-file on the Pico so you can quickly restore after a VESC reflash.
+If you always use the same motor+VESC combination, you can store a full MCCONF
+backup file on the Pico for forensic comparison after future reflashes or
+retuning.
 
 Save backup to Pico filesystem:
 
@@ -957,24 +968,15 @@ This creates `/vesc_mcconf_backup.bin` on the Pico and stores:
 - CRC16 of MCCONF payload
 - Full MCCONF binary payload
 
-Restore from Pico backup to VESC:
-
-```bash
-mpremote run scripts/bench/vesc_backup_restore_from_pico.py
-```
-
-The restore script validates magic/version/length/CRC before writing, then:
-1. Sends `COMM_SET_MCCONF`
-2. Reads back MCCONF and checks it matches the backup exactly
-
 Quick check that backup file exists on Pico:
 
 ```bash
 mpremote fs ls
 ```
 
-> Keep this backup updated whenever you intentionally retune VESC settings.
-> Re-run `scripts/bench/vesc_backup_save_to_pico.py` after tuning changes are finalized.
+> This repository no longer ships a Pico-side raw MCCONF restore path.
+> Restoring or writing persistent VESC config should be done with VESC Tool,
+> then verified from the Pico side with `scripts/bench/test_vesc_read_config.py`.
 
 ### 12.6 Full Deployment
 

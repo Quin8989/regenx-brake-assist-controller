@@ -77,7 +77,9 @@ class InputManager:
             return False
 
         locked_motor_rpm = s.wheel_speed_rpm * REGEN_LOCKED_RATIO
-        lock_frac = min(max(0.0, s.vesc_mech_rpm) / locked_motor_rpm, 1.0)
+        # Use absolute motor speed so lock detection works regardless of
+        # encoder/observer sign convention.
+        lock_frac = min(abs(s.vesc_mech_rpm) / locked_motor_rpm, 1.0)
         carrier_slip = 1.0 - lock_frac
 
         if self._in_regen:

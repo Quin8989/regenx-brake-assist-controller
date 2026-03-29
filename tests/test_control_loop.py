@@ -117,23 +117,40 @@ class TestRegen:
         cl.update()
         assert s.regen_command_request == 0.0
 
-    def test_regen_produces_nonzero_with_slip(self):
+    def test_regen_produces_nonzero_when_carrier_too_locked(self):
         s, cl = _make()
-        # Carrier is free (motor_rpm << locked_motor_rpm) → lots of slip
+        # Carrier near full lock (slip below target) should command regen to
+        # open the slip back toward the target.
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0)
+        for _ in range(50):
+            cl.update()
+        assert s.regen_command_request > 0.0
+
+    def test_regen_zero_when_carrier_already_slipping_freely(self):
+        s, cl = _make()
+        # Carrier already has far more slip than target, so regen should back off.
         _ready_regen(s, wheel_rpm=100.0, motor_rpm=50.0, cap_v=25.0)
+        for _ in range(50):
+            cl.update()
+        assert s.regen_command_request == 0.0
+
+    def test_regen_handles_negative_motor_rpm_sign(self):
+        s, cl = _make()
+        # Telemetry sign can be negative depending on observer orientation.
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=-500.0, cap_v=25.0)
         for _ in range(50):
             cl.update()
         assert s.regen_command_request > 0.0
 
     def test_regen_rider_authority_scales(self):
         s1, cl1 = _make()
-        _ready_regen(s1, wheel_rpm=100.0, motor_rpm=50.0, cap_v=25.0, level=1.0)
+        _ready_regen(s1, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0, level=1.0)
         for _ in range(300):
             cl1.update()
         full = s1.regen_command_request
 
         s2, cl2 = _make()
-        _ready_regen(s2, wheel_rpm=100.0, motor_rpm=50.0, cap_v=25.0, level=0.5)
+        _ready_regen(s2, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0, level=0.5)
         for _ in range(300):
             cl2.update()
         half = s2.regen_command_request
@@ -151,10 +168,10 @@ class TestRegen:
 
     def test_carrier_speed_populated(self):
         s, cl = _make()
-        _ready_regen(s, wheel_rpm=100.0, motor_rpm=400.0, cap_v=25.0)
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=240.0, cap_v=25.0)
         cl.update()
-        # With motor_rpm=400 and locked_motor_rpm = 100*5 = 500,
-        # lock_fraction = 400/500 = 0.8, carrier_rpm = 100*(1-0.8) = 20
+        # With motor_rpm=240 and locked_motor_rpm = 100*3 = 300,
+        # lock_fraction = 240/300 = 0.8, carrier_rpm = 100*(1-0.8) = 20
         assert abs(s.gear_carrier_speed_rpm - 20.0) < 0.1
 
     def test_assist_stays_zero_during_regen(self):
@@ -186,7 +203,7 @@ class TestNeutralStates:
     def test_integral_resets_on_mode_switch(self):
         s, cl = _make()
         # Build up integral in regen
-        _ready_regen(s, wheel_rpm=100.0, motor_rpm=50.0, cap_v=25.0)
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0)
         for _ in range(200):
             cl.update()
         regen_val = s.regen_command_request
@@ -197,7 +214,7 @@ class TestNeutralStates:
         cl.update()
 
         # Re-enter REGEN — should start fresh (low value, not the previous accumulated)
-        _ready_regen(s, wheel_rpm=100.0, motor_rpm=50.0, cap_v=25.0)
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0)
         cl.update()
         assert s.regen_command_request < regen_val
 
@@ -208,14 +225,15 @@ class TestPIAntiWindup:
     def test_integral_recovers_after_saturation(self):
         """After integral saturates at positive limit, reversing error should bring it down."""
         s, cl = _make()
-        # Lots of positive error → integral winds up
-        _ready_regen(s, wheel_rpm=100.0, motor_rpm=10.0, cap_v=20.0, level=1.0)
+        # Near-full lock gives positive error with the corrected sign, so the
+        # integral should wind up.
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=20.0, level=1.0)
         for _ in range(5000):
             cl.update()
         high_cmd = s.regen_command_request
 
-        # Now reduce error (motor closer to locked speed → less slip)
-        s.vesc_mech_rpm = 95.0 * 5.0  # motor near locked → low carrier rpm
+        # Now move to a freer carrier with excess slip; command should fall.
+        s.vesc_mech_rpm = 50.0
         for _ in range(5000):
             cl.update()
         low_cmd = s.regen_command_request

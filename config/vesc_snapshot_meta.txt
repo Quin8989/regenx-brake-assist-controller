@@ -1,0 +1,13 @@
+vesc_snapshot_version=1
+fw_major=6
+fw_minor=6
+hw_name=410
+active_fault=FAULT_CODE_NONE
+foc_current_offsets=FOC Current Offsets: 2048.41 2054.23 0.00
+mcconf_file=vesc_snapshot_mcconf.bin
+mcconf_len=483
+mcconf_crc16=44DA
+appconf_file=vesc_snapshot_appconf.bin
+appconf_cmd_id=17
+appconf_len=278
+appconf_crc16=F782

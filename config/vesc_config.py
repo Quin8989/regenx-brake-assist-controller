@@ -9,6 +9,37 @@ VESC_CHARACTERIZATION = {
     "sensorless_erpm": 0.0,
 }
 
+VESC_TEMP_LIMITS = {
+    "motor_max_current_a": 40.0,
+    "motor_min_current_a": -40.0,
+    "battery_max_current_a": 40.0,
+    "battery_min_current_a": -40.0,
+    "min_erpm": -200000.0,
+    "max_erpm": 200000.0,
+    "min_duty": 0.0,
+    "max_duty": 0.95,
+    "watt_min": -500.0,
+    "watt_max": 500.0,
+}
+
+VESC_BATTERY_CUT_LIMITS = {
+    "start_v": 15.0,
+    "end_v": 14.0,
+}
+
+VESC_FLASH_LIMITS = {
+    "motor_max_current_a": 40.0,
+    "motor_min_current_a": -40.0,
+    "battery_max_current_a": 40.0,
+    "battery_min_current_a": -40.0,
+    "min_input_voltage_v": 15.0,
+    "max_input_voltage_v": 42.0,
+    "battery_cut_start_v": 15.0,
+    "battery_cut_end_v": 14.0,
+    "watt_max": 500.0,
+    "watt_min": -500.0,
+}
+
 VESC_BASELINE_PATCHES = (
     {"offset": 6, "type": "u8", "value": 2, "name": "Motor type (FOC)"},
     {"offset": 7, "type": "u8", "value": 0, "name": "Sensor mode (sensorless baseline)"},
@@ -51,3 +82,15 @@ def get_overlay_patches():
         (patch["offset"], patch["type"], patch["value"], patch["name"])
         for patch in VESC_OVERLAY_PATCHES
     ]
+
+
+def get_temp_limits():
+    return dict(VESC_TEMP_LIMITS)
+
+
+def get_battery_cut_limits():
+    return dict(VESC_BATTERY_CUT_LIMITS)
+
+
+def get_flash_limits():
+    return dict(VESC_FLASH_LIMITS)
