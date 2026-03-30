@@ -94,7 +94,7 @@ class TestSoftReset:
     def test_reset_clears_requested_mode(self):
         s, fm, cl, btn, app = _make_app()
         s.system_state = SystemState.FAULT
-        fm.set_fault(FaultCode.PRECHARGE_STALL)
+        fm.set_fault(FaultCode.INTERNAL)
         s.requested_mode = CommandMode.ASSIST
         s.requested_level = 0.8
 

@@ -13,6 +13,8 @@
 from time import sleep_ms, ticks_ms, ticks_diff
 import struct
 
+from machine import WDT
+
 from scripts.lib.vesc_uart_template import VescUartTemplate
 
 COMM_GET_VALUES = 4
@@ -23,8 +25,10 @@ ACTIVE_MS = 20_000
 
 TELEMETRY_FMT = ">hhiiiihihiiiiiiB"
 TELEMETRY_MIN_LEN = 1 + 53
+WDT_TIMEOUT_MS = 8000
 
 vesc = VescUartTemplate(rxbuf=2048)
+wdt = WDT(timeout=WDT_TIMEOUT_MS)
 
 
 def read_values():
@@ -63,6 +67,8 @@ def phase_collect(label, duration_ms, prompt=None):
     fault_nonzero = 0
 
     while ticks_diff(ticks_ms(), start) < duration_ms:
+        wdt.feed()
+
         data = read_values()
         if data is None:
             read_fail += 1

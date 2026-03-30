@@ -12,14 +12,14 @@ def _make():
 class TestSetClear:
     def test_set_adds_fault(self):
         s, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
-        assert FaultCode.UNDERVOLTAGE in s.fault_flags
+        fm.set_fault(FaultCode.VESC_TIMEOUT)
+        assert FaultCode.VESC_TIMEOUT in s.fault_flags
 
     def test_clear_removes_non_latching(self):
         s, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
-        fm.clear_fault(FaultCode.UNDERVOLTAGE)
-        assert FaultCode.UNDERVOLTAGE not in s.fault_flags
+        fm.set_fault(FaultCode.VESC_TIMEOUT)
+        fm.clear_fault(FaultCode.VESC_TIMEOUT)
+        assert FaultCode.VESC_TIMEOUT not in s.fault_flags
 
     def test_clear_ignores_latching(self):
         s, fm = _make()
@@ -37,7 +37,6 @@ class TestSetClear:
     def test_non_latching_faults_clear(self):
         non_latching = [
             FaultCode.VESC_TIMEOUT,
-            FaultCode.UNDERVOLTAGE,
             FaultCode.THROTTLE_RANGE,
             FaultCode.VESC_FAULT,
         ]
@@ -55,42 +54,41 @@ class TestHasFault:
 
     def test_has_fault_true(self):
         _, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
+        fm.set_fault(FaultCode.VESC_TIMEOUT)
         assert fm.has_fault() is True
 
     def test_has_fault_after_clear(self):
         _, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
-        fm.clear_fault(FaultCode.UNDERVOLTAGE)
+        fm.set_fault(FaultCode.VESC_TIMEOUT)
+        fm.clear_fault(FaultCode.VESC_TIMEOUT)
         assert fm.has_fault() is False
 
     def test_multiple_faults(self):
         _, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
+        fm.set_fault(FaultCode.VESC_TIMEOUT)
         fm.set_fault(FaultCode.THROTTLE_RANGE)
-        fm.clear_fault(FaultCode.UNDERVOLTAGE)
+        fm.clear_fault(FaultCode.VESC_TIMEOUT)
         assert fm.has_fault() is True  # THROTTLE_RANGE still active
 
 
 class TestResetAll:
     def test_reset_all_clears_non_latching(self):
         s, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
         fm.set_fault(FaultCode.VESC_TIMEOUT)
+        fm.set_fault(FaultCode.THROTTLE_RANGE)
         fm.reset_all()
         assert fm.has_fault() is False
 
     def test_reset_all_clears_latching(self):
         s, fm = _make()
         fm.set_fault(FaultCode.OVERVOLTAGE)
-        fm.set_fault(FaultCode.PRECHARGE_STALL)
         fm.set_fault(FaultCode.INTERNAL)
         fm.reset_all()
         assert fm.has_fault() is False
 
     def test_reset_all_clears_mixed(self):
         s, fm = _make()
-        fm.set_fault(FaultCode.UNDERVOLTAGE)
+        fm.set_fault(FaultCode.VESC_TIMEOUT)
         fm.set_fault(FaultCode.OVERVOLTAGE)
         fm.set_fault(FaultCode.THROTTLE_RANGE)
         fm.reset_all()

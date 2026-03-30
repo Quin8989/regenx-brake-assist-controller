@@ -13,8 +13,6 @@
 #   Pin 7  / GP5  / UART1 RX ← FSESC UART TX
 #   Pin 11 / GP8  / Soft reset button (active-low, internal pull-up)
 #   Pin 12 / GP9  / Wheel speed hall sensor input (digital)
-#   Pin 20 / GP15 / PRECHARGE ENABLE (active-high)
-#   Pin 21 / GP16 / BOOST ENABLE (active-high)
 #   Pin 22 / GP17 / LCD RS (Register Select)
 #   Pin 24 / GP18 / LCD E  (Enable)
 #   Pin 25 / GP19 / LCD D4
@@ -45,10 +43,17 @@ WHEEL_HALL_MIN_EDGE_US = 1500
 # Approximate loaded wheel circumference used for LCD speed conversion and
 # km/h-based regen thresholding.
 WHEEL_CIRCUMFERENCE_M = 2.10
+# Wheel-speed plausibility filter.
+# - Reject impossible raw speed spikes above MAX_KPH.
+# - Limit how quickly reported speed can rise/fall to ride-plausible values,
+#   which masks single missed magnets and bogus ultra-fast samples.
+WHEEL_SPEED_MAX_KPH = 80.0
+WHEEL_SPEED_MAX_RPM = (WHEEL_SPEED_MAX_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
+WHEEL_SPEED_MAX_ACCEL_KPH_PER_S = 40.0
+WHEEL_SPEED_MAX_DECEL_KPH_PER_S = 60.0
+WHEEL_SPEED_INVALID_HOLD_MS = 1500
 
-# --- Precharge control ---
-PRECHARGE_ENABLE_PIN = 15     # GP15, Pico pin 20 — active-high
-BOOST_ENABLE_PIN = 16         # GP16, Pico pin 21 — DC/DC boost enable (active-high)
+
 
 # --- LCD (RG1602A, ST7066U/HD44780, 4-bit parallel GPIO, no I2C backpack) ---
 LCD_RS_PIN = 17               # GP17, Pico pin 22
@@ -70,10 +75,9 @@ VCAP_MIN_OPERATING = 15.0      # Below this: precharge active, motor inhibited
 VCAP_SOFT_REGEN_CUTOFF = 40.0  # Software regen disable threshold
 VCAP_ABSOLUTE_MAX = 42.0       # Hard bus voltage limit — NEVER exceed
 
-# --- Motor current limits (hard limits — must also be set in VESC Tool) ---
+# --- Motor current limit (hard limit — must also be set in VESC Tool) ---
 # FSESC4.20 is rated 50 A; project hard limit is 40 A.
-ASSIST_CURRENT_LIMIT_A = 40.0  # Max assist current (amps)
-REGEN_CURRENT_LIMIT_A = 40.0   # Max regen braking current (amps)
+MOTOR_CURRENT_MAX_A = 40.0     # Shared max motor current for assist and regen (amps)
 
 # --- Throttle ---
 # Calibrated from measured WUXING 300X sweep at 3.3 V supply:
@@ -105,56 +109,34 @@ VESC_TELEMETRY_TIMEOUT_MS = 500  # Stale if no good packet in this window
 # --- Runtime behavior policy ---
 CONTINUE_ON_MAIN_LOOP_EXCEPTION = True
 
-# --- Precharge watchdog ---
-# RC circuit: R=62 Ohm, C=20 F → tau = 1240 s (~20.7 min).
-# Worst case 0 V → 15 V (VCAP_MIN_OPERATING) ≈ 29 min.
-#
-# VESC boots at ~6 V.  Pico runs the whole time, but there is NO telemetry
-# (and therefore no cap voltage reading) until the VESC powers on.
-#   • 0 V → 6 V: ~7.4 min worst case.  Watchdog is blind; only the
-#     telemetry-grace timer provides protection in this phase.
-#   • Cap may have residual charge — if already ≥6 V the VESC boots
-#     immediately and telemetry grace is irrelevant.
-VESC_MIN_BOOT_VOLTAGE = 6.0              # VESC powers on at this cap voltage
-PRECHARGE_WATCHDOG_ENABLE = True
-PRECHARGE_SOURCE_V = 20.0
-PRECHARGE_RESISTANCE_OHM = 62.0
-PRECHARGE_PROGRESS_WINDOW_MS = 60_000     # 60 s — evaluate voltage rise per window
-PRECHARGE_MIN_PROGRESS_RATIO = 0.10       # Must see ≥10% of expected dV per window
-PRECHARGE_MAX_BAD_WINDOWS = 3             # 3 consecutive stalled windows → fault
-PRECHARGE_HARD_TIMEOUT_MS = 35 * 60_000   # 35 min — 20% margin over 29 min worst case
-PRECHARGE_TELEMETRY_GRACE_MS = 12 * 60_000  # 12 min — VESC needs ~7.4 min to boot from 0 V
+
 
 # --- Regen slip-controller tuning ---
 # The geared hub motor has a planetary carrier with a one-way freewheel clutch.
 #
-# Three riding states:
+# Two riding modes (throttle-gated):
 #   ASSIST  — Throttle applied → motor drives wheel (forward power).
-#   COAST   — Throttle off, no brake → freewheel disengages, motor RPM ≈ 0,
-#             true zero-drag coast (NEUTRAL mode).
-#   REGEN   — Throttle off + mechanical brake → carrier locks, wheel drives
-#             motor at ≈ wheel_rpm × REGEN_LOCKED_RATIO.  The PI controller
-#             commands brake current to hold a fixed carrier-slip target.
+#   REGEN   — Throttle off + wheel moving → PI slip controller active.
+#             When coasting (carrier free, motor RPM ≈ 0), the PI naturally
+#             produces zero brake current.  When the rider squeezes the
+#             mechanical brake (carrier locks), positive slip error builds
+#             the integral and brake current ramps up.
 #
-# Carrier lock detection (no brake switch needed):
-#   motor_rpm ≈ wheel_rpm × ratio → carrier locked → rider is braking
-#   motor_rpm ≈ 0                  → carrier free   → rider is coasting
-#   Hysteresis: enter REGEN at slip < ENGAGE, exit at slip > DISENGAGE.
-#
-# Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
+# Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF or below
+# REGEN_MIN_WHEEL_KPH.
 
 # Minimum speed to allow regen request detection.
 REGEN_MIN_WHEEL_KPH = 5.0
 REGEN_MIN_WHEEL_RPM = (REGEN_MIN_WHEEL_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
 # Calibrated from auto-spin bench data (scripts/bench/test_regen_ratio_motor_spin.py).
 REGEN_LOCKED_RATIO = 3.0               # motor_rpm / wheel_rpm when carrier fully locked
-REGEN_ENGAGE_SLIP_FRAC = 0.30          # Enter REGEN when carrier slip below this
-REGEN_DISENGAGE_SLIP_FRAC = 0.50       # Exit REGEN when carrier slip above this
 REGEN_TARGET_SLIP_FRAC = 0.10          # Carrier slip target (10% of wheel speed)
-REGEN_PI_KP_A_PER_RPM = 10.0            # PI proportional gain
-REGEN_PI_KI_A_PER_RPM_S = 8.0           # PI integral gain
-REGEN_PI_INTEGRAL_LIMIT_A = 25.0       # Anti-windup clamp (amps)
-REGEN_SLEW_A_PER_S = 120.0             # Faster command ramp for stronger brake feel
+REGEN_COMMAND_MAX_A = 30.0             # Regen command ceiling (A)
+REGEN_PI_KP_A_PER_RPM = 0.0            # Proportional gain disabled — pure integral controller
+REGEN_PI_KI_A_PER_RPM_S = 1.0          # Integral gain — ramps to whatever current the load needs
+REGEN_PI_INTEGRAL_LIMIT_A = 30.0       # Anti-windup clamp — match regen command ceiling
+COMMAND_SLEW_A_PER_S = 30.0             # Shared slew rate for assist and regen commands
+EXCEPTION_LOG_MAX = 10                  # Max exception snapshots kept in RAM ring buffer
 
 # --- Bench debug logger (RAM ring buffer) ---
 BENCH_LOG_PERIOD_MS = 500             # Capture rate (~2 Hz), same as DEBUG_LOG_PERIOD_MS
@@ -177,6 +159,7 @@ CAPACITANCE_F = 20.0
 
 # --- Task periods ---
 SAFETY_SUPERVISOR_PERIOD_MS = 10   # ~100 Hz
+STATE_MACHINE_PERIOD_MS = 10       # ~100 Hz — bounded to prevent free-running
 CONTROL_LOOP_PERIOD_MS = 10        # ~100 Hz
 COMMAND_TRANSMIT_PERIOD_MS = 20    # ~50 Hz
 THROTTLE_SAMPLE_PERIOD_MS = 10     # ~100 Hz

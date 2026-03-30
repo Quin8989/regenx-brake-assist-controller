@@ -65,11 +65,7 @@ class PeriodicTimer:
 # Log categories — set to True to enable
 _ENABLED = {
     "startup": True,
-    "telemetry": False,
-    "faults": True,
-    "state": True,
-    "precharge": True,
-    "commands": False,
+    "main": True,
     "loop": False,
 }
 
@@ -82,9 +78,6 @@ class Logger:
 
     def info(self, category, msg):
         self._emit("INFO", category, msg)
-
-    def warn(self, category, msg):
-        self._emit("WARN", category, msg)
 
     def error(self, category, msg):
         self._emit("ERR ", category, msg)

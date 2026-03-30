@@ -94,6 +94,18 @@ _machine.ADC = _FakeADC
 _machine.UART = _FakeUART
 _machine.I2C = _FakeI2C
 _machine.WDT = _FakeWDT
+
+
+def _disable_irq():
+    return 0
+
+
+def _enable_irq(state):
+    pass
+
+
+_machine.disable_irq = _disable_irq
+_machine.enable_irq = _enable_irq
 sys.modules["machine"] = _machine
 
 # ---------------------------------------------------------------------------

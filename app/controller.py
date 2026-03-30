@@ -10,6 +10,7 @@ from config.settings import (
     DEBUG_LOG_PERIOD_MS,
     LCD_REFRESH_PERIOD_MS,
     SAFETY_SUPERVISOR_PERIOD_MS,
+    STATE_MACHINE_PERIOD_MS,
     TELEMETRY_REQUEST_PERIOD_MS,
     THROTTLE_SAMPLE_PERIOD_MS,
 )
@@ -38,6 +39,7 @@ class AppController:
         self._bench_logger = bench_logger
         # --- Periodic task timers ---
         self._t_safety = PeriodicTimer(SAFETY_SUPERVISOR_PERIOD_MS)
+        self._t_state = PeriodicTimer(STATE_MACHINE_PERIOD_MS)
         self._t_input = PeriodicTimer(THROTTLE_SAMPLE_PERIOD_MS)
         self._t_telem_req = PeriodicTimer(TELEMETRY_REQUEST_PERIOD_MS)
         self._t_control = PeriodicTimer(CONTROL_LOOP_PERIOD_MS)
@@ -73,7 +75,8 @@ class AppController:
             self._safety.update()
 
         # 6. State machine
-        self._state_machine.update()
+        if self._t_state.ready():
+            self._state_machine.update()
 
         # 7. Control loop
         if self._t_control.ready():

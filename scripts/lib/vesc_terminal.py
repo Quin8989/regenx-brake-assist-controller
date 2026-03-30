@@ -2,8 +2,16 @@ from time import sleep_ms, ticks_ms, ticks_diff
 
 from scripts.lib.vesc_uart_template import extract_frame, wrap_frame
 
+try:
+    from machine import WDT
+except ImportError:
+    WDT = None
+
 COMM_TERMINAL_CMD = 20
 COMM_PRINT = 21
+
+WDT_TIMEOUT_MS = 8000
+_wdt = WDT(timeout=WDT_TIMEOUT_MS) if WDT else None
 
 
 def read_print_lines(uart, timeout_ms=1500):
@@ -12,6 +20,9 @@ def read_print_lines(uart, timeout_ms=1500):
     start = ticks_ms()
 
     while ticks_diff(ticks_ms(), start) < timeout_ms:
+        if _wdt:
+            _wdt.feed()
+
         data = uart.read()
         if data:
             buf.extend(data)

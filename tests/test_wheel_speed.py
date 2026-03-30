@@ -24,7 +24,7 @@ class TestInitialization:
 
     def test_initial_rpm_zero(self):
         ws = _make()
-        rpm, valid = ws.update()
+        rpm, valid, fresh = ws.update()
         assert rpm == 0.0
         assert valid is False
 
@@ -35,7 +35,7 @@ class TestEdgeTiming:
         ws = _make()
         set_clock_ms(100)
         ws._on_edge(None)
-        rpm, valid = ws.update()
+        rpm, valid, fresh = ws.update()
         assert rpm == 0.0
         assert valid is False
 
@@ -49,7 +49,7 @@ class TestEdgeTiming:
         ws._on_edge(None)
 
         # Still within timeout — should produce valid RPM
-        rpm, valid = ws.update()
+        rpm, valid, fresh = ws.update()
         expected_rpm = 60.0 * 1_000_000.0 / (100_000 * WHEEL_MAGNET_COUNT)
         assert valid is True
         assert abs(rpm - expected_rpm) < 0.1
@@ -86,7 +86,7 @@ class TestTimeout:
 
         # Now advance time well beyond timeout
         set_clock_ms(200 + WHEEL_SPEED_TIMEOUT_MS + 100)
-        rpm, valid = ws.update()
+        rpm, valid, fresh = ws.update()
         assert rpm == 0.0
         assert valid is False
 
@@ -99,7 +99,7 @@ class TestTimeout:
 
         # Within timeout window
         set_clock_ms(200 + WHEEL_SPEED_TIMEOUT_MS - 100)
-        rpm, valid = ws.update()
+        rpm, valid, fresh = ws.update()
         assert valid is True
         assert rpm > 0.0
 
@@ -114,8 +114,50 @@ class TestRPMCalculation:
         set_clock_ms(1000 + period_ms)
         ws._on_edge(None)
 
-        rpm, valid = ws.update()
+        rpm, valid, fresh = ws.update()
         # rpm = 60 * 1e6 / (100_000 * 6) = 100
         expected = 60.0 * 1_000_000.0 / (period_ms * 1000 * WHEEL_MAGNET_COUNT)
         assert valid is True
         assert abs(rpm - expected) < 0.1
+
+
+class TestFreshEdgeFlag:
+    def test_fresh_true_after_new_edge(self):
+        """First update after a new edge should report fresh=True."""
+        ws = _make()
+        set_clock_ms(100)
+        ws._on_edge(None)
+        set_clock_ms(200)
+        ws._on_edge(None)
+        rpm, valid, fresh = ws.update()
+        assert valid is True
+        assert fresh is True
+
+    def test_fresh_cleared_on_second_read(self):
+        """Subsequent update with no new edge should report fresh=False."""
+        ws = _make()
+        set_clock_ms(100)
+        ws._on_edge(None)
+        set_clock_ms(200)
+        ws._on_edge(None)
+        ws.update()  # consume fresh flag
+        rpm, valid, fresh = ws.update()
+        assert valid is True
+        assert fresh is False
+
+    def test_fresh_false_when_no_edges(self):
+        """No edges at all → fresh=False."""
+        ws = _make()
+        rpm, valid, fresh = ws.update()
+        assert fresh is False
+
+    def test_debounced_edge_not_fresh(self):
+        """Edge within debounce window should not set fresh."""
+        ws = _make()
+        set_clock_ms(100)
+        ws._on_edge(None)
+        # Only 1ms later (1000us < 1500us min)
+        set_clock_ms(101)
+        ws._on_edge(None)
+        rpm, valid, fresh = ws.update()
+        assert fresh is False

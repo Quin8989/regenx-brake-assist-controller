@@ -4,10 +4,15 @@
 # This module gates those requests with safety checks before allowing
 # the system state to change:
 #
-#   OFF → PRECHARGE → COAST → ASSIST / REGEN
-#   Any state → FAULT (when faults are present)
-#   FAULT → COAST (when all faults clear)
+#   OFF → PRECHARGE → REGEN
 #   Direct ASSIST ↔ REGEN transitions are allowed.
+#   Any state → FAULT (when faults are present)
+#   FAULT → REGEN (when all faults clear)
+#
+# REGEN is the default running state.  The ControlLoop PI naturally
+# produces zero current when the carrier is free (coasting) or the
+# wheel is stopped/invalid, so there is no need for a separate COAST
+# state.
 
 from config.settings import VCAP_MIN_OPERATING
 from core import CommandMode, SystemState
@@ -37,9 +42,6 @@ class StateMachine:
         elif current == SystemState.PRECHARGE:
             self._handle_precharge()
 
-        elif current == SystemState.COAST:
-            self._handle_coast()
-
         elif current == SystemState.ASSIST:
             self._handle_assist()
 
@@ -52,37 +54,26 @@ class StateMachine:
     def _handle_off(self):
         s = self._state
         if s.cap_voltage_v >= VCAP_MIN_OPERATING:
-            s.system_state = SystemState.COAST
+            s.system_state = SystemState.REGEN
         else:
             s.system_state = SystemState.PRECHARGE
 
     def _handle_precharge(self):
         s = self._state
         if s.cap_voltage_v >= VCAP_MIN_OPERATING:
-            s.system_state = SystemState.COAST
-
-    def _handle_coast(self):
-        s = self._state
-        if s.requested_mode == CommandMode.REGEN:
             s.system_state = SystemState.REGEN
-        elif s.requested_mode == CommandMode.ASSIST:
-            s.system_state = SystemState.ASSIST
 
     def _handle_assist(self):
         s = self._state
-        if s.requested_mode == CommandMode.REGEN:
+        if s.requested_mode != CommandMode.ASSIST:
             s.system_state = SystemState.REGEN
-        elif s.requested_mode != CommandMode.ASSIST:
-            s.system_state = SystemState.COAST
 
     def _handle_regen(self):
         s = self._state
         if s.requested_mode == CommandMode.ASSIST:
             s.system_state = SystemState.ASSIST
-        elif s.requested_mode != CommandMode.REGEN:
-            s.system_state = SystemState.COAST
 
     def _handle_fault(self):
         if not self._faults.has_fault():
-            self._state.system_state = SystemState.COAST
+            self._state.system_state = SystemState.REGEN
             self._state.inhibit_motor_commands = True

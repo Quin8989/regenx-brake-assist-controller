@@ -9,6 +9,8 @@
 from time import sleep_ms, ticks_ms, ticks_diff
 import struct
 
+from machine import WDT
+
 from scripts.lib.vesc_uart_template import VescUartTemplate
 
 COMM_GET_VALUES = 4
@@ -18,6 +20,7 @@ SAMPLE_PERIOD_MS = 500
 
 TELEMETRY_FMT = ">hhiiiihihiiiiiiB"
 TELEMETRY_MIN_LEN = 1 + 53
+WDT_TIMEOUT_MS = 8000
 
 FAULT_NAMES = {
     0: "NONE",
@@ -53,6 +56,7 @@ FAULT_NAMES = {
 }
 
 vesc = VescUartTemplate(rxbuf=1024)
+wdt = WDT(timeout=WDT_TIMEOUT_MS)
 
 
 def read_values():
@@ -87,6 +91,8 @@ first_nonzero = None
 last_nonzero = None
 
 while ticks_diff(ticks_ms(), start) < WATCH_SECONDS * 1000:
+    wdt.feed()
+
     sample += 1
     t_ms = ticks_diff(ticks_ms(), start)
     data = read_values()

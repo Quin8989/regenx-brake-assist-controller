@@ -17,8 +17,7 @@ from core import FaultCode, SystemState
 #   5 = OVER_TEMP_FET, 6 = OVER_TEMP_MOTOR
 
 # Prebuilt sets for state membership checks (avoid recreating each call)
-_TELEMETRY_EXEMPT_STATES = {SystemState.OFF, SystemState.PRECHARGE, SystemState.FAULT}
-_UNDERVOLTAGE_STATES = {SystemState.ASSIST, SystemState.REGEN}
+_TELEMETRY_EXEMPT_STATES = {SystemState.OFF, SystemState.PRECHARGE}
 _INHIBIT_STATES = {SystemState.OFF, SystemState.PRECHARGE, SystemState.FAULT}
 
 
@@ -30,7 +29,6 @@ class SafetySupervisor:
     def update(self):
         """Run all safety checks. Call this at the highest priority rate."""
         self._check_overvoltage()
-        self._check_undervoltage()
         self._check_telemetry_health()
         self._check_vesc_fault()
         self._check_throttle_validity()
@@ -39,15 +37,6 @@ class SafetySupervisor:
     def _check_overvoltage(self):
         if self._state.cap_voltage_v >= VCAP_ABSOLUTE_MAX:
             self._faults.set_fault(FaultCode.OVERVOLTAGE)
-
-    def _check_undervoltage(self):
-        if (
-            self._state.cap_voltage_v < VCAP_MIN_OPERATING
-            and self._state.system_state in _UNDERVOLTAGE_STATES
-        ):
-            self._faults.set_fault(FaultCode.UNDERVOLTAGE)
-        else:
-            self._faults.clear_fault(FaultCode.UNDERVOLTAGE)
 
     def _check_telemetry_health(self):
         if self._state.system_state in _TELEMETRY_EXEMPT_STATES:
@@ -82,17 +71,23 @@ class SafetySupervisor:
             self._faults.clear_fault(FaultCode.THROTTLE_RANGE)
 
     def _apply_inhibits(self):
-        """Single source of truth for motion inhibit policy."""
-        if self._faults.has_fault():
-            self._state.inhibit_motor_commands = True
-            return
+        """Single source of truth for motion inhibit policy.
 
-        if self._state.cap_voltage_v < VCAP_MIN_OPERATING:
+        Low voltage only blocks assist (forward drive).  Regen is always
+        allowed because it charges the capacitor bank.
+        """
+        if self._faults.has_fault():
             self._state.inhibit_motor_commands = True
             return
 
         if self._state.system_state in _INHIBIT_STATES:
             self._state.inhibit_motor_commands = True
             return
+
+        # Low cap voltage: block assist but allow regen (regen charges the cap)
+        if self._state.cap_voltage_v < VCAP_MIN_OPERATING:
+            if self._state.system_state != SystemState.REGEN:
+                self._state.inhibit_motor_commands = True
+                return
 
         self._state.inhibit_motor_commands = False

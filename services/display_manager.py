@@ -11,7 +11,7 @@
 #   RUN (REGEN):     "REGEN   25.2V 68%"
 #                    " -12.3A   124RPM"
 #
-#   RUN (COAST):     "COAST   25.2V 68%"
+#   RUN (idle):      "REGEN   25.2V 68%"
 #                    "  +0.0A     0RPM"
 #
 #   PRECHARGE:       "PRECHARGE...    "
@@ -26,9 +26,27 @@
 from time import ticks_ms, ticks_diff
 
 from config.settings import WHEEL_CIRCUMFERENCE_M
-from core import FAULT_LABELS, CommandMode, SystemState
+from core import FAULT_LABELS, SystemState
 
 _FAULT_FLASH_MS = 800  # Toggle period for fault page header
+_VESC_FAULT_SHOW_MS = 3000  # Duration to show VESC fault overlay after detection
+
+_VESC_FAULT_NAMES = {
+    1:  "OVER VOLTAGE",
+    2:  "UNDER VOLTAGE",
+    3:  "DRV",
+    4:  "ABS OVERCURRENT",
+    5:  "OVER TEMP FET",
+    6:  "OVER TEMP MOTOR",
+    7:  "GD OVER VOLT",
+    8:  "GD UNDER VOLT",
+    9:  "MCU UNDER VOLT",
+    10: "WDT RESET",
+    15: "HI OFFSET CS1",
+    16: "HI OFFSET CS2",
+    17: "HI OFFSET CS3",
+    18: "UNBAL CURRENTS",
+}
 
 
 def _rpm_to_kmh(rpm):
@@ -39,9 +57,10 @@ class DisplayManager:
     def __init__(self, lcd_driver, shared_state):
         self._lcd = lcd_driver
         self._state = shared_state
-        self._fault_flash = False
         self._fault_flash_ms = 0
         self._fault_index = 0
+        self._vesc_fault_until_ms = 0
+        self._last_vesc_fault_code = 0
 
     def update(self):
         """Refresh LCD based on current system state."""
@@ -54,6 +73,20 @@ class DisplayManager:
 
     def _update_page(self):
         s = self._state
+
+        # VESC hardware fault overlay takes priority over normal run display.
+        # Shows the fault name for _VESC_FAULT_SHOW_MS after last detection.
+        if s.vesc_fault_code != 0:
+            self._last_vesc_fault_code = s.vesc_fault_code
+            self._vesc_fault_until_ms = ticks_ms() + _VESC_FAULT_SHOW_MS
+
+        if self._last_vesc_fault_code != 0 and ticks_diff(
+            self._vesc_fault_until_ms, ticks_ms()
+        ) > 0:
+            self._show_vesc_fault_overlay()
+            return
+        elif self._last_vesc_fault_code != 0:
+            self._last_vesc_fault_code = 0
 
         if s.system_state == SystemState.FAULT:
             self._show_fault_page()
@@ -69,7 +102,15 @@ class DisplayManager:
 
         self._show_run_page()
 
-    # ----- RUN page (COAST / ASSIST / REGEN) -----
+    # ----- VESC hardware fault overlay -----
+
+    def _show_vesc_fault_overlay(self):
+        code = self._last_vesc_fault_code
+        name = _VESC_FAULT_NAMES.get(code, "FAULT %d" % code)
+        self._lcd.write_line(0, ("VESC F%d" % code)[:16])
+        self._lcd.write_line(1, name[:16])
+
+    # ----- RUN page (ASSIST / REGEN) -----
 
     def _show_run_page(self):
         s = self._state
@@ -126,7 +167,11 @@ class DisplayManager:
         faults = list(s.fault_flags)
         if faults:
             idx = self._fault_index % len(faults)
-            label = FAULT_LABELS.get(faults[idx], str(faults[idx]))
+            code = faults[idx]
+            label = FAULT_LABELS.get(code, str(code))
+            # Show exception detail for INTERNAL faults
+            if code == "INTERNAL" and getattr(s, "last_exception_str", ""):
+                label = s.last_exception_str
         else:
             label = "Unknown"
 

@@ -6,17 +6,18 @@
 #  3. Refresh VESC telemetry requests if due
 #  4. Energy estimation
 #  5. Run safety supervisor
-#  6. Run precharge manager
-#  7. Run state machine
-#  8. Run control loop
-#  9. Run command manager (transmit assist / regen / neutral)
-# 10. Update LCD
-# 11. Emit low-rate debug logs
-# 12. Bench data capture
+#  6. Run state machine
+#  7. Run control loop
+#  8. Run command manager (transmit assist / regen / neutral)
+#  9. Update LCD
+# 10. Emit low-rate debug logs
+# 11. Bench data capture
+
+import sys
 
 from app.controller import AppController
 from app.state_machine import StateMachine
-from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION
+from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX
 from core import FaultCode, FaultManager, SharedState, SystemState, EnergyEstimator
 from drivers.lcd_driver import LCDDriver
 from drivers.gpio_io import ResetButton
@@ -29,6 +30,41 @@ from services.safety_supervisor import SafetySupervisor
 from services.bench_logger import BenchLogger
 from services.vesc_comm import CommandManager, UARTPort, VESCComm
 from utils import Logger
+
+# --- Exception log — ring buffer of state snapshots at crash time ---
+exception_log = []
+
+
+def _capture_exception(exc, state, logger):
+    """Record exception details and a system state snapshot."""
+    try:
+        import io
+        buf = io.StringIO()
+        sys.print_exception(exc, buf)
+        tb_str = buf.getvalue()
+    except Exception:
+        tb_str = f"{type(exc).__name__}: {exc}"
+    snapshot = {
+        "state": state.system_state,
+        "mode": state.requested_mode,
+        "vcap": round(state.cap_voltage_v, 2),
+        "vesc_fault": state.vesc_fault_code,
+        "mech_rpm": round(state.vesc_mech_rpm, 1),
+        "wheel_rpm": round(state.wheel_speed_rpm, 1),
+        "throttle_raw": state.throttle_raw,
+        "inhibit": state.inhibit_motor_commands,
+        "faults": list(state.fault_flags),
+        "assist_cmd": round(state.assist_command_request, 2),
+        "regen_cmd": round(state.regen_command_request, 2),
+    }
+    entry = {"traceback": tb_str, "snapshot": snapshot}
+    exception_log.append(entry)
+    if len(exception_log) > EXCEPTION_LOG_MAX:
+        exception_log.pop(0)
+    # Also store last exception text on state for LCD visibility
+    state.last_exception_str = tb_str.split("\n")[-2] if "\n" in tb_str else str(exc)
+    logger.error("main", f"Exception: {tb_str.rstrip()}")
+    logger.error("main", f"Snapshot: {snapshot}")
 
 
 def main():
@@ -86,8 +122,7 @@ def main():
         try:
             app.update()
         except Exception as e:
-            logger.error("main", f"Uncaught exception: {e}")
-            # Force safe state on unhandled error
+            _capture_exception(e, state, logger)
             state.inhibit_motor_commands = True
             state.system_state = SystemState.FAULT
             faults.set_fault(FaultCode.INTERNAL)
@@ -100,7 +135,8 @@ try:
     main()
 except Exception as e:
     print(f"FATAL: {e}")
-    # Last-resort safe state — force precharge/boost pins low
-    from machine import Pin
-    for gp in (15, 16):
-        Pin(gp, Pin.OUT, value=0)
+    try:
+        import io
+        sys.print_exception(e, sys.stdout)
+    except Exception:
+        pass

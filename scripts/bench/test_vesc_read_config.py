@@ -13,15 +13,13 @@ from scripts.lib.vesc_uart_template import VescUartTemplate
 
 try:
     from config.settings import (
-        ASSIST_CURRENT_LIMIT_A,
-        REGEN_CURRENT_LIMIT_A,
+        MOTOR_CURRENT_MAX_A,
         VCAP_ABSOLUTE_MAX,
         VCAP_MIN_OPERATING,
         VESC_BAUD_RATE,
     )
 except ImportError:
-    ASSIST_CURRENT_LIMIT_A = 40.0
-    REGEN_CURRENT_LIMIT_A = 40.0
+    MOTOR_CURRENT_MAX_A = 40.0
     VCAP_MIN_OPERATING = 15.0
     VCAP_ABSOLUTE_MAX = 42.0
     VESC_BAUD_RATE = 115200
@@ -266,25 +264,25 @@ within_safety = True
 within_safety &= print_check(
     "Motor current max",
     current_limits["motor_max_current_a"],
-    ASSIST_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     comparator=lambda actual, expected: actual <= expected + 0.25,
 )
 within_safety &= print_check(
     "Motor current brake",
     abs(current_limits["motor_min_current_a"]),
-    REGEN_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     comparator=lambda actual, expected: actual <= expected + 0.25,
 )
 within_safety &= print_check(
     "Battery current max",
     current_limits["battery_max_current_a"],
-    ASSIST_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     comparator=lambda actual, expected: actual <= expected + 0.25,
 )
 within_safety &= print_check(
     "Battery current regen",
     abs(current_limits["battery_min_current_a"]),
-    REGEN_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     comparator=lambda actual, expected: actual <= expected + 0.25,
 )
 
@@ -309,25 +307,25 @@ stored_match = True
 stored_match &= print_check(
     "Motor current max",
     current_limits["motor_max_current_a"],
-    ASSIST_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     tolerance=0.25,
 )
 stored_match &= print_check(
     "Motor current brake",
     abs(current_limits["motor_min_current_a"]),
-    REGEN_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     tolerance=0.25,
 )
 stored_match &= print_check(
     "Battery current max",
     current_limits["battery_max_current_a"],
-    ASSIST_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     tolerance=0.25,
 )
 stored_match &= print_check(
     "Battery current regen",
     abs(current_limits["battery_min_current_a"]),
-    REGEN_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
     tolerance=0.25,
 )
 

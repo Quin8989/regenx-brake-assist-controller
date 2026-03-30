@@ -145,6 +145,7 @@ class TestFaultToZero:
         state.inhibit_motor_commands = False
         state.wheel_speed_rpm = 100.0
         state.wheel_speed_valid = True
+        state.wheel_speed_fresh = True
         state.vesc_mech_rpm = 500.0
         state.requested_mode = CommandMode.REGEN
         state.requested_level = 1.0

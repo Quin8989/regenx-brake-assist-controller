@@ -10,7 +10,6 @@
 class SystemState:
     OFF = "OFF"
     PRECHARGE = "PRECHARGE"
-    COAST = "COAST"
     ASSIST = "ASSIST"
     REGEN = "REGEN"
     FAULT = "FAULT"
@@ -20,9 +19,7 @@ class FaultCode:
     VESC_TIMEOUT = "VESC_TIMEOUT"
     VESC_FAULT = "VESC_FAULT"
     OVERVOLTAGE = "OVERVOLTAGE"
-    UNDERVOLTAGE = "UNDERVOLTAGE"
     THROTTLE_RANGE = "THROTTLE_RANGE"
-    PRECHARGE_STALL = "PRECHARGE_STALL"
     INTERNAL = "INTERNAL"
 
 
@@ -39,7 +36,6 @@ class CommandMode:
 # Faults that require manual reset / restart to clear
 LATCHING_FAULTS = {
     FaultCode.OVERVOLTAGE,
-    FaultCode.PRECHARGE_STALL,
     FaultCode.INTERNAL,
 }
 
@@ -48,9 +44,7 @@ FAULT_LABELS = {
     FaultCode.VESC_TIMEOUT: "VESC Timeout",
     FaultCode.VESC_FAULT: "VESC Fault",
     FaultCode.OVERVOLTAGE: "Overvoltage",
-    FaultCode.UNDERVOLTAGE: "Undervoltage",
     FaultCode.THROTTLE_RANGE: "Throttle Range",
-    FaultCode.PRECHARGE_STALL: "Precharge Stall",
     FaultCode.INTERNAL: "Internal Error",
 }
 
@@ -124,9 +118,9 @@ class SharedState:
         # --- Wheel speed input for regen slip control ---
         self.wheel_speed_rpm = 0.0
         self.wheel_speed_valid = False
+        self.wheel_speed_fresh = False
         self.gear_carrier_speed_rpm = 0.0
         self.regen_speed_error_rpm = 0.0
-        self.regen_pi_command_a = 0.0
 
         # --- Command requests ---
         self.assist_command_request = 0.0
@@ -135,6 +129,9 @@ class SharedState:
         # --- Timestamps (ms) ---
         self.last_vesc_rx_ms = 0
         self.last_command_tx_ms = 0
+
+        # --- Exception diagnostics ---
+        self.last_exception_str = ""
 
 
 # =============================================================================

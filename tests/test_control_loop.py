@@ -17,6 +17,7 @@ def _ready_regen(state, wheel_rpm=100.0, motor_rpm=400.0, cap_v=25.0, level=1.0)
     state.cap_voltage_v = cap_v
     state.wheel_speed_rpm = wheel_rpm
     state.wheel_speed_valid = True
+    state.wheel_speed_fresh = True
     state.vesc_mech_rpm = motor_rpm
     state.requested_level = level
     state.requested_mode = CommandMode.REGEN
@@ -142,7 +143,8 @@ class TestRegen:
             cl.update()
         assert s.regen_command_request > 0.0
 
-    def test_regen_rider_authority_scales(self):
+    def test_regen_output_consistent_regardless_of_level(self):
+        """With rider multiplier removed, level should not affect regen output."""
         s1, cl1 = _make()
         _ready_regen(s1, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0, level=1.0)
         for _ in range(300):
@@ -155,16 +157,16 @@ class TestRegen:
             cl2.update()
         half = s2.regen_command_request
 
-        # Half authority should produce less current (approximately half)
-        assert half < full
-        assert half > 0.0
+        # Both should converge to the same value since rider level is not used
+        assert abs(full - half) < 0.01
 
     def test_regen_clamped_to_limit(self):
         s, cl = _make()
         _ready_regen(s, wheel_rpm=200.0, motor_rpm=10.0, cap_v=20.0, level=1.0)
         for _ in range(10000):
             cl.update()
-        assert s.regen_command_request <= 40.0
+        from config.settings import REGEN_COMMAND_MAX_A
+        assert s.regen_command_request <= REGEN_COMMAND_MAX_A
 
     def test_carrier_speed_populated(self):
         s, cl = _make()
@@ -186,7 +188,7 @@ class TestRegen:
 class TestNeutralStates:
     def test_ready_state_zeros_output(self):
         s, cl = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.OFF
         s.inhibit_motor_commands = False
         s.requested_level = 1.0
         cl.update()
@@ -209,8 +211,8 @@ class TestNeutralStates:
         regen_val = s.regen_command_request
         assert regen_val > 0.0
 
-        # Switch to COAST — should reset dynamics
-        s.system_state = SystemState.COAST
+        # Switch to OFF — should reset dynamics
+        s.system_state = SystemState.OFF
         cl.update()
 
         # Re-enter REGEN — should start fresh (low value, not the previous accumulated)
@@ -239,3 +241,31 @@ class TestPIAntiWindup:
         low_cmd = s.regen_command_request
 
         assert low_cmd < high_cmd
+
+
+class TestFreshEdgeSync:
+    def test_carrier_rpm_held_when_not_fresh(self):
+        """Carrier RPM should not change when wheel reading is stale."""
+        s, cl = _make()
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=280.0, cap_v=25.0)
+        cl.update()
+        first_carrier = s.gear_carrier_speed_rpm
+
+        # Simulate stale wheel (motor drifts down but no new wheel edge)
+        s.wheel_speed_fresh = False
+        s.vesc_mech_rpm = 200.0  # motor drops but wheel_speed_rpm frozen
+        cl.update()
+        assert s.gear_carrier_speed_rpm == first_carrier
+
+    def test_carrier_rpm_updates_when_fresh(self):
+        """Carrier RPM should update when a fresh wheel edge arrives."""
+        s, cl = _make()
+        _ready_regen(s, wheel_rpm=100.0, motor_rpm=280.0, cap_v=25.0)
+        cl.update()
+        first_carrier = s.gear_carrier_speed_rpm
+
+        # Fresh reading with changed motor RPM
+        s.wheel_speed_fresh = True
+        s.vesc_mech_rpm = 250.0
+        cl.update()
+        assert s.gear_carrier_speed_rpm != first_carrier

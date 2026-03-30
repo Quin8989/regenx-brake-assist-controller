@@ -46,10 +46,10 @@ class TestPageSelection:
 
     def test_run_page_in_ready(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.5
         dm.update()
-        assert "COAST" in lcd.lines[0]
+        assert "REGEN" in lcd.lines[0]
         assert "20.5" in lcd.lines[0]
 
     def test_run_page_in_assist(self):
@@ -87,7 +87,7 @@ class TestLcdFaultTolerance:
     def test_oserror_caught_silently(self):
         lcd = _FailLCD()
         s, f, _, dm = _make(lcd=lcd)
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         # Should not raise
         dm.update()
@@ -113,14 +113,14 @@ class TestRunPageContent:
 
     def test_ready_shows_voltage_value(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 22.3
         dm.update()
         assert "22.3" in lcd.lines[0]
 
     def test_ready_shows_energy_percent(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 25.0
         s.cap_energy_percent = 67.0
         dm.update()
@@ -145,7 +145,7 @@ class TestRunPageContent:
 
     def test_run_page_shows_unknown_speed_when_wheel_invalid(self):
         s, f, lcd, dm = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 22.0
         s.wheel_speed_valid = False
         dm.update()
@@ -188,12 +188,12 @@ class TestFaultPageContent:
         expected = FAULT_LABELS[FaultCode.THROTTLE_RANGE]
         assert expected[:16] in lcd.lines[1]
 
-    def test_fault_shows_precharge_stall_label(self):
+    def test_fault_shows_internal_label(self):
         s, f, lcd, dm = _make()
         s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.PRECHARGE_STALL)
+        f.set_fault(FaultCode.INTERNAL)
         dm.update()
-        expected = FAULT_LABELS[FaultCode.PRECHARGE_STALL]
+        expected = FAULT_LABELS[FaultCode.INTERNAL]
         assert expected[:16] in lcd.lines[1]
 
     def test_fault_unknown_shows_fallback(self):

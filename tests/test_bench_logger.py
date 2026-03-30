@@ -100,7 +100,7 @@ class TestBenchLoggerDump:
 
     def test_dump_header_and_rows(self, capsys):
         state = SharedState()
-        state.system_state = SystemState.COAST
+        state.system_state = SystemState.REGEN
         state.cap_voltage_v = 18.0
         bl = BenchLogger(state, max_records=10)
         _set_tick(0)

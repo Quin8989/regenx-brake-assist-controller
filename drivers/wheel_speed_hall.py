@@ -6,8 +6,10 @@ from time import ticks_diff, ticks_ms, ticks_us
 
 try:
     from machine import Pin
+    import machine as _machine_mod
 except Exception:
     Pin = None
+    _machine_mod = None
 
 from config.settings import (
     WHEEL_HALL_ACTIVE_HIGH,
@@ -25,6 +27,7 @@ class WheelSpeedHall:
         self._last_edge_us = None
         self._last_edge_ms = None
         self._period_us = None
+        self._new_edge = False
 
         if WHEEL_HALL_PIN is None or Pin is None:
             return
@@ -51,16 +54,31 @@ class WheelSpeedHall:
         self._last_edge_ms = now_ms
         if dt >= WHEEL_HALL_MIN_EDGE_US:
             self._period_us = dt
+            self._new_edge = True
 
     def update(self):
         if not self._enabled or self._period_us is None or self._last_edge_ms is None:
-            return 0.0, False
+            return 0.0, False, False
+
+        # Atomically read ISR-written fields to avoid torn reads.
+        if _machine_mod is not None:
+            irq_state = _machine_mod.disable_irq()
+            period = self._period_us
+            last_ms = self._last_edge_ms
+            fresh = self._new_edge
+            self._new_edge = False
+            _machine_mod.enable_irq(irq_state)
+        else:
+            period = self._period_us
+            last_ms = self._last_edge_ms
+            fresh = self._new_edge
+            self._new_edge = False
 
         # If no pulse arrives for too long, wheel is considered stopped/stale.
-        age_ms = ticks_diff(ticks_ms(), self._last_edge_ms)
+        age_ms = ticks_diff(ticks_ms(), last_ms)
         if age_ms > WHEEL_SPEED_TIMEOUT_MS:
-            return 0.0, False
+            return 0.0, False, False
 
         # rpm = 60 / (period_s * magnets)
-        rpm = 60.0 * 1_000_000.0 / (self._period_us * WHEEL_MAGNET_COUNT)
-        return rpm, True
+        rpm = 60.0 * 1_000_000.0 / (period * WHEEL_MAGNET_COUNT)
+        return rpm, True, fresh

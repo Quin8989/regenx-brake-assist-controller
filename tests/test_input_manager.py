@@ -1,5 +1,7 @@
 # tests/test_input_manager.py — InputManager mode arbitration and state population
 
+from tests.conftest import advance_ms
+
 from core import CommandMode, SharedState
 from services.input_manager import InputManager
 
@@ -23,7 +25,7 @@ class _FakeWheel:
         self._valid = valid
 
     def update(self):
-        return self._rpm, self._valid
+        return self._rpm, self._valid, True
 
 
 def _make(throttle=None, wheel=None):
@@ -34,7 +36,7 @@ def _make(throttle=None, wheel=None):
     return state, throttle, im
 
 
-# ── Mode arbitration (carrier-lock inference) ────────────────────────────
+# ── Mode arbitration ─────────────────────────────────────────────────────
 
 class TestModeArbitration:
     def test_assist_when_throttle_active(self):
@@ -45,15 +47,16 @@ class TestModeArbitration:
         assert s.requested_mode == CommandMode.ASSIST
         assert abs(s.requested_level - 0.6) < 0.01
 
-    def test_neutral_when_coasting(self):
-        """Throttle off + motor decoupled (≈ 0 RPM) → NEUTRAL (true coast)."""
+    def test_regen_when_throttle_off_and_wheel_moving(self):
+        """Throttle off + wheel valid above min → REGEN (regardless of motor RPM)."""
         wheel = _FakeWheel(rpm=100.0, valid=True)
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 5.0  # motor nearly stopped → freewheel disengaged
+        s.vesc_mech_rpm = 5.0  # motor nearly stopped — coasting
         im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
+        assert s.requested_mode == CommandMode.REGEN
+        assert s.requested_level == 1.0
 
     def test_regen_when_carrier_locked(self):
         """Throttle off + motor coupled (carrier locked by brake) → REGEN."""
@@ -61,14 +64,13 @@ class TestModeArbitration:
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        # Locked motor RPM = 100 × 3 = 300; motor at 288 → 4% slip
         s.vesc_mech_rpm = 288.0
         im.update()
         assert s.requested_mode == CommandMode.REGEN
         assert s.requested_level == 1.0
 
     def test_regen_when_carrier_locked_negative_motor_rpm(self):
-        """Negative motor RPM sign should still count as coupled lock."""
+        """Negative motor RPM sign should still be REGEN."""
         wheel = _FakeWheel(rpm=100.0, valid=True)
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
@@ -77,8 +79,8 @@ class TestModeArbitration:
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
-    def test_assist_overrides_brake(self):
-        """Throttle active + carrier locked → ASSIST (throttle always wins)."""
+    def test_assist_overrides_regen(self):
+        """Throttle active + wheel moving → ASSIST (throttle always wins)."""
         wheel = _FakeWheel(rpm=100.0, valid=True)
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.8
@@ -88,12 +90,12 @@ class TestModeArbitration:
         assert s.requested_mode == CommandMode.ASSIST
 
     def test_neutral_when_wheel_below_min_rpm(self):
-        """Even if carrier appears locked, wheel too slow → NEUTRAL."""
+        """Wheel too slow → NEUTRAL."""
         wheel = _FakeWheel(rpm=10.0, valid=True)
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 29.0  # low slip, but wheel below min RPM gate
+        s.vesc_mech_rpm = 29.0
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
@@ -114,129 +116,46 @@ class TestModeArbitration:
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
-    def test_partial_coupling_below_engage_threshold(self):
-        """Motor at 60% of locked speed → 40% slip → above 30% engage → NEUTRAL."""
+    def test_regen_regardless_of_carrier_slip(self):
+        """Any motor RPM → REGEN as long as wheel is valid and above min."""
         wheel = _FakeWheel(rpm=100.0, valid=True)
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 180.0  # 180/300 = 60% → 40% slip
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
 
-    def test_coupling_at_engage_boundary(self):
-        """Motor at 70% of locked speed → 30% slip → at boundary → NEUTRAL (not <)."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-        s.vesc_mech_rpm = 210.0  # 210/300 = 70% → exactly 30% slip
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
-
-    def test_coupling_just_below_engage(self):
-        """Motor at 71% of locked speed → 29% slip → below 30% → REGEN."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-        s.vesc_mech_rpm = 213.0  # 213/300 = 71% → 29% slip
+        # Fully decoupled (coast)
+        s.vesc_mech_rpm = 0.0
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
+        # Partially coupled
+        s.vesc_mech_rpm = 180.0
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
 
-# ── Hysteresis tests ─────────────────────────────────────────────────────
+        # Fully locked
+        s.vesc_mech_rpm = 300.0
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
 
-class TestHysteresis:
-    def test_stays_in_regen_between_thresholds(self):
-        """Once in REGEN (slip < 30%), stays until slip > 50%."""
+    def test_regen_to_assist_to_regen_no_hysteresis(self):
+        """Transitioning through ASSIST and back should immediately re-enter REGEN."""
         wheel = _FakeWheel(rpm=100.0, valid=True)
         s, t, im = _make(wheel=wheel)
         t.fraction = 0.0
         t.is_valid = True
 
-        # Enter REGEN: 20% slip
-        s.vesc_mech_rpm = 240.0  # 240/300 = 80% lock → 20% slip
+        # REGEN
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
-        # Slip increases to 40% — between engage (30%) and disengage (50%)
-        s.vesc_mech_rpm = 180.0  # 180/300 = 60% lock → 40% slip
-        im.update()
-        assert s.requested_mode == CommandMode.REGEN  # hysteresis holds
-
-    def test_exits_regen_above_disengage(self):
-        """Exits REGEN when carrier slip exceeds disengage threshold."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-
-        # Enter REGEN
-        s.vesc_mech_rpm = 240.0  # 20% slip
-        im.update()
-        assert s.requested_mode == CommandMode.REGEN
-
-        # Slip exceeds 50% → exit
-        s.vesc_mech_rpm = 120.0  # 120/300 = 40% lock → 60% slip
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
-
-    def test_throttle_clears_regen_flag(self):
-        """Applying throttle during REGEN clears the hysteresis flag."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-
-        # Enter REGEN
-        s.vesc_mech_rpm = 240.0
-        im.update()
-        assert s.requested_mode == CommandMode.REGEN
-
-        # Apply throttle → ASSIST, clears _in_regen
+        # Apply throttle → ASSIST
         t.fraction = 0.5
         im.update()
         assert s.requested_mode == CommandMode.ASSIST
 
-        # Release throttle — motor still at 40% slip (between thresholds)
-        # Without hysteresis flag, should NOT re-enter REGEN
+        # Release throttle → back to REGEN immediately
         t.fraction = 0.0
-        s.vesc_mech_rpm = 180.0  # 40% slip — above 30% engage threshold
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
-
-    def test_exits_at_exactly_disengage_threshold(self):
-        """Slip at exactly 50% → exits REGEN (not strictly less than threshold)."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-
-        # Enter REGEN
-        s.vesc_mech_rpm = 240.0  # 20% slip
-        im.update()
-        assert s.requested_mode == CommandMode.REGEN
-
-        # Slip at exactly 50%
-        s.vesc_mech_rpm = 150.0  # 150/300 = 50% lock → 50% slip → not < 50%
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
-
-    def test_stays_just_below_disengage(self):
-        """Slip at 49% → stays in REGEN."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-
-        # Enter REGEN
-        s.vesc_mech_rpm = 240.0  # 20% slip
-        im.update()
-        assert s.requested_mode == CommandMode.REGEN
-
-        # Slip just below disengage: 49%
-        s.vesc_mech_rpm = 153.0  # 153/300 = 51% lock → 49% slip → stays
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
@@ -285,3 +204,44 @@ class TestWheelSpeedIntegration:
         im.update()
         assert s.wheel_speed_rpm == 0.0
         assert s.wheel_speed_valid is False
+
+    def test_wheel_speed_rejects_impossible_spike(self):
+        wheel = _FakeWheel(rpm=120.0, valid=True)
+        s, t, im = _make(wheel=wheel)
+        im.update()
+        first = s.wheel_speed_rpm
+
+        # Bogus ultra-fast sample should be ignored, preserving last good speed.
+        wheel._rpm = 5000.0
+        advance_ms(10)
+        im.update()
+
+        assert s.wheel_speed_valid is True
+        assert abs(s.wheel_speed_rpm - first) < 0.01
+
+    def test_wheel_speed_decel_is_rate_limited(self):
+        wheel = _FakeWheel(rpm=180.0, valid=True)
+        s, t, im = _make(wheel=wheel)
+        im.update()
+
+        # Simulate a missed-magnet read causing a sudden low-speed sample.
+        wheel._rpm = 90.0
+        advance_ms(10)
+        im.update()
+
+        # Filter should move downward only slightly, not jump to 90 RPM.
+        assert s.wheel_speed_valid is True
+        assert s.wheel_speed_rpm > 170.0
+        assert s.wheel_speed_rpm < 180.0
+
+    def test_wheel_speed_holds_last_value_through_short_invalid_gap(self):
+        wheel = _FakeWheel(rpm=120.0, valid=True)
+        s, t, im = _make(wheel=wheel)
+        im.update()
+
+        wheel._valid = False
+        advance_ms(500)
+        im.update()
+
+        assert s.wheel_speed_valid is True
+        assert abs(s.wheel_speed_rpm - 120.0) < 0.01

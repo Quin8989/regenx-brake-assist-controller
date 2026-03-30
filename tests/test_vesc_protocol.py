@@ -289,3 +289,18 @@ class TestExtractPayload:
         frame[-1] = 0xFF  # corrupt end byte
         extracted, remaining = _extract_payload(frame)
         assert extracted is None
+
+    def test_long_frame_roundtrip(self):
+        """Long frame (payload > 255 bytes) should be wrapped and extracted."""
+        payload = bytes(range(256))  # 256 bytes triggers long frame
+        frame = _wrap_frame(payload)
+        assert frame[0] == 0x03  # FRAME_START_LONG
+        extracted, remaining = _extract_payload(bytearray(frame))
+        assert extracted == payload
+        assert len(remaining) == 0
+
+    def test_long_frame_incomplete(self):
+        payload = bytes(range(256))
+        frame = _wrap_frame(payload)
+        extracted, buf = _extract_payload(bytearray(frame[:10]))
+        assert extracted is None

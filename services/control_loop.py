@@ -3,20 +3,13 @@
 # HOW ASSIST AND REGEN WORK (user intent → motor current)
 # ========================================================
 #
-# 1. InputManager reads throttle, wheel speed, and motor speed each cycle:
+# 1. InputManager reads throttle and wheel speed each cycle:
 #      Throttle applied                          → ASSIST request
-#      Throttle off + carrier locked (braking)   → REGEN request
-#      Throttle off + carrier free (coasting)    → NEUTRAL
+#      Throttle off + wheel valid + above min    → REGEN request
+#      Throttle off + wheel stopped / invalid    → NEUTRAL
 #
-#    Carrier lock is inferred from motor RPM: when the rider squeezes the
-#    mechanical brake, the carrier locks and the wheel drives the motor
-#    through the gear train (motor RPM ≈ wheel RPM × gear ratio).
-#    When coasting, the freewheel clutch disengages and motor RPM ≈ 0.
-#
-# 2. StateMachine gates transitions with safety checks (cap voltage, faults):
-#      COAST + ASSIST request → ASSIST state
-#      COAST + REGEN request  → REGEN state
-#      Direct ASSIST ↔ REGEN transitions are allowed.
+# 2. StateMachine gates transitions with safety checks (cap voltage, faults).
+#    Direct ASSIST ↔ REGEN transitions are allowed.
 #
 # 3. This module (ControlLoop) converts state + intent into current commands:
 #
@@ -25,9 +18,12 @@
 #      The VESC inner loop handles actual torque control.
 #
 #    REGEN:
-#      PI slip controller regulates braking current to supplement the
-#      rider's mechanical braking.  The PI loop measures carrier slip
-#      and adjusts brake current to hold a fixed slip target (2%).
+#      PI slip controller regulates braking current.  The PI loop
+#      measures carrier slip and adjusts brake current to hold a
+#      fixed slip target.  When the carrier is free (coasting),
+#      carrier_rpm ≈ wheel_rpm → negative error → integral floored
+#      at 0 → zero brake current naturally.  When the rider brakes
+#      and the carrier locks, positive error builds the integral.
 #      Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
 #
 #    Any other state: both commands zero, all dynamics reset.
@@ -44,15 +40,15 @@
 #   gear_carrier_speed_rpm (estimated), regen_speed_error_rpm (PI debug)
 
 from config.settings import (
-    ASSIST_CURRENT_LIMIT_A,
+    COMMAND_SLEW_A_PER_S,
     CONTROL_LOOP_PERIOD_MS,
-    REGEN_CURRENT_LIMIT_A,
+    MOTOR_CURRENT_MAX_A,
+    REGEN_COMMAND_MAX_A,
     REGEN_LOCKED_RATIO,
     REGEN_MIN_WHEEL_RPM,
     REGEN_PI_INTEGRAL_LIMIT_A,
     REGEN_PI_KI_A_PER_RPM_S,
     REGEN_PI_KP_A_PER_RPM,
-    REGEN_SLEW_A_PER_S,
     REGEN_TARGET_SLIP_FRAC,
     VCAP_SOFT_REGEN_CUTOFF,
 )
@@ -61,9 +57,7 @@ from utils import SlewLimiter, clamp
 
 # Precomputed loop constants
 _DT_S = CONTROL_LOOP_PERIOD_MS / 1000.0
-_SLEW_A_PER_S = 20.0
-_SLEW_DELTA = _SLEW_A_PER_S * _DT_S
-_REGEN_SLEW_DELTA = REGEN_SLEW_A_PER_S * _DT_S
+_SLEW_DELTA = COMMAND_SLEW_A_PER_S * _DT_S
 
 
 class ControlLoop:
@@ -79,26 +73,29 @@ class ControlLoop:
         # Slew limiters prevent abrupt torque/current steps that feel harsh and can
         # stress drivetrain/electronics.
         self._assist_slew = SlewLimiter(max_delta=_SLEW_DELTA)
-        self._regen_slew = SlewLimiter(max_delta=_REGEN_SLEW_DELTA)
+        self._regen_slew = SlewLimiter(max_delta=_SLEW_DELTA)
         # Integral state for regen PI loop. Represents accumulated correction (A).
         self._regen_integral_a = 0.0
+        # Last carrier RPM from a fresh wheel edge — held between edges to
+        # prevent phantom slip from asynchronous sensor update rates.
+        # None = no edge yet → assume carrier free (no braking).
+        self._held_carrier_rpm = None
 
     def update(self):
         """Compute this cycle's assist/regen requests.
 
         Behavior summary:
-        - Always starts from neutral (0 A requests).
+        - Always starts from zero (0 A requests).
         - If inhibited: zero everything and reset dynamic states.
         - ASSIST state: run assist mapping only.
         - REGEN state: PI slip controller regulates braking current.
-        - Any other state: hold neutral and reset dynamics.
+        - Any other state: hold at zero and reset dynamics.
         """
         s = self._state
 
-        # Default to neutral each cycle; active modes explicitly write non-zero values.
+        # Default to zero each cycle; active modes explicitly write non-zero values.
         s.assist_command_request = 0.0
         s.regen_command_request = 0.0
-        s.regen_pi_command_a = 0.0
 
         # Inhibit is the master safety gate:
         # no current commands and no integrator windup.
@@ -114,7 +111,7 @@ class ControlLoop:
             self._reset_assist()
             self._compute_regen()
         else:
-            # COAST / OFF / PRECHARGE / FAULT: remain neutral and clear dynamics.
+            # OFF / PRECHARGE / FAULT / standstill: remain at zero and clear dynamics.
             # Next entry into ASSIST/REGEN starts from a known smooth baseline.
             self._reset_assist()
             self._reset_regen()
@@ -122,7 +119,7 @@ class ControlLoop:
     def _compute_assist(self):
         """Compute forward-drive current request in ASSIST state."""
         s = self._state
-        target = clamp(s.requested_level, 0.0, 1.0) * ASSIST_CURRENT_LIMIT_A
+        target = clamp(s.requested_level, 0.0, 1.0) * MOTOR_CURRENT_MAX_A
         s.assist_command_request = self._assist_slew.update(target)
 
     def _compute_regen(self):
@@ -142,8 +139,10 @@ class ControlLoop:
             s.regen_speed_error_rpm = 0.0
             return
 
-        # Carrier slip estimate
-        carrier_rpm = self._estimate_carrier_rpm(wheel_rpm, s.vesc_mech_rpm)
+        if s.wheel_speed_fresh:
+            self._held_carrier_rpm = self._estimate_carrier_rpm(wheel_rpm, s.vesc_mech_rpm)
+        # Before first fresh edge, assume carrier is free (no braking).
+        carrier_rpm = self._held_carrier_rpm if self._held_carrier_rpm is not None else wheel_rpm
         s.gear_carrier_speed_rpm = carrier_rpm
 
         # Fixed slip target
@@ -155,11 +154,9 @@ class ControlLoop:
         error_rpm = target_rpm - carrier_rpm
         s.regen_speed_error_rpm = error_rpm
         base_current_a = self._pi_update(error_rpm)
-        s.regen_pi_command_a = base_current_a
 
-        # Scale by rider authority and smooth
-        rider = clamp(s.requested_level, 0.0, 1.0)
-        target = clamp(base_current_a * rider, 0.0, REGEN_CURRENT_LIMIT_A)
+        # Smooth and clamp
+        target = clamp(base_current_a, 0.0, REGEN_COMMAND_MAX_A)
         s.regen_command_request = self._regen_slew.update(target)
 
     # -- Regen helpers (one job each) --
@@ -168,10 +165,10 @@ class ControlLoop:
     def _estimate_carrier_rpm(wheel_rpm, motor_rpm):
         """Infer carrier slip from wheel and motor speed.
 
-        When the rider brakes, the carrier locks and the motor spins at
-        wheel_rpm × gear_ratio (lock_fraction → 1, carrier_rpm → 0).
-        When coasting, the freewheel disengages and motor RPM ≈ 0
-        (lock_fraction → 0, carrier_rpm → wheel_rpm = full slip).
+        Carrier locked (braking): motor spins at wheel_rpm × gear_ratio,
+        lock_fraction → 1, carrier_rpm → 0 → positive PI error → brake.
+        Carrier free (coasting): motor RPM ≈ 0, lock_fraction → 0,
+        carrier_rpm → wheel_rpm → negative error → integral stays at 0.
         """
         motor_rpm = abs(motor_rpm)
         locked_motor_rpm = max(1e-6, wheel_rpm * REGEN_LOCKED_RATIO)
@@ -185,11 +182,11 @@ class ControlLoop:
         self._regen_integral_a += REGEN_PI_KI_A_PER_RPM_S * error_rpm * _DT_S
         self._regen_integral_a = clamp(
             self._regen_integral_a,
-            -REGEN_PI_INTEGRAL_LIMIT_A,
+            0.0,
             REGEN_PI_INTEGRAL_LIMIT_A,
         )
 
-        return clamp(p_term + self._regen_integral_a, 0.0, REGEN_CURRENT_LIMIT_A)
+        return clamp(p_term + self._regen_integral_a, 0.0, REGEN_COMMAND_MAX_A)
 
     def _reset_assist(self):
         self._assist_slew.reset(0.0)
@@ -197,3 +194,4 @@ class ControlLoop:
     def _reset_regen(self):
         self._regen_slew.reset(0.0)
         self._regen_integral_a = 0.0
+        self._held_carrier_rpm = None

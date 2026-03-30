@@ -122,25 +122,33 @@ def _parse_telemetry(payload):
 
 
 def _extract_payload(buf):
-    """Extract a complete VESC short frame from a byte buffer.
+    """Extract a complete VESC frame (short or long) from a byte buffer.
 
     Returns (payload_bytes, remaining_buf) on success,
     or (None, buf) when the buffer does not yet contain a complete frame.
     """
     while len(buf) >= 6:
-        if buf[0] != FRAME_START_SHORT:
+        if buf[0] == FRAME_START_SHORT:
+            length = buf[1]
+            header_size = 2  # start(1) + len(1)
+        elif buf[0] == FRAME_START_LONG:
+            if len(buf) < 7:
+                break  # Need more data for long-frame header
+            length = (buf[1] << 8) | buf[2]
+            header_size = 3  # start(1) + len_hi(1) + len_lo(1)
+        else:
             buf = buf[1:]
             continue
 
-        length = buf[1]
-        frame_size = length + 5  # start(1)+len(1)+payload(N)+crc(2)+end(1)
+        frame_size = header_size + length + 3  # payload + crc(2) + end(1)
 
         if len(buf) < frame_size:
             break
 
-        payload = bytes(buf[2:2 + length])
-        crc_recv = (buf[2 + length] << 8) | buf[2 + length + 1]
-        end_byte = buf[2 + length + 2]
+        payload = bytes(buf[header_size:header_size + length])
+        crc_offset = header_size + length
+        crc_recv = (buf[crc_offset] << 8) | buf[crc_offset + 1]
+        end_byte = buf[crc_offset + 2]
 
         if end_byte != FRAME_END or crc_recv != _crc16(payload):
             buf = buf[1:]

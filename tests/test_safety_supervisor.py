@@ -37,47 +37,12 @@ class TestOvervoltage:
         assert FaultCode.OVERVOLTAGE in s.fault_flags  # still latched
 
 
-# ---- Undervoltage ----
-
-class TestUndervoltage:
-    def test_undervoltage_in_assist(self):
-        s, f, sv = _make()
-        s.system_state = SystemState.ASSIST
-        s.cap_voltage_v = 10.0
-        sv.update()
-        assert FaultCode.UNDERVOLTAGE in s.fault_flags
-
-    def test_undervoltage_in_regen(self):
-        s, f, sv = _make()
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 10.0
-        sv.update()
-        assert FaultCode.UNDERVOLTAGE in s.fault_flags
-
-    def test_no_undervoltage_in_precharge(self):
-        s, f, sv = _make()
-        s.system_state = SystemState.PRECHARGE
-        s.cap_voltage_v = 5.0
-        sv.update()
-        assert FaultCode.UNDERVOLTAGE not in s.fault_flags
-
-    def test_undervoltage_clears_when_voltage_returns(self):
-        s, f, sv = _make()
-        s.system_state = SystemState.ASSIST
-        s.cap_voltage_v = 10.0
-        sv.update()
-        assert FaultCode.UNDERVOLTAGE in s.fault_flags
-        s.cap_voltage_v = 20.0
-        sv.update()
-        assert FaultCode.UNDERVOLTAGE not in s.fault_flags
-
-
 # ---- Telemetry health ----
 
 class TestTelemetryHealth:
     def test_timeout_in_ready(self):
         s, f, sv = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         s.last_vesc_rx_ms = 0
         set_clock_ms(100)
@@ -88,7 +53,7 @@ class TestTelemetryHealth:
 
     def test_no_timeout_when_fresh(self):
         s, f, sv = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         set_clock_ms(100)
         s.last_vesc_rx_ms = 100
@@ -114,7 +79,7 @@ class TestTelemetryHealth:
 
     def test_no_fault_before_first_packet(self):
         s, f, sv = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         s.last_vesc_rx_ms = 0  # never received
         set_clock_ms(10000)
@@ -123,7 +88,7 @@ class TestTelemetryHealth:
 
     def test_timeout_clears_when_packet_arrives(self):
         s, f, sv = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         set_clock_ms(100)
         s.last_vesc_rx_ms = 100
@@ -184,18 +149,38 @@ class TestThrottleValidity:
 class TestInhibits:
     def test_inhibit_on_fault(self):
         s, f, sv = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         s.throttle_valid = True
         f.set_fault(FaultCode.INTERNAL)
         sv.update()
         assert s.inhibit_motor_commands is True
 
-    def test_inhibit_on_low_voltage(self):
+    def test_inhibit_on_low_voltage_assist(self):
         s, f, sv = _make()
-        s.system_state = SystemState.PRECHARGE
+        s.system_state = SystemState.ASSIST
         s.cap_voltage_v = 5.0
         s.throttle_valid = True
+        sv.update()
+        assert s.inhibit_motor_commands is True
+
+    def test_low_voltage_allows_regen(self):
+        s, f, sv = _make()
+        s.system_state = SystemState.REGEN
+        s.cap_voltage_v = 5.0
+        s.throttle_valid = True
+        set_clock_ms(10)
+        s.last_vesc_rx_ms = 10
+        sv.update()
+        assert s.inhibit_motor_commands is False
+
+    def test_low_voltage_blocks_assist(self):
+        s, f, sv = _make()
+        s.system_state = SystemState.ASSIST
+        s.cap_voltage_v = 5.0
+        s.throttle_valid = True
+        set_clock_ms(10)
+        s.last_vesc_rx_ms = 10
         sv.update()
         assert s.inhibit_motor_commands is True
 
@@ -209,7 +194,7 @@ class TestInhibits:
 
     def test_no_inhibit_in_ready(self):
         s, f, sv = _make()
-        s.system_state = SystemState.COAST
+        s.system_state = SystemState.REGEN
         s.cap_voltage_v = 20.0
         s.throttle_valid = True
         sv.update()

@@ -47,10 +47,6 @@ class UARTPort:
             return self._uart.read()
         return self._uart.read(nbytes)
 
-    def any(self):
-        """Return number of bytes waiting in the receive buffer."""
-        return self._uart.any()
-
 
 # =============================================================================
 # VESCComm — high-level communication service
@@ -83,7 +79,13 @@ class VESCComm:
             self._handle_payload(payload)
 
         if len(self._rx_buf) > 512:
-            self._rx_buf = self._rx_buf[-256:]
+            # Find last frame-start byte to avoid splitting a partial frame.
+            cut = len(self._rx_buf) - 256
+            for i in range(cut, len(self._rx_buf)):
+                if self._rx_buf[i] == 0x02 or self._rx_buf[i] == 0x03:
+                    cut = i
+                    break
+            self._rx_buf = self._rx_buf[cut:]
 
     def _handle_payload(self, payload):
         vals = _parse_telemetry(payload)
