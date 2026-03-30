@@ -39,6 +39,8 @@
 #   assist_command_request (A), regen_command_request (A)
 #   gear_carrier_speed_rpm (estimated), regen_speed_error_rpm (PI debug)
 
+from time import ticks_diff, ticks_ms
+
 from config.settings import (
     COMMAND_SLEW_A_PER_S,
     CONTROL_LOOP_PERIOD_MS,
@@ -49,7 +51,7 @@ from config.settings import (
     REGEN_PI_INTEGRAL_LIMIT_A,
     REGEN_PI_KI_A_PER_RPM_S,
     REGEN_PI_KP_A_PER_RPM,
-    REGEN_TARGET_SLIP_FRAC,
+    REGEN_TARGET_SLIP_RPM,
     VCAP_SOFT_REGEN_CUTOFF,
 )
 from core import SystemState
@@ -76,35 +78,35 @@ class ControlLoop:
         self._regen_slew = SlewLimiter(max_delta=_SLEW_DELTA)
         # Integral state for regen PI loop. Represents accumulated correction (A).
         self._regen_integral_a = 0.0
-        # Last carrier RPM from a fresh wheel edge — held between edges to
-        # prevent phantom slip from asynchronous sensor update rates.
-        # None = no edge yet → assume carrier free (no braking).
-        self._held_carrier_rpm = None
+        # Timestamp of last fresh wheel edge used for real PI dt measurement.
+        # None = no edge yet.
+        self._last_edge_ms = None
 
     def update(self):
         """Compute this cycle's assist/regen requests.
 
         Behavior summary:
-        - Always starts from zero (0 A requests).
         - If inhibited: zero everything and reset dynamic states.
-        - ASSIST state: run assist mapping only.
+        - ASSIST state: run assist mapping only; regen zeroed.
         - REGEN state: PI slip controller regulates braking current.
+          Between fresh wheel edges the previous regen command is held.
         - Any other state: hold at zero and reset dynamics.
         """
         s = self._state
 
-        # Default to zero each cycle; active modes explicitly write non-zero values.
+        # Assist is always computed from scratch each cycle.
         s.assist_command_request = 0.0
-        s.regen_command_request = 0.0
 
         # Inhibit is the master safety gate:
         # no current commands and no integrator windup.
         if s.inhibit_motor_commands:
+            s.regen_command_request = 0.0
             self._reset_assist()
             self._reset_regen()
             return
 
         if s.system_state == SystemState.ASSIST:
+            s.regen_command_request = 0.0
             self._reset_regen()
             self._compute_assist()
         elif s.system_state == SystemState.REGEN:
@@ -113,6 +115,7 @@ class ControlLoop:
         else:
             # OFF / PRECHARGE / FAULT / standstill: remain at zero and clear dynamics.
             # Next entry into ASSIST/REGEN starts from a known smooth baseline.
+            s.regen_command_request = 0.0
             self._reset_assist()
             self._reset_regen()
 
@@ -123,37 +126,55 @@ class ControlLoop:
         s.assist_command_request = self._assist_slew.update(target)
 
     def _compute_regen(self):
-        """Compute regen braking current via PI slip control."""
+        """Compute regen braking current via PI slip control.
+
+        The PI only advances on fresh wheel-speed edges so that wheel and
+        motor readings are naturally synchronized.  Between edges the last
+        regen command is held — safety gates still run every cycle.
+        """
         s = self._state
 
+        # Safety gates — always checked, even between edges.
         if s.cap_voltage_v >= VCAP_SOFT_REGEN_CUTOFF:
+            s.regen_command_request = 0.0
             self._reset_regen()
             return
         if not s.wheel_speed_valid:
+            s.regen_command_request = 0.0
             self._reset_regen()
             return
         wheel_rpm = max(0.0, s.wheel_speed_rpm)
         if wheel_rpm < REGEN_MIN_WHEEL_RPM:
+            s.regen_command_request = 0.0
             self._reset_regen()
             s.gear_carrier_speed_rpm = wheel_rpm
             s.regen_speed_error_rpm = 0.0
             return
 
-        if s.wheel_speed_fresh:
-            self._held_carrier_rpm = self._estimate_carrier_rpm(wheel_rpm, s.vesc_mech_rpm)
-        # Before first fresh edge, assume carrier is free (no braking).
-        carrier_rpm = self._held_carrier_rpm if self._held_carrier_rpm is not None else wheel_rpm
+        # PI advances only on a fresh wheel edge.
+        if not s.wheel_speed_fresh:
+            return
+
+        # Measure real dt since last edge for accurate integration.
+        now_ms = ticks_ms()
+        if self._last_edge_ms is not None:
+            dt_s = ticks_diff(now_ms, self._last_edge_ms) / 1000.0
+        else:
+            dt_s = _DT_S  # fallback for the very first edge
+        self._last_edge_ms = now_ms
+
+        # Pair wheel speed with current motor speed — naturally synchronized.
+        carrier_rpm = self._estimate_carrier_rpm(wheel_rpm, s.vesc_mech_rpm)
         s.gear_carrier_speed_rpm = carrier_rpm
 
-        # Fixed slip target
-        target_rpm = wheel_rpm * REGEN_TARGET_SLIP_FRAC
+        # Fixed deadband — carrier must be this far below wheel speed
+        # before the PI commands regen current.
+        target_rpm = REGEN_TARGET_SLIP_RPM
 
         # PI controller
-        # When carrier slip falls below target (carrier_rpm too low), increase
-        # regen torque to open the slip back toward target.
         error_rpm = target_rpm - carrier_rpm
         s.regen_speed_error_rpm = error_rpm
-        base_current_a = self._pi_update(error_rpm)
+        base_current_a = self._pi_update(error_rpm, dt_s)
 
         # Smooth and clamp
         target = clamp(base_current_a, 0.0, REGEN_COMMAND_MAX_A)
@@ -175,11 +196,15 @@ class ControlLoop:
         lock_fraction = clamp(motor_rpm / locked_motor_rpm, 0.0, 1.0)
         return wheel_rpm * (1.0 - lock_fraction)
 
-    def _pi_update(self, error_rpm):
-        """Standard PI controller: error (RPM) → regen current (A)."""
+    def _pi_update(self, error_rpm, dt_s):
+        """Standard PI controller: error (RPM) → regen current (A).
+
+        *dt_s* is the measured interval between wheel-speed edges so the
+        integral accumulates at the true sensor rate, not the fixed loop rate.
+        """
         p_term = REGEN_PI_KP_A_PER_RPM * error_rpm
 
-        self._regen_integral_a += REGEN_PI_KI_A_PER_RPM_S * error_rpm * _DT_S
+        self._regen_integral_a += REGEN_PI_KI_A_PER_RPM_S * error_rpm * dt_s
         self._regen_integral_a = clamp(
             self._regen_integral_a,
             0.0,
@@ -194,4 +219,4 @@ class ControlLoop:
     def _reset_regen(self):
         self._regen_slew.reset(0.0)
         self._regen_integral_a = 0.0
-        self._held_carrier_rpm = None
+        self._last_edge_ms = None

@@ -100,7 +100,7 @@ VESC_BAUD_RATE = 115200                # Verify in VESC Tool → App Settings �
 # Puyan H01-Front Drive Geared Hub Motor — 15 pole pairs (30 magnets) is the
 # standard configuration for 250W-350W Chinese geared hub motors in this class.
 # VERIFY with VESC Tool → Motor Settings → FOC → Detect and Calculate.
-VESC_MOTOR_POLE_PAIRS = 15
+VESC_MOTOR_POLE_PAIRS = 11
 VESC_ERPM_TO_MECH_RPM = 1.0 / VESC_MOTOR_POLE_PAIRS
 
 # --- UART / telemetry ---
@@ -126,11 +126,11 @@ CONTINUE_ON_MAIN_LOOP_EXCEPTION = True
 # REGEN_MIN_WHEEL_KPH.
 
 # Minimum speed to allow regen request detection.
-REGEN_MIN_WHEEL_KPH = 5.0
+REGEN_MIN_WHEEL_KPH = 2.0
 REGEN_MIN_WHEEL_RPM = (REGEN_MIN_WHEEL_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
 # Calibrated from auto-spin bench data (scripts/bench/test_regen_ratio_motor_spin.py).
-REGEN_LOCKED_RATIO = 3.0               # motor_rpm / wheel_rpm when carrier fully locked
-REGEN_TARGET_SLIP_FRAC = 0.10          # Carrier slip target (10% of wheel speed)
+REGEN_LOCKED_RATIO = 4.0               # motor_rpm / wheel_rpm when carrier fully locked (Nr/Ns = 96/24)
+REGEN_TARGET_SLIP_RPM = 12.0            # Fixed carrier-speed deadband (RPM) — ~30% at 5 km/h
 REGEN_COMMAND_MAX_A = 30.0             # Regen command ceiling (A)
 REGEN_PI_KP_A_PER_RPM = 0.0            # Proportional gain disabled — pure integral controller
 REGEN_PI_KI_A_PER_RPM_S = 1.0          # Integral gain — ramps to whatever current the load needs

@@ -1,5 +1,6 @@
 # tests/test_control_loop.py — ControlLoop assist mapping and regen PI slip
 
+import tests.conftest as _ct
 from core import CommandMode, SharedState, SystemState
 from services.control_loop import ControlLoop
 
@@ -172,9 +173,9 @@ class TestRegen:
         s, cl = _make()
         _ready_regen(s, wheel_rpm=100.0, motor_rpm=240.0, cap_v=25.0)
         cl.update()
-        # With motor_rpm=240 and locked_motor_rpm = 100*3 = 300,
-        # lock_fraction = 240/300 = 0.8, carrier_rpm = 100*(1-0.8) = 20
-        assert abs(s.gear_carrier_speed_rpm - 20.0) < 0.1
+        # With motor_rpm=240 and locked_motor_rpm = 100*4 = 400,
+        # lock_fraction = 240/400 = 0.6, carrier_rpm = 100*(1-0.6) = 40
+        assert abs(s.gear_carrier_speed_rpm - 40.0) < 0.1
 
     def test_assist_stays_zero_during_regen(self):
         s, cl = _make()
@@ -207,6 +208,7 @@ class TestNeutralStates:
         # Build up integral in regen
         _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0)
         for _ in range(200):
+            _ct._tick_ms += 10
             cl.update()
         regen_val = s.regen_command_request
         assert regen_val > 0.0
@@ -217,6 +219,7 @@ class TestNeutralStates:
 
         # Re-enter REGEN — should start fresh (low value, not the previous accumulated)
         _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=25.0)
+        _ct._tick_ms += 10
         cl.update()
         assert s.regen_command_request < regen_val
 
@@ -231,12 +234,14 @@ class TestPIAntiWindup:
         # integral should wind up.
         _ready_regen(s, wheel_rpm=100.0, motor_rpm=500.0, cap_v=20.0, level=1.0)
         for _ in range(5000):
+            _ct._tick_ms += 10
             cl.update()
         high_cmd = s.regen_command_request
 
         # Now move to a freer carrier with excess slip; command should fall.
         s.vesc_mech_rpm = 50.0
         for _ in range(5000):
+            _ct._tick_ms += 10
             cl.update()
         low_cmd = s.regen_command_request
 
@@ -244,18 +249,21 @@ class TestPIAntiWindup:
 
 
 class TestFreshEdgeSync:
-    def test_carrier_rpm_held_when_not_fresh(self):
-        """Carrier RPM should not change when wheel reading is stale."""
+    def test_regen_holds_when_not_fresh(self):
+        """Regen command and carrier RPM should hold when no fresh edge arrives."""
         s, cl = _make()
         _ready_regen(s, wheel_rpm=100.0, motor_rpm=280.0, cap_v=25.0)
         cl.update()
         first_carrier = s.gear_carrier_speed_rpm
+        first_regen = s.regen_command_request
 
-        # Simulate stale wheel (motor drifts down but no new wheel edge)
+        # Simulate stale wheel (motor drifts but no new wheel edge)
         s.wheel_speed_fresh = False
-        s.vesc_mech_rpm = 200.0  # motor drops but wheel_speed_rpm frozen
+        s.vesc_mech_rpm = 200.0
         cl.update()
+        # Nothing should change — PI did not run
         assert s.gear_carrier_speed_rpm == first_carrier
+        assert s.regen_command_request == first_regen
 
     def test_carrier_rpm_updates_when_fresh(self):
         """Carrier RPM should update when a fresh wheel edge arrives."""

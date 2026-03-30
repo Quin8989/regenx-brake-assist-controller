@@ -59,10 +59,10 @@ class TestServiceRxSingleFrame:
 
     def test_populates_mech_rpm(self):
         uart, state, vc = _make()
-        # rpm field is in ERPM; with 15 pole pairs → mech = erpm / 15
+        # rpm field is in ERPM; with 11 pole pairs → mech = erpm / 11
         uart._rx_buf.extend(_build_telemetry_frame(rpm=4500))
         vc.service_rx()
-        assert abs(state.vesc_mech_rpm - 300.0) < 0.1
+        assert abs(state.vesc_mech_rpm - 4500.0 / 11.0) < 0.1
 
     def test_populates_fault_code(self):
         uart, state, vc = _make()
