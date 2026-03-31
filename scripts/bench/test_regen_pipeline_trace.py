@@ -70,7 +70,7 @@ from config.settings import (
     REGEN_PI_INTEGRAL_LIMIT_A,
     REGEN_PI_KI_A_PER_RPM_S,
     REGEN_PI_KP_A_PER_RPM,
-    REGEN_TARGET_SLIP_FRAC,
+    REGEN_TARGET_SLIP_RPM,
     VCAP_SOFT_REGEN_CUTOFF,
     WHEEL_SPEED_MAX_ACCEL_KPH_PER_S,
     WHEEL_SPEED_MAX_DECEL_KPH_PER_S,
@@ -109,7 +109,7 @@ PHASE2_SPIN_MS = 2500          # Spin-up time
 PHASE2_CYCLES = 5              # Number of spin→brake cycles
 PHASE2_TRACE_MS = 8000         # Trace duration per cycle after spin-up
 
-SKIP_PHASE1 = True             # Phase 1 already validated; skip to save time
+SKIP_PHASE1 = False            # Run Phase 1 to verify VESC brake current delivery
 DATA_DIR = "data"
 DATA_FILE = DATA_DIR + "/phase2_trace.csv"
 
@@ -179,9 +179,10 @@ def _service_vesc(last_req_ms):
 
 
 def _read_wheel():
-    """Read wheel speed from hall sensor, filtered like production code."""
+    """Read wheel speed from hall sensor. Returns (filtered, raw, valid, fresh)."""
     raw_rpm, valid, fresh = wheel.update()
-    return wheel_filter.update(raw_rpm, valid, fresh)
+    filt_rpm, filt_valid, filt_fresh = wheel_filter.update(raw_rpm, valid, fresh)
+    return filt_rpm, raw_rpm, filt_valid, filt_fresh
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -218,9 +219,9 @@ def _wait_for_lock(timeout_ms):
         last_req = _service_vesc(last_req)
         vesc.send_neutral()
 
-        wheel_rpm, _, _ = _read_wheel()
+        wheel_rpm, raw_rpm, _, _ = _read_wheel()
         motor_rpm = abs(state.vesc_mech_rpm)
-        locked_motor_rpm = max(1e-6, wheel_rpm * REGEN_LOCKED_RATIO)
+        locked_motor_rpm = max(1e-6, raw_rpm * REGEN_LOCKED_RATIO)
         lock_frac = min(motor_rpm / locked_motor_rpm, 1.0)
 
         if lock_frac >= PHASE1_LOCK_THRESHOLD:
@@ -315,7 +316,7 @@ class PipelineTrace:
         self.slew_out = 0.0
         self.regen_active = False
 
-    def update(self, wheel_rpm, wheel_valid, wheel_fresh, motor_rpm, cap_v):
+    def update(self, wheel_rpm, raw_wheel_rpm, wheel_valid, wheel_fresh, motor_rpm, cap_v):
         """Run one cycle. Returns the command to send to VESC (A)."""
 
         # ── Gate checks (same as ControlLoop) ──
@@ -326,22 +327,23 @@ class PipelineTrace:
         if wheel_rpm < REGEN_MIN_WHEEL_RPM:
             return self._reset("too_slow")
 
-        # ── Carrier slip estimate (for diagnostics) ──
-        locked_motor_rpm = max(1e-6, wheel_rpm * REGEN_LOCKED_RATIO)
+        # ── Carrier slip estimate using RAW wheel RPM (matches production) ──
+        raw_whl = max(0.0, raw_wheel_rpm)
+        locked_motor_rpm = max(1e-6, raw_whl * REGEN_LOCKED_RATIO)
         self.lock_frac = clamp(abs(motor_rpm) / locked_motor_rpm, 0.0, 1.0)
         self.carrier_slip = 1.0 - self.lock_frac
         self.locked = self.carrier_slip < 0.30  # diagnostic only
 
         # Only recompute carrier_rpm on fresh wheel readings (sync fix)
         if wheel_fresh:
-            self._held_carrier_rpm = wheel_rpm * (1.0 - self.lock_frac)
+            self._held_carrier_rpm = raw_whl * (1.0 - self.lock_frac)
         self.carrier_rpm = self._held_carrier_rpm
 
         # Always run PI — no carrier-lock gating (production behavior)
         self.in_regen = True
 
         # ── PI controller (same as ControlLoop._pi_update) ──
-        target_rpm = wheel_rpm * REGEN_TARGET_SLIP_FRAC
+        target_rpm = REGEN_TARGET_SLIP_RPM
         self.error_rpm = target_rpm - self.carrier_rpm
         self.p_term = REGEN_PI_KP_A_PER_RPM * self.error_rpm
 
@@ -408,7 +410,7 @@ def run_phase2():
     print("=" * 72)
     print("Settings: KP=%.2f  KI=%.2f  max=%.1fA  slew=%.1f A/s  slip_target=%.2f" % (
         REGEN_PI_KP_A_PER_RPM, REGEN_PI_KI_A_PER_RPM_S, REGEN_COMMAND_MAX_A,
-        COMMAND_SLEW_A_PER_S, REGEN_TARGET_SLIP_FRAC))
+        COMMAND_SLEW_A_PER_S, REGEN_TARGET_SLIP_RPM))
     print("Always-REGEN mode (no carrier-lock gating), locked ratio=%.1f" % (
         REGEN_LOCKED_RATIO,))
     print("Integral windup floor=0  Wheel filter: accel=%.0f decel=%.0f RPM/s  max=%.0f RPM" % (
@@ -446,10 +448,10 @@ def run_phase2():
             now = ticks_ms()
 
             last_req = _service_vesc(last_req)
-            wheel_rpm, wheel_valid, wheel_fresh = _read_wheel()
+            wheel_rpm, raw_wheel_rpm, wheel_valid, wheel_fresh = _read_wheel()
 
             cmd_a = trace.update(
-                wheel_rpm, wheel_valid, wheel_fresh,
+                wheel_rpm, raw_wheel_rpm, wheel_valid, wheel_fresh,
                 state.vesc_mech_rpm,
                 state.vesc_bus_voltage_v,
             )

@@ -17,6 +17,7 @@ def _ready_regen(state, wheel_rpm=100.0, motor_rpm=400.0, cap_v=25.0, level=1.0)
     state.inhibit_motor_commands = False
     state.cap_voltage_v = cap_v
     state.wheel_speed_rpm = wheel_rpm
+    state.wheel_speed_raw_rpm = wheel_rpm
     state.wheel_speed_valid = True
     state.wheel_speed_fresh = True
     state.vesc_mech_rpm = motor_rpm

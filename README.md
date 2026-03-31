@@ -16,7 +16,7 @@ stored in a supercapacitor bank rather than a battery.
 |---|---|
 | Raspberry Pi Pico (RP2040) | Application controller — reads sensors, runs state machine, computes current commands |
 | FSESC4.20 (VESC 4.12) | Inner loop — FOC motor control, current regulation, telemetry reporting |
-| Puyan H01 geared hub motor | 250–350 W class, 15 pole pairs, planetary gearbox with one-way freewheel clutch |
+| Puyan H01 geared hub motor | 250–350 W class, 11 pole pairs, planetary gearbox with one-way freewheel clutch |
 | Supercapacitor bank (20 F) | Energy storage — charges via regen braking, discharges during assist |
 | Hall throttle | 3-wire analog (0.8–4.2 V typical), read on Pico ADC0 |
 | Wheel speed hall sensor | Fork-mounted, 6 spoke magnets, digital pulse input on GP9 |
@@ -96,7 +96,7 @@ overrides to ASSIST and clears the hysteresis flag.
 
 The VESC continuously tracks rotor position from back-EMF, even when no
 current is commanded.  It reports electrical RPM in every telemetry packet
-(~20 Hz).  Dividing by the 15 pole pairs gives mechanical RPM.  This
+(~20 Hz).  Dividing by the 11 pole pairs gives mechanical RPM.  This
 passive sensing is sufficient to distinguish a locked carrier (motor spinning)
 from a free carrier (motor still), eliminating the need for a dedicated brake
 input signal.
@@ -337,7 +337,7 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 
 | Constant | Value | Description |
 |---|---|---|
-| VESC_MOTOR_POLE_PAIRS | 15 | Puyan H01 geared hub motor |
+| VESC_MOTOR_POLE_PAIRS | 11 | Puyan H01 geared hub motor |
 | VESC_BAUD_RATE | 115200 | UART communication speed |
 
 ---
@@ -630,7 +630,7 @@ Go to **Motor Settings → FOC → General**.
 
 1. Click **Detect and Calculate** (the wizard icon or RL button).
 2. Enter a small detection current (2–5 A is safe for bench testing).
-3. Set the motor pole pair count: the Puyan H01 has **15 pole pairs** (30
+3. Set the motor pole pair count: the Puyan H01 has **11 pole pairs** (22
    magnets).  If unsure, the wizard will measure this — verify it matches.
 4. Click **Apply** and then the **Write Motor Configuration** button (the
    down-arrow icon in the toolbar) to save to the VESC.

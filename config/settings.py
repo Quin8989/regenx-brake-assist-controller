@@ -97,8 +97,7 @@ THROTTLE_FAULT_HIGH = 4000      # Above this raw count → short-circuit / fault
 
 VESC_BAUD_RATE = 115200                # Verify in VESC Tool → App Settings → UART baud
 
-# Puyan H01-Front Drive Geared Hub Motor — 15 pole pairs (30 magnets) is the
-# standard configuration for 250W-350W Chinese geared hub motors in this class.
+# Puyan H01-Front Drive Geared Hub Motor — 11 pole pairs (22 magnets).
 # VERIFY with VESC Tool → Motor Settings → FOC → Detect and Calculate.
 VESC_MOTOR_POLE_PAIRS = 11
 VESC_ERPM_TO_MECH_RPM = 1.0 / VESC_MOTOR_POLE_PAIRS
@@ -130,10 +129,12 @@ REGEN_MIN_WHEEL_KPH = 2.0
 REGEN_MIN_WHEEL_RPM = (REGEN_MIN_WHEEL_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
 # Calibrated from auto-spin bench data (scripts/bench/test_regen_ratio_motor_spin.py).
 REGEN_LOCKED_RATIO = 4.0               # motor_rpm / wheel_rpm when carrier fully locked (Nr/Ns = 96/24)
-REGEN_TARGET_SLIP_RPM = 12.0            # Fixed carrier-speed deadband (RPM) — ~30% at 5 km/h
+REGEN_LOCK_SNAP_THRESHOLD = 0.90       # lock_fraction above this → treat as fully locked (absorbs sensor noise)
+REGEN_TARGET_SLIP_RPM = 35.0            # Fixed carrier-speed deadband (RPM) — margin for noise up to 40 km/h
 REGEN_COMMAND_MAX_A = 30.0             # Regen command ceiling (A)
 REGEN_PI_KP_A_PER_RPM = 0.0            # Proportional gain disabled — pure integral controller
 REGEN_PI_KI_A_PER_RPM_S = 1.0          # Integral gain — ramps to whatever current the load needs
+REGEN_PI_KI_DECAY_SCALE = 0.1          # Negative-error integral decay fraction (10% of KI)
 REGEN_PI_INTEGRAL_LIMIT_A = 30.0       # Anti-windup clamp — match regen command ceiling
 COMMAND_SLEW_A_PER_S = 30.0             # Shared slew rate for assist and regen commands
 EXCEPTION_LOG_MAX = 10                  # Max exception snapshots kept in RAM ring buffer
@@ -163,6 +164,6 @@ STATE_MACHINE_PERIOD_MS = 10       # ~100 Hz — bounded to prevent free-running
 CONTROL_LOOP_PERIOD_MS = 10        # ~100 Hz
 COMMAND_TRANSMIT_PERIOD_MS = 20    # ~50 Hz
 THROTTLE_SAMPLE_PERIOD_MS = 10     # ~100 Hz
-TELEMETRY_REQUEST_PERIOD_MS = 50   # ~20 Hz
+TELEMETRY_REQUEST_PERIOD_MS = 10   # ~100 Hz — fast updates reduce motor RPM lag
 LCD_REFRESH_PERIOD_MS = 200        # ~5 Hz
 DEBUG_LOG_PERIOD_MS = 500          # ~2 Hz

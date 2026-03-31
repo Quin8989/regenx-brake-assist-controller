@@ -81,19 +81,25 @@ class InputManager:
             self._filtered_wheel_rpm = 0.0
             self._last_wheel_update_ms = None
             s.wheel_speed_rpm = 0.0
+            s.wheel_speed_raw_rpm = 0.0
             s.wheel_speed_valid = False
             return
 
         raw_wheel_rpm = max(0.0, raw_wheel_rpm)
 
         if raw_wheel_rpm > WHEEL_SPEED_MAX_RPM:
+            # Physically impossible — noise edge or missed magnet.
+            # Hold both filtered and raw at their previous values.
             if self._last_wheel_update_ms is not None:
                 s.wheel_speed_rpm = self._filtered_wheel_rpm
                 s.wheel_speed_valid = True
             else:
                 s.wheel_speed_rpm = 0.0
+                s.wheel_speed_raw_rpm = 0.0
                 s.wheel_speed_valid = False
             return
+
+        s.wheel_speed_raw_rpm = raw_wheel_rpm
 
         if self._last_wheel_update_ms is None:
             self._filtered_wheel_rpm = raw_wheel_rpm

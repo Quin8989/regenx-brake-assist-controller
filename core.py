@@ -117,6 +117,7 @@ class SharedState:
 
         # --- Wheel speed input for regen slip control ---
         self.wheel_speed_rpm = 0.0
+        self.wheel_speed_raw_rpm = 0.0
         self.wheel_speed_valid = False
         self.wheel_speed_fresh = False
         self.gear_carrier_speed_rpm = 0.0

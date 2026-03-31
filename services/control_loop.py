@@ -47,9 +47,11 @@ from config.settings import (
     MOTOR_CURRENT_MAX_A,
     REGEN_COMMAND_MAX_A,
     REGEN_LOCKED_RATIO,
+    REGEN_LOCK_SNAP_THRESHOLD,
     REGEN_MIN_WHEEL_RPM,
     REGEN_PI_INTEGRAL_LIMIT_A,
     REGEN_PI_KI_A_PER_RPM_S,
+    REGEN_PI_KI_DECAY_SCALE,
     REGEN_PI_KP_A_PER_RPM,
     REGEN_TARGET_SLIP_RPM,
     VCAP_SOFT_REGEN_CUTOFF,
@@ -60,6 +62,13 @@ from utils import SlewLimiter, clamp
 # Precomputed loop constants
 _DT_S = CONTROL_LOOP_PERIOD_MS / 1000.0
 _SLEW_DELTA = COMMAND_SLEW_A_PER_S * _DT_S
+
+# Carrier RPM rate limiter: allow free drops (carrier locking) but limit how
+# fast carrier_rpm can rise.  This caps the damage from a stale motor-RPM
+# telemetry update making the carrier *appear* to unlock suddenly.
+# 50 RPM/s ≈ full carrier range over ~1.3 s — fast enough for real unlock,
+# slow enough to absorb a single 50–100 ms telemetry gap.
+_CARRIER_MAX_RISE_RPM_PER_S = 50.0
 
 
 class ControlLoop:
@@ -78,6 +87,10 @@ class ControlLoop:
         self._regen_slew = SlewLimiter(max_delta=_SLEW_DELTA)
         # Integral state for regen PI loop. Represents accumulated correction (A).
         self._regen_integral_a = 0.0
+        # PI target for the slew limiter — updated on fresh edges, ramped every cycle.
+        self._regen_pi_target_a = 0.0
+        # Held carrier RPM — rate-limited to prevent stale motor RPM spikes.
+        self._carrier_rpm = 0.0
         # Timestamp of last fresh wheel edge used for real PI dt measurement.
         # None = no edge yet.
         self._last_edge_ms = None
@@ -152,33 +165,49 @@ class ControlLoop:
             return
 
         # PI advances only on a fresh wheel edge.
-        if not s.wheel_speed_fresh:
-            return
+        if s.wheel_speed_fresh:
+            # Measure real dt since last edge for accurate integration.
+            now_ms = ticks_ms()
+            first_edge = self._last_edge_ms is None
+            if not first_edge:
+                dt_s = max(ticks_diff(now_ms, self._last_edge_ms) / 1000.0, _DT_S)
+            else:
+                dt_s = _DT_S  # fallback for the very first edge
+            self._last_edge_ms = now_ms
 
-        # Measure real dt since last edge for accurate integration.
-        now_ms = ticks_ms()
-        if self._last_edge_ms is not None:
-            dt_s = ticks_diff(now_ms, self._last_edge_ms) / 1000.0
-        else:
-            dt_s = _DT_S  # fallback for the very first edge
-        self._last_edge_ms = now_ms
+            # Pair raw wheel speed with current motor speed for carrier estimation.
+            # Raw (unfiltered) wheel RPM avoids the filter lag that creates phantom
+            # slip during braking — both signals update at their true sensor rate.
+            raw_wheel_rpm = max(0.0, s.wheel_speed_raw_rpm)
+            raw_carrier = self._estimate_carrier_rpm(raw_wheel_rpm, s.vesc_mech_rpm)
 
-        # Pair wheel speed with current motor speed — naturally synchronized.
-        carrier_rpm = self._estimate_carrier_rpm(wheel_rpm, s.vesc_mech_rpm)
-        s.gear_carrier_speed_rpm = carrier_rpm
+            # Rate-limit carrier RPM: it can drop freely (carrier locking)
+            # but can only rise at a bounded rate.  This prevents a single
+            # stale motor-RPM update from spiking carrier and nuking the integral.
+            # On the very first edge after reset, accept the raw value as-is.
+            if first_edge:
+                self._carrier_rpm = raw_carrier
+            else:
+                max_rise = _CARRIER_MAX_RISE_RPM_PER_S * dt_s
+                if raw_carrier > self._carrier_rpm + max_rise:
+                    self._carrier_rpm += max_rise
+                else:
+                    self._carrier_rpm = raw_carrier
+            s.gear_carrier_speed_rpm = self._carrier_rpm
 
-        # Fixed deadband — carrier must be this far below wheel speed
-        # before the PI commands regen current.
-        target_rpm = REGEN_TARGET_SLIP_RPM
+            # Fixed deadband — carrier must be this far below wheel speed
+            # before the PI commands regen current.
+            target_rpm = REGEN_TARGET_SLIP_RPM
 
-        # PI controller
-        error_rpm = target_rpm - carrier_rpm
-        s.regen_speed_error_rpm = error_rpm
-        base_current_a = self._pi_update(error_rpm, dt_s)
+            # PI controller
+            error_rpm = target_rpm - self._carrier_rpm
+            s.regen_speed_error_rpm = error_rpm
+            base_current_a = self._pi_update(error_rpm, dt_s)
 
-        # Smooth and clamp
-        target = clamp(base_current_a, 0.0, REGEN_COMMAND_MAX_A)
-        s.regen_command_request = self._regen_slew.update(target)
+            self._regen_pi_target_a = clamp(base_current_a, 0.0, REGEN_COMMAND_MAX_A)
+
+        # Slew runs every cycle so ramp rate is time-accurate (~100 Hz).
+        s.regen_command_request = self._regen_slew.update(self._regen_pi_target_a)
 
     # -- Regen helpers (one job each) --
 
@@ -190,10 +219,17 @@ class ControlLoop:
         lock_fraction → 1, carrier_rpm → 0 → positive PI error → brake.
         Carrier free (coasting): motor RPM ≈ 0, lock_fraction → 0,
         carrier_rpm → wheel_rpm → negative error → integral stays at 0.
+
+        Lock-fraction deadband: when lock_fraction ≥ LOCK_SNAP_THRESHOLD
+        (e.g. 0.90), snap to fully locked (carrier_rpm = 0).  This absorbs
+        sensor noise from the 3-magnet wheel hall that would otherwise
+        create phantom carrier slip at riding speeds.
         """
         motor_rpm = abs(motor_rpm)
         locked_motor_rpm = max(1e-6, wheel_rpm * REGEN_LOCKED_RATIO)
         lock_fraction = clamp(motor_rpm / locked_motor_rpm, 0.0, 1.0)
+        if lock_fraction >= REGEN_LOCK_SNAP_THRESHOLD:
+            return 0.0
         return wheel_rpm * (1.0 - lock_fraction)
 
     def _pi_update(self, error_rpm, dt_s):
@@ -201,10 +237,19 @@ class ControlLoop:
 
         *dt_s* is the measured interval between wheel-speed edges so the
         integral accumulates at the true sensor rate, not the fixed loop rate.
+
+        Asymmetric integration: positive error (carrier locked, need more
+        brake) integrates at full KI.  Negative error (apparent slip or
+        stale motor RPM spike) decays the integral at KI × DECAY_SCALE.
+        This prevents a single bad telemetry reading from nuking the
+        accumulated brake command.
         """
         p_term = REGEN_PI_KP_A_PER_RPM * error_rpm
 
-        self._regen_integral_a += REGEN_PI_KI_A_PER_RPM_S * error_rpm * dt_s
+        if error_rpm >= 0.0:
+            self._regen_integral_a += REGEN_PI_KI_A_PER_RPM_S * error_rpm * dt_s
+        else:
+            self._regen_integral_a += (REGEN_PI_KI_A_PER_RPM_S * REGEN_PI_KI_DECAY_SCALE) * error_rpm * dt_s
         self._regen_integral_a = clamp(
             self._regen_integral_a,
             0.0,
@@ -219,4 +264,6 @@ class ControlLoop:
     def _reset_regen(self):
         self._regen_slew.reset(0.0)
         self._regen_integral_a = 0.0
+        self._regen_pi_target_a = 0.0
+        self._carrier_rpm = 0.0
         self._last_edge_ms = None
