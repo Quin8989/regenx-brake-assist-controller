@@ -153,5 +153,5 @@ print("Ratio robust:  %.3f" % robust)
 
 suggested = round(robust, 2)
 print()
-print("Suggested REGEN_LOCKED_RATIO: %.2f" % suggested)
+print("Measured motor/wheel gear ratio: %.2f" % suggested)
 print("Done")

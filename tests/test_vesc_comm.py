@@ -84,11 +84,10 @@ class TestServiceRxSingleFrame:
         assert abs(state.vesc_motor_current_a - 25.0) < 0.01
         assert abs(state.vesc_input_current_a - 12.0) < 0.01
 
-    def test_populates_dq_currents(self):
+    def test_populates_iq_current(self):
         uart, state, vc = _make()
-        uart._rx_buf.extend(_build_telemetry_frame(avg_id=220, avg_iq=-330))
+        uart._rx_buf.extend(_build_telemetry_frame(avg_iq=-330))
         vc.service_rx()
-        assert abs(state.vesc_id_current_a - 2.2) < 0.01
         assert abs(state.vesc_iq_current_a + 3.3) < 0.01
 
     def test_populates_duty_cycle(self):
@@ -96,27 +95,6 @@ class TestServiceRxSingleFrame:
         uart._rx_buf.extend(_build_telemetry_frame(duty=750))
         vc.service_rx()
         assert abs(state.vesc_duty_cycle - 0.75) < 0.001
-
-    def test_populates_ah_fields(self):
-        uart, state, vc = _make()
-        uart._rx_buf.extend(_build_telemetry_frame(ah=10000, ah_charged=5000))
-        vc.service_rx()
-        assert abs(state.vesc_ah - 1.0) < 0.0001
-        assert abs(state.vesc_ah_charged - 0.5) < 0.0001
-
-    def test_populates_wh_fields(self):
-        uart, state, vc = _make()
-        uart._rx_buf.extend(_build_telemetry_frame(wh=20000, wh_charged=8000))
-        vc.service_rx()
-        assert abs(state.vesc_wh - 2.0) < 0.0001
-        assert abs(state.vesc_wh_charged - 0.8) < 0.0001
-
-    def test_populates_tach_fields(self):
-        uart, state, vc = _make()
-        uart._rx_buf.extend(_build_telemetry_frame(tach=1234, tach_abs=5678))
-        vc.service_rx()
-        assert state.vesc_tach == 1234
-        assert state.vesc_tach_abs == 5678
 
     def test_updates_last_rx_timestamp(self):
         uart, state, vc = _make()
@@ -172,21 +150,18 @@ class TestSendCommands:
         set_clock_ms(500)
         vc.send_assist(15.0)
         assert len(uart._tx_buf) > 0
-        assert state.last_command_tx_ms == 500
 
     def test_send_regen_writes_uart(self):
         uart, state, vc = _make()
         set_clock_ms(600)
         vc.send_regen(10.0)
         assert len(uart._tx_buf) > 0
-        assert state.last_command_tx_ms == 600
 
     def test_send_neutral_writes_uart(self):
         uart, state, vc = _make()
         set_clock_ms(700)
         vc.send_neutral()
         assert len(uart._tx_buf) > 0
-        assert state.last_command_tx_ms == 700
 
     def test_request_telemetry_writes_uart(self):
         uart, state, vc = _make()

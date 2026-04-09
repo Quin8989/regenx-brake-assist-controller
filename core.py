@@ -87,7 +87,6 @@ class SharedState:
 
         # --- Local measurements ---
         self.cap_voltage_v = 0.0
-        self.cap_energy_j = 0.0
         self.cap_energy_percent = 0.0
 
         # --- Throttle ---
@@ -97,31 +96,25 @@ class SharedState:
         self.requested_level = 0.0
 
         # --- VESC telemetry ---
+        # Fields populated by vesc_comm._handle_payload() each packet.
+        # Additional fields (ah, wh, tach, id) are decoded from the wire
+        # format but discarded — bench scripts read them directly via
+        # vesc_comm.service_rx() if needed.
         self.vesc_bus_voltage_v = 0.0
         self.vesc_motor_current_a = 0.0
         self.vesc_input_current_a = 0.0
-        self.vesc_id_current_a = 0.0
         self.vesc_iq_current_a = 0.0
-        self.vesc_rpm = 0
         self.vesc_mech_rpm = 0.0
         self.vesc_duty_cycle = 0.0
         self.vesc_fault_code = 0
         self.vesc_temp_fet_c = 0.0
         self.vesc_temp_motor_c = 0.0
-        self.vesc_ah = 0.0              # Cumulative amp-hours consumed
-        self.vesc_ah_charged = 0.0      # Cumulative amp-hours regenerated
-        self.vesc_wh = 0.0              # Cumulative watt-hours consumed
-        self.vesc_wh_charged = 0.0      # Cumulative watt-hours regenerated
-        self.vesc_tach = 0              # Tachometer (signed, half-ERPM counts)
-        self.vesc_tach_abs = 0          # Tachometer absolute (unsigned)
 
-        # --- Wheel speed input for regen slip control ---
+        # --- Wheel speed input (optional — used for LCD display only) ---
         self.wheel_speed_rpm = 0.0
         self.wheel_speed_raw_rpm = 0.0
         self.wheel_speed_valid = False
         self.wheel_speed_fresh = False
-        self.gear_carrier_speed_rpm = 0.0
-        self.regen_speed_error_rpm = 0.0
 
         # --- Command requests ---
         self.assist_command_request = 0.0
@@ -129,7 +122,6 @@ class SharedState:
 
         # --- Timestamps (ms) ---
         self.last_vesc_rx_ms = 0
-        self.last_command_tx_ms = 0
 
         # --- Exception diagnostics ---
         self.last_exception_str = ""
@@ -162,7 +154,6 @@ class EnergyEstimator:
         v = self._state.cap_voltage_v
 
         energy_j = _HALF_C * v * v
-        self._state.cap_energy_j = energy_j
 
         if _E_RANGE > 0.0:
             pct = (energy_j - _E_MIN) / _E_RANGE * 100.0

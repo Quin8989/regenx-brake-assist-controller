@@ -27,14 +27,12 @@ class BenchLogger:
             ticks_ms(),
             s.system_state,
             s.cap_voltage_v,
-            s.wheel_speed_rpm,
             s.vesc_mech_rpm,
+            s.vesc_motor_current_a,
             s.requested_mode,
             s.requested_level,
             s.assist_command_request,
             s.regen_command_request,
-            s.gear_carrier_speed_rpm,
-            s.regen_speed_error_rpm,
         )
         self._buf[self._idx] = record
         self._idx = (self._idx + 1) % self._max

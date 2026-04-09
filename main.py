@@ -4,14 +4,12 @@
 #  1. Poll local inputs
 #  2. Service UART receive / parse inbound VESC packets
 #  3. Refresh VESC telemetry requests if due
-#  4. Energy estimation
-#  5. Run safety supervisor
-#  6. Run state machine
-#  7. Run control loop
-#  8. Run command manager (transmit assist / regen / neutral)
-#  9. Update LCD
-# 10. Emit low-rate debug logs
-# 11. Bench data capture
+#  4. Run safety supervisor
+#  5. Run state machine
+#  6. Run control loop
+#  7. Run command manager (transmit assist / regen / neutral)
+#  8. Energy estimation + Update LCD
+#  9. Bench data capture
 
 import sys
 
@@ -106,7 +104,6 @@ def main():
         command_mgr=command_mgr,
         energy=energy,
         display_mgr=display_mgr,
-        logger=logger,
         reset_button=reset_button,
         fault_manager=faults,
         bench_logger=bench_log,

@@ -57,7 +57,6 @@ def _make_app():
         command_mgr=noop,
         energy=noop,
         display_mgr=noop,
-        logger=noop,
         reset_button=btn,
         fault_manager=fm,
     )
@@ -65,11 +64,15 @@ def _make_app():
 
 
 class TestSoftReset:
-    def test_reset_clears_latching_fault_and_returns_to_off(self):
+    def test_reset_clears_faults_commands_and_returns_to_off(self):
         s, fm, cl, btn, app = _make_app()
         s.system_state = SystemState.FAULT
         fm.set_fault(FaultCode.OVERVOLTAGE)
         s.inhibit_motor_commands = True
+        s.assist_command_request = 10.0
+        s.regen_command_request = 5.0
+        s.requested_mode = CommandMode.ASSIST
+        s.requested_level = 0.8
 
         btn.press()
         app.update()
@@ -77,30 +80,8 @@ class TestSoftReset:
         assert fm.has_fault() is False
         assert s.system_state == SystemState.OFF
         assert s.inhibit_motor_commands is True  # inhibited until COAST
-
-    def test_reset_zeros_command_requests(self):
-        s, fm, cl, btn, app = _make_app()
-        s.system_state = SystemState.FAULT
-        fm.set_fault(FaultCode.INTERNAL)
-        s.assist_command_request = 10.0
-        s.regen_command_request = 5.0
-
-        btn.press()
-        app.update()
-
         assert s.assist_command_request == 0.0
         assert s.regen_command_request == 0.0
-
-    def test_reset_clears_requested_mode(self):
-        s, fm, cl, btn, app = _make_app()
-        s.system_state = SystemState.FAULT
-        fm.set_fault(FaultCode.INTERNAL)
-        s.requested_mode = CommandMode.ASSIST
-        s.requested_level = 0.8
-
-        btn.press()
-        app.update()
-
         assert s.requested_mode == CommandMode.NEUTRAL
         assert s.requested_level == 0.0
 

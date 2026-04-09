@@ -40,7 +40,7 @@ class TestBenchLoggerBasic:
         state = SharedState()
         state.system_state = SystemState.ASSIST
         state.cap_voltage_v = 25.5
-        state.wheel_speed_rpm = 100.0
+        state.vesc_mech_rpm = 100.0
         bl = BenchLogger(state, max_records=10)
         _set_tick(1234)
         bl.snapshot()
@@ -48,7 +48,7 @@ class TestBenchLoggerBasic:
         assert rec[0] == 1234          # tick_ms
         assert rec[1] == "ASSIST"       # system_state
         assert rec[2] == 25.5           # cap_voltage_v
-        assert rec[3] == 100.0          # wheel_speed_rpm
+        assert rec[3] == 100.0          # vesc_mech_rpm
 
     def test_count_up_to_max(self):
         bl = BenchLogger(SharedState(), max_records=5)
@@ -138,21 +138,19 @@ class TestBenchLoggerFields:
         bl = BenchLogger(SharedState(), max_records=5)
         bl.snapshot()
         rec = bl._buf[0]
-        # 1 timestamp + 10 state fields = 11
-        assert len(rec) == 11
+        # 1 timestamp + 8 state fields = 9
+        assert len(rec) == 9
 
     def test_all_fields_from_state(self):
         state = SharedState()
         state.system_state = SystemState.REGEN
         state.cap_voltage_v = 30.0
-        state.wheel_speed_rpm = 50.0
         state.vesc_mech_rpm = 245.0
+        state.vesc_motor_current_a = 15.0
         state.requested_mode = CommandMode.REGEN
         state.requested_level = 0.75
         state.assist_command_request = 0.0
         state.regen_command_request = 12.5
-        state.gear_carrier_speed_rpm = 248.0
-        state.regen_speed_error_rpm = 3.0
         bl = BenchLogger(state, max_records=5)
         _set_tick(999)
         bl.snapshot()
@@ -161,12 +159,10 @@ class TestBenchLoggerFields:
             999,
             "REGEN",
             30.0,
-            50.0,
             245.0,
+            15.0,
             "REGEN",
             0.75,
             0.0,
             12.5,
-            248.0,
-            3.0,
         )

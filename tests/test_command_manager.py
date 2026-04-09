@@ -23,16 +23,14 @@ def _make():
     return state, uart, cm
 
 
-class TestInhibit:
+class TestCommandManager:
     def test_inhibit_sends_neutral(self):
         s, uart, cm = _make()
         s.inhibit_motor_commands = True
         s.assist_command_request = 30.0
         s.regen_command_request = 20.0
         cm.update()
-        # Should have sent a set_current(0) frame
         assert len(uart.sent) == 1
-        # Verify opcode 6 (COMM_SET_CURRENT) with 0 mA
         import struct
         from services.vesc_protocol import COMM_SET_CURRENT, _extract_payload
         payload, _ = _extract_payload(bytearray(uart.sent[0]))
@@ -40,8 +38,6 @@ class TestInhibit:
         value = struct.unpack(">i", payload[1:5])[0]
         assert value == 0
 
-
-class TestAssistCommand:
     def test_sends_assist_current(self):
         s, uart, cm = _make()
         s.inhibit_motor_commands = False
@@ -55,8 +51,6 @@ class TestAssistCommand:
         value = struct.unpack(">i", payload[1:5])[0]
         assert value == 15500
 
-
-class TestRegenCommand:
     def test_sends_regen_current(self):
         s, uart, cm = _make()
         s.inhibit_motor_commands = False
@@ -70,8 +64,6 @@ class TestRegenCommand:
         value = struct.unpack(">i", payload[1:5])[0]
         assert value == 20000
 
-
-class TestNeutral:
     def test_neutral_when_no_requests(self):
         s, uart, cm = _make()
         s.inhibit_motor_commands = False
@@ -85,8 +77,6 @@ class TestNeutral:
         value = struct.unpack(">i", payload[1:5])[0]
         assert value == 0
 
-
-class TestPriority:
     def test_assist_wins_if_both_nonzero(self):
         """If control loop accidentally sets both, assist takes priority."""
         s, uart, cm = _make()

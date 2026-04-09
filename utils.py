@@ -23,26 +23,6 @@ def linear_map(x, in_lo, in_hi, out_lo, out_hi):
     return out_lo + (x - in_lo) * (out_hi - out_lo) / (in_hi - in_lo)
 
 
-class SlewLimiter:
-    """Rate limiter — clamps change per call to ±max_delta."""
-
-    def __init__(self, max_delta, initial=0.0):
-        self.max_delta = max_delta
-        self.value = initial
-
-    def update(self, target):
-        delta = target - self.value
-        if delta > self.max_delta:
-            delta = self.max_delta
-        elif delta < -self.max_delta:
-            delta = -self.max_delta
-        self.value += delta
-        return self.value
-
-    def reset(self, value=0.0):
-        self.value = value
-
-
 class PeriodicTimer:
     """Non-blocking periodic timer for cooperative scheduling."""
 

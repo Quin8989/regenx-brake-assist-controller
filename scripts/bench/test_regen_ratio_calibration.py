@@ -1,7 +1,7 @@
 # scripts/bench/test_regen_ratio_calibration.py
 #
 # Measure motor-to-wheel speed ratio from live telemetry while riding with
-# steady throttle, then print a suggested REGEN_LOCKED_RATIO.
+# steady throttle, then print the measured gear ratio.
 #
 # Run:
 #   mpremote mount . run scripts/bench/test_regen_ratio_calibration.py
@@ -22,7 +22,6 @@ from drivers.throttle import Throttle
 from drivers.wheel_speed_hall import WheelSpeedHall
 from services.vesc_comm import UARTPort, VESCComm
 
-from config.settings import REGEN_MIN_WHEEL_RPM
 
 REQUEST_PERIOD_MS = 50
 SAMPLE_PERIOD_MS = 20
@@ -32,7 +31,7 @@ PRINT_PERIOD_MS = 250
 # Filter out poor-quality samples.
 # Keep this low so light throttle in a stand test still captures samples.
 MIN_THROTTLE_FRAC = 0.05
-MIN_WHEEL_RPM = REGEN_MIN_WHEEL_RPM
+MIN_WHEEL_RPM = 5.0  # Low floor for calibration; just reject noise
 MIN_MOTOR_RPM = 40.0
 
 
@@ -141,8 +140,8 @@ print("Ratio robust:  %.3f" % robust_mean)
 
 suggested = round(robust_mean, 2)
 print()
-print("Suggested REGEN_LOCKED_RATIO: %.2f" % suggested)
-print("Set this in config/settings.py and redeploy.")
+print("Measured motor/wheel gear ratio: %.2f" % suggested)
+print("Use this to verify VESC_MOTOR_POLE_PAIRS and gear assumptions.")
 
 if suggested < 1.5:
     print("Note: ratio near 1 suggests direct-drive behavior or scaling mismatch.")

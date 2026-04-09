@@ -1,7 +1,8 @@
 # tests/test_input_manager.py — InputManager mode arbitration and state population
 
-from tests.conftest import advance_ms
+from tests.conftest import advance_ms, set_clock_ms
 
+from config.settings import REGEN_ENTRY_RPM, REGEN_EXIT_RPM, REGEN_HOLDOFF_MS
 from core import CommandMode, SharedState
 from services.input_manager import InputManager
 
@@ -47,115 +48,165 @@ class TestModeArbitration:
         assert s.requested_mode == CommandMode.ASSIST
         assert abs(s.requested_level - 0.6) < 0.01
 
-    def test_regen_when_throttle_off_and_wheel_moving(self):
-        """Throttle off + wheel valid above min → REGEN (regardless of motor RPM)."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
+    def test_regen_when_motor_spinning_after_holdoff(self):
+        """Throttle off + holdoff expired + motor RPM above entry → REGEN."""
+        s, t, im = _make()
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 5.0  # motor nearly stopped — coasting
-        im.update()
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 10.0
+        set_clock_ms(0)
+        im.update()  # starts holdoff
+        advance_ms(REGEN_HOLDOFF_MS + 1)
+        im.update()  # holdoff expired → REGEN
         assert s.requested_mode == CommandMode.REGEN
         assert s.requested_level == 1.0
 
-    def test_regen_when_carrier_locked(self):
-        """Throttle off + motor coupled (carrier locked by brake) → REGEN."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
+    def test_neutral_during_holdoff(self):
+        """Motor spinning but still within holdoff window → NEUTRAL."""
+        s, t, im = _make()
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = 288.0
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 50.0
+        set_clock_ms(0)
         im.update()
-        assert s.requested_mode == CommandMode.REGEN
-        assert s.requested_level == 1.0
+        advance_ms(REGEN_HOLDOFF_MS - 1)
+        im.update()
+        assert s.requested_mode == CommandMode.NEUTRAL
 
-    def test_regen_when_carrier_locked_negative_motor_rpm(self):
-        """Negative motor RPM sign should still be REGEN."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
+    def test_regen_with_negative_motor_rpm(self):
+        """Negative motor RPM sign should still trigger REGEN."""
+        s, t, im = _make()
         t.fraction = 0.0
         t.is_valid = True
-        s.vesc_mech_rpm = -288.0
+        s.vesc_mech_rpm = -(REGEN_ENTRY_RPM + 10.0)
+        set_clock_ms(0)
+        im.update()
+        advance_ms(REGEN_HOLDOFF_MS + 1)
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
     def test_assist_overrides_regen(self):
-        """Throttle active + wheel moving → ASSIST (throttle always wins)."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
+        """Throttle active + motor spinning → ASSIST (throttle always wins)."""
+        s, t, im = _make()
         t.fraction = 0.8
         t.is_valid = True
-        s.vesc_mech_rpm = 288.0
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 50.0
         im.update()
         assert s.requested_mode == CommandMode.ASSIST
 
-    def test_neutral_when_wheel_below_min_rpm(self):
-        """Wheel too slow → NEUTRAL."""
-        wheel = _FakeWheel(rpm=10.0, valid=True)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-        s.vesc_mech_rpm = 29.0
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
-
-    def test_neutral_when_wheel_invalid(self):
-        """Wheel speed invalid → NEUTRAL regardless of motor speed."""
-        wheel = _FakeWheel(rpm=100.0, valid=False)
-        s, t, im = _make(wheel=wheel)
-        t.fraction = 0.0
-        t.is_valid = True
-        s.vesc_mech_rpm = 288.0
-        im.update()
-        assert s.requested_mode == CommandMode.NEUTRAL
-
-    def test_neutral_when_no_wheel_driver(self):
+    def test_neutral_when_motor_below_entry_rpm(self):
+        """Motor RPM below entry threshold → NEUTRAL."""
         s, t, im = _make()
         t.fraction = 0.0
         t.is_valid = True
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM - 5.0
+        set_clock_ms(0)
+        im.update()
+        advance_ms(REGEN_HOLDOFF_MS + 1)
         im.update()
         assert s.requested_mode == CommandMode.NEUTRAL
 
-    def test_regen_regardless_of_carrier_slip(self):
-        """Any motor RPM → REGEN as long as wheel is valid and above min."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
+    def test_neutral_when_motor_stopped(self):
+        """Motor RPM at zero (coasting on freewheel) → NEUTRAL."""
+        s, t, im = _make()
         t.fraction = 0.0
         t.is_valid = True
-
-        # Fully decoupled (coast)
         s.vesc_mech_rpm = 0.0
+        set_clock_ms(0)
         im.update()
-        assert s.requested_mode == CommandMode.REGEN
-
-        # Partially coupled
-        s.vesc_mech_rpm = 180.0
+        advance_ms(REGEN_HOLDOFF_MS + 1)
         im.update()
-        assert s.requested_mode == CommandMode.REGEN
+        assert s.requested_mode == CommandMode.NEUTRAL
 
-        # Fully locked
-        s.vesc_mech_rpm = 300.0
-        im.update()
-        assert s.requested_mode == CommandMode.REGEN
-
-    def test_regen_to_assist_to_regen_no_hysteresis(self):
-        """Transitioning through ASSIST and back should immediately re-enter REGEN."""
-        wheel = _FakeWheel(rpm=100.0, valid=True)
-        s, t, im = _make(wheel=wheel)
+    def test_hysteresis_stays_in_regen_above_exit(self):
+        """Once in REGEN, stays in REGEN until motor RPM drops below exit threshold."""
+        s, t, im = _make()
         t.fraction = 0.0
         t.is_valid = True
-
-        # REGEN
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 10.0
+        set_clock_ms(0)
+        im.update()
+        advance_ms(REGEN_HOLDOFF_MS + 1)
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
-        # Apply throttle → ASSIST
+        # Drop below entry but above exit — should stay REGEN
+        s.vesc_mech_rpm = (REGEN_ENTRY_RPM + REGEN_EXIT_RPM) / 2.0
+        advance_ms(10)
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
+
+    def test_hysteresis_exits_regen_below_exit(self):
+        """Motor RPM dropping below exit threshold → NEUTRAL."""
+        s, t, im = _make()
+        t.fraction = 0.0
+        t.is_valid = True
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 10.0
+        set_clock_ms(0)
+        im.update()
+        advance_ms(REGEN_HOLDOFF_MS + 1)
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
+
+        # Drop below exit
+        s.vesc_mech_rpm = REGEN_EXIT_RPM - 1.0
+        advance_ms(10)
+        im.update()
+        assert s.requested_mode == CommandMode.NEUTRAL
+
+    def test_regen_to_assist_to_regen_with_holdoff(self):
+        """Transitioning through ASSIST resets holdoff timer."""
+        s, t, im = _make()
+        t.fraction = 0.0
+        t.is_valid = True
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 10.0
+        set_clock_ms(0)
+        im.update()
+        advance_ms(REGEN_HOLDOFF_MS + 1)
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
+
+        # Apply throttle → ASSIST (resets holdoff)
         t.fraction = 0.5
+        advance_ms(10)
         im.update()
         assert s.requested_mode == CommandMode.ASSIST
 
-        # Release throttle → back to REGEN immediately
+        # Release throttle — holdoff restarts, so first cycle is NEUTRAL
         t.fraction = 0.0
+        advance_ms(10)
+        im.update()
+        assert s.requested_mode == CommandMode.NEUTRAL
+
+        # After holdoff expires → back to REGEN
+        advance_ms(REGEN_HOLDOFF_MS + 1)
+        im.update()
+        assert s.requested_mode == CommandMode.REGEN
+
+    def test_holdoff_resets_on_throttle_reapply(self):
+        """Holdoff timer resets each time throttle is applied then released."""
+        s, t, im = _make()
+        s.vesc_mech_rpm = REGEN_ENTRY_RPM + 10.0
+        t.fraction = 0.0
+        t.is_valid = True
+        set_clock_ms(0)
+        im.update()
+
+        advance_ms(REGEN_HOLDOFF_MS - 50)  # almost expired
+        # Brief throttle blip
+        t.fraction = 0.1
+        im.update()
+        t.fraction = 0.0
+        advance_ms(10)
+        im.update()
+
+        # Holdoff should have restarted — not yet expired
+        advance_ms(REGEN_HOLDOFF_MS - 50)
+        im.update()
+        assert s.requested_mode == CommandMode.NEUTRAL
+
+        # Now it expires
+        advance_ms(60)
         im.update()
         assert s.requested_mode == CommandMode.REGEN
 
@@ -182,7 +233,7 @@ class TestThrottleStatePropagation:
         assert t._updated is True
 
 
-# ── Wheel speed integration ──────────────────────────────────────────────
+# ── Wheel speed integration (optional sensor — LCD display only) ─────────
 
 class TestWheelSpeedIntegration:
     def test_wheel_speed_populated(self):

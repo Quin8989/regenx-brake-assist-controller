@@ -4,6 +4,8 @@
 # supervisor → state machine → command manager, the VESC receives a zero/neutral
 # command within a single update cycle (well under 100 ms at 100 Hz).
 
+import pytest
+
 from tests.conftest import set_clock_ms
 from core import CommandMode, FaultCode, FaultManager, SharedState, SystemState
 from services.safety_supervisor import SafetySupervisor
@@ -35,39 +37,13 @@ def _run_chain(safety, sm, cl, cmd):
 
 
 class TestFaultToZero:
-    def test_overvoltage_inhibits_in_one_cycle(self):
-        """TC-12 / TC-13: Overvoltage fault → zero command in a single cycle."""
-        state, faults, safety, sm, cl, uart, cmd = _make_system()
-
-        # Start in ASSIST with active current
-        state.system_state = SystemState.ASSIST
-        state.cap_voltage_v = 25.0
-        state.throttle_valid = True
-        state.inhibit_motor_commands = False
-        state.requested_mode = CommandMode.ASSIST
-        state.requested_level = 1.0
-        state.last_vesc_rx_ms = 1000
-        set_clock_ms(1000)
-
-        # Run one cycle to have a live assist command
-        _run_chain(safety, sm, cl, cmd)
-        assert state.system_state == SystemState.ASSIST
-
-        # Inject overvoltage
-        state.cap_voltage_v = 43.0
-        uart._tx_buf.clear()
-
-        # Single cycle should detect fault, transition to FAULT, send neutral
-        _run_chain(safety, sm, cl, cmd)
-        assert state.system_state == SystemState.FAULT
-        assert state.inhibit_motor_commands is True
-        assert state.assist_command_request == 0.0
-        assert state.regen_command_request == 0.0
-        # UART should have had a neutral command written
-        assert len(uart._tx_buf) > 0
-
-    def test_vesc_timeout_inhibits_in_one_cycle(self):
-        """VESC timeout fault → zero command in one cycle."""
+    @pytest.mark.parametrize("fault_type,inject", [
+        ("overvoltage", {"cap_voltage_v": 43.0}),
+        ("vesc_timeout", {"_advance_time": True}),
+        ("vesc_fault_code", {"vesc_fault_code": 3}),
+    ])
+    def test_fault_inhibits_in_one_cycle(self, fault_type, inject):
+        """TC-12 / TC-13: Any critical fault → zero command in a single cycle."""
         state, faults, safety, sm, cl, uart, cmd = _make_system()
 
         state.system_state = SystemState.ASSIST
@@ -80,36 +56,21 @@ class TestFaultToZero:
         set_clock_ms(100)
 
         _run_chain(safety, sm, cl, cmd)
+        assert state.system_state == SystemState.ASSIST
 
-        # Advance time past telemetry timeout
-        set_clock_ms(100 + 600)  # well past 500ms timeout
+        # Inject the fault condition
+        if inject.get("_advance_time"):
+            set_clock_ms(100 + 600)  # past 500ms telemetry timeout
+        else:
+            for attr, val in inject.items():
+                setattr(state, attr, val)
+
         uart._tx_buf.clear()
-
         _run_chain(safety, sm, cl, cmd)
         assert state.system_state == SystemState.FAULT
         assert state.inhibit_motor_commands is True
-        assert len(uart._tx_buf) > 0
-
-    def test_vesc_fault_code_inhibits_in_one_cycle(self):
-        """VESC internal fault code → inhibit in one cycle."""
-        state, faults, safety, sm, cl, uart, cmd = _make_system()
-
-        state.system_state = SystemState.REGEN
-        state.cap_voltage_v = 25.0
-        state.throttle_valid = True
-        state.inhibit_motor_commands = False
-        state.requested_mode = CommandMode.REGEN
-        state.requested_level = 1.0
-        state.last_vesc_rx_ms = 1000
-        set_clock_ms(1000)
-
-        # Inject VESC fault code (e.g., 3 = DRV fault)
-        state.vesc_fault_code = 3
-        uart._tx_buf.clear()
-
-        _run_chain(safety, sm, cl, cmd)
-        assert state.system_state == SystemState.FAULT
-        assert state.inhibit_motor_commands is True
+        assert state.assist_command_request == 0.0
+        assert state.regen_command_request == 0.0
         assert len(uart._tx_buf) > 0
 
     def test_throttle_fault_during_assist(self):
@@ -143,10 +104,8 @@ class TestFaultToZero:
         state.cap_voltage_v = 25.0
         state.throttle_valid = True
         state.inhibit_motor_commands = False
-        state.wheel_speed_rpm = 100.0
-        state.wheel_speed_valid = True
-        state.wheel_speed_fresh = True
         state.vesc_mech_rpm = 500.0
+        state.vesc_motor_current_a = 20.0
         state.requested_mode = CommandMode.REGEN
         state.requested_level = 1.0
         state.last_vesc_rx_ms = 1000
@@ -154,6 +113,7 @@ class TestFaultToZero:
 
         # Build up regen command
         for _ in range(50):
+            state.vesc_motor_current_a = state.regen_command_request
             cl.update()
         assert state.regen_command_request > 0.0
 

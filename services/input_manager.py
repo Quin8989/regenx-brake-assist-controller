@@ -1,22 +1,22 @@
 # services/input_manager.py — Read rider inputs and determine requested mode
 #
-# Mode decision (two-state + safety gate):
-#   Throttle applied                        → ASSIST  (rider wants forward power)
-#   Throttle off + wheel valid + above min  → REGEN   (PI controller decides current)
-#   Throttle off + wheel invalid / too slow  → NEUTRAL (standstill / no data)
+# Mode decision (two-state + holdoff):
+#   Throttle applied                                → ASSIST  (rider wants forward power)
+#   Throttle off + motor RPM rising above threshold → REGEN   (carrier locked by brake)
+#   Throttle off + motor RPM below threshold        → NEUTRAL (coasting / standstill)
 #
-# The PI slip controller in ControlLoop naturally produces zero brake current
-# when the carrier is free (coasting) because carrier_rpm ≈ wheel_rpm gives
-# a large negative error that the integral floor clamps to zero.  When the
-# rider squeezes the mechanical brake and the carrier locks, positive slip
-# error builds the integral and brake current ramps up.  This eliminates
-# the need for carrier-lock detection and hysteresis in the mode decision,
-# preventing the engage/disengage chatter that reset the PI integral.
+# When the rider releases the throttle, a brief holdoff period suppresses
+# regen entry to prevent false triggers from motor inertia after assist.
+# Once the holdoff expires, regen is allowed when motor RPM exceeds the
+# entry threshold.  Regen exits when motor RPM drops below a lower exit
+# threshold (hysteresis prevents chatter).
 
 from time import ticks_diff, ticks_ms
 
 from config.settings import (
-    REGEN_MIN_WHEEL_RPM,
+    REGEN_ENTRY_RPM,
+    REGEN_EXIT_RPM,
+    REGEN_HOLDOFF_MS,
     WHEEL_SPEED_MAX_ACCEL_KPH_PER_S,
     WHEEL_SPEED_MAX_DECEL_KPH_PER_S,
     WHEEL_SPEED_INVALID_HOLD_MS,
@@ -40,6 +40,11 @@ class InputManager:
         self._wheel = wheel_speed_driver
         self._filtered_wheel_rpm = 0.0
         self._last_wheel_update_ms = None
+        # Post-assist holdoff — timestamp when throttle last went to zero.
+        # None means throttle is currently active (no holdoff in progress).
+        self._throttle_off_ms = None
+        # Regen-active flag for hysteresis (entry vs. exit threshold).
+        self._regen_active = False
 
     def update(self):
         """Sample rider inputs and update shared_state."""
@@ -54,13 +59,45 @@ class InputManager:
         s.throttle_valid = t.is_valid
 
         # Rider intent:
-        #   Throttle applied                         → ASSIST
-        #   Throttle off + wheel valid + above min   → REGEN
-        #   Otherwise                                → NEUTRAL
+        #   Throttle applied → ASSIST (always wins)
+        #   Throttle off + holdoff expired + motor RPM above threshold → REGEN
+        #   Otherwise → NEUTRAL
         if t.is_valid and t.fraction > 0.0:
             s.requested_mode = CommandMode.ASSIST
             s.requested_level = t.fraction
-        elif s.wheel_speed_valid and s.wheel_speed_rpm >= REGEN_MIN_WHEEL_RPM:
+            # Reset holdoff — will start counting when throttle releases.
+            self._throttle_off_ms = None
+            self._regen_active = False
+        else:
+            self._decide_regen(s)
+
+    def _decide_regen(self, s):
+        """Determine REGEN vs NEUTRAL when throttle is off."""
+        now_ms = ticks_ms()
+        motor_rpm = abs(s.vesc_mech_rpm)
+
+        # Start holdoff timer on first cycle with throttle off.
+        if self._throttle_off_ms is None:
+            self._throttle_off_ms = now_ms
+
+        holdoff_elapsed = ticks_diff(now_ms, self._throttle_off_ms)
+
+        if holdoff_elapsed < REGEN_HOLDOFF_MS:
+            # Still in holdoff window — stay neutral.
+            s.requested_mode = CommandMode.NEUTRAL
+            s.requested_level = 0.0
+            self._regen_active = False
+            return
+
+        # Hysteresis: use entry threshold to start, exit threshold to stop.
+        if self._regen_active:
+            if motor_rpm < REGEN_EXIT_RPM:
+                self._regen_active = False
+        else:
+            if motor_rpm >= REGEN_ENTRY_RPM:
+                self._regen_active = True
+
+        if self._regen_active:
             s.requested_mode = CommandMode.REGEN
             s.requested_level = 1.0
         else:

@@ -14,15 +14,12 @@ class TestEnergyCalculation:
         s, ee = _make()
         s.cap_voltage_v = 0.0
         ee.update()
-        assert s.cap_energy_j == 0.0
         assert s.cap_energy_percent == 0.0
 
     def test_at_min_operating(self):
         s, ee = _make()
         s.cap_voltage_v = 15.0
         ee.update()
-        expected_j = 0.5 * 20.0 * 15.0 * 15.0  # 2250 J
-        assert abs(s.cap_energy_j - expected_j) < 0.01
         assert abs(s.cap_energy_percent - 0.0) < 0.1
 
     def test_at_soft_cutoff(self):
@@ -51,10 +48,3 @@ class TestEnergyCalculation:
         s.cap_voltage_v = 45.0  # above soft cutoff
         ee.update()
         assert s.cap_energy_percent == 100.0
-
-    def test_energy_j_is_half_cv_squared(self):
-        s, ee = _make()
-        s.cap_voltage_v = 25.0
-        ee.update()
-        expected = 0.5 * 20.0 * 25.0 * 25.0
-        assert abs(s.cap_energy_j - expected) < 0.01

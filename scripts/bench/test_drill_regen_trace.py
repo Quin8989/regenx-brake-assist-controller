@@ -84,8 +84,8 @@ _CSV_HEADER = ",".join([
     "sys_state", "req_mode",
     "whl_rpm", "whl_ok", "whl_fresh",
     "mot_rpm",
-    "carrier_rpm", "err_rpm",
-    "integral", "regen_cmd",
+    "mot_i_actual", "regen_tgt",
+    "regen_cmd",
     "assist_cmd",
     "iq", "mot_i",
     "cap_v", "bus_v", "fault",
@@ -152,7 +152,7 @@ try:
         # 5. State machine
         state_machine.update()
 
-        # 6. Control loop (PI slip controller)
+        # 6. Control loop (max-then-backoff)
         control_loop.update()
 
         # 7. Command manager (sends to VESC)
@@ -163,15 +163,15 @@ try:
             last_log = now
             elapsed = ticks_diff(now, start)
 
-            line = "%d,%d,%d,%.1f,%d,%d,%.1f,%.1f,%.2f,%.2f,%.2f,%.2f,%+.2f,%+.2f,%.1f,%.1f,%s,%d" % (
+            line = "%d,%d,%d,%.1f,%d,%d,%.1f,%+.2f,%.2f,%.2f,%.2f,%+.2f,%+.2f,%.1f,%.1f,%s,%d" % (
                 elapsed,
                 _SYS_STATE_MAP.get(state.system_state, -1),
                 _MODE_MAP.get(state.requested_mode, -1),
                 state.wheel_speed_rpm, int(state.wheel_speed_valid),
                 int(state.wheel_speed_fresh),
                 state.vesc_mech_rpm,
-                state.gear_carrier_speed_rpm, state.regen_speed_error_rpm,
-                control_loop._regen_integral_a, state.regen_command_request,
+                state.vesc_motor_current_a, control_loop._regen_target_a,
+                state.regen_command_request,
                 state.assist_command_request,
                 state.vesc_iq_current_a, state.vesc_motor_current_a,
                 state.cap_voltage_v, state.vesc_bus_voltage_v,
@@ -182,11 +182,11 @@ try:
 
             # Live status every 500ms
             if rows % 25 == 0:
-                print("  %5.1fs  st=%-8s mode=%-7s whl=%3.0f mot=%4.0f car=%4.1f int=%4.1f cmd=%4.1fA iq=%+5.1fA inh=%d" % (
+                print("  %5.1fs  st=%-8s mode=%-7s whl=%3.0f mot=%4.0f act=%+5.1fA tgt=%4.1f cmd=%4.1fA iq=%+5.1fA inh=%d" % (
                     elapsed / 1000.0, state.system_state, state.requested_mode,
                     state.wheel_speed_rpm, state.vesc_mech_rpm,
-                    state.gear_carrier_speed_rpm,
-                    control_loop._regen_integral_a,
+                    state.vesc_motor_current_a,
+                    control_loop._regen_target_a,
                     state.regen_command_request,
                     state.vesc_iq_current_a,
                     int(state.inhibit_motor_commands),

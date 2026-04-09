@@ -135,7 +135,7 @@ class DisplayManager:
         if s.wheel_speed_valid:
             speed_text = f"{_rpm_to_kmh(s.wheel_speed_rpm):.1f}km/h"
         else:
-            speed_text = "--.-km/h"
+            speed_text = f"{abs(s.vesc_mech_rpm):.0f}RPM"
         pad1 = 16 - len(amps) - len(speed_text)
         line1 = " " * max(pad1 // 2, 1) + amps + " " * max(pad1 - pad1 // 2, 1) + speed_text
 

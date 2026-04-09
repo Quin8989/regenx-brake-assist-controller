@@ -44,11 +44,10 @@ WHEEL_HALL_MIN_EDGE_US = 1500
 # km/h-based regen thresholding.
 WHEEL_CIRCUMFERENCE_M = 2.10
 # Wheel-speed plausibility filter.
-# - Reject impossible raw speed spikes above MAX_KPH.
+# - Reject impossible raw speed spikes above 80 km/h.
 # - Limit how quickly reported speed can rise/fall to ride-plausible values,
 #   which masks single missed magnets and bogus ultra-fast samples.
-WHEEL_SPEED_MAX_KPH = 80.0
-WHEEL_SPEED_MAX_RPM = (WHEEL_SPEED_MAX_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
+WHEEL_SPEED_MAX_RPM = (80.0 * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
 WHEEL_SPEED_MAX_ACCEL_KPH_PER_S = 40.0
 WHEEL_SPEED_MAX_DECEL_KPH_PER_S = 60.0
 WHEEL_SPEED_INVALID_HOLD_MS = 1500
@@ -110,49 +109,50 @@ CONTINUE_ON_MAIN_LOOP_EXCEPTION = True
 
 
 
-# --- Regen slip-controller tuning ---
+# --- Regen braking (motor-RPM detection + current backoff) ---
 # The geared hub motor has a planetary carrier with a one-way freewheel clutch.
 #
 # Two riding modes (throttle-gated):
 #   ASSIST  — Throttle applied → motor drives wheel (forward power).
-#   REGEN   — Throttle off + wheel moving → PI slip controller active.
-#             When coasting (carrier free, motor RPM ≈ 0), the PI naturally
-#             produces zero brake current.  When the rider squeezes the
-#             mechanical brake (carrier locks), positive slip error builds
-#             the integral and brake current ramps up.
+#   REGEN   — Throttle off + motor RPM detected (carrier locked by brake).
+#             The rider squeezes the mechanical brake, locking the carrier
+#             and back-driving the motor through the planetary gear.  The
+#             controller detects this via rising motor RPM while throttle
+#             is off, commands max brake current, then backs off based on
+#             actual vs. commanded current (actual << commanded means the
+#             carrier is slipping inside the band brake).
 #
-# Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF or below
-# REGEN_MIN_WHEEL_KPH.
+# Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
 
-# Minimum speed to allow regen request detection.
-REGEN_MIN_WHEEL_KPH = 2.0
-REGEN_MIN_WHEEL_RPM = (REGEN_MIN_WHEEL_KPH * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
-# Calibrated from auto-spin bench data (scripts/bench/test_regen_ratio_motor_spin.py).
-REGEN_LOCKED_RATIO = 4.0               # motor_rpm / wheel_rpm when carrier fully locked (Nr/Ns = 96/24)
-REGEN_LOCK_SNAP_THRESHOLD = 0.90       # lock_fraction above this → treat as fully locked (absorbs sensor noise)
-REGEN_TARGET_SLIP_RPM = 35.0            # Fixed carrier-speed deadband (RPM) — margin for noise up to 40 km/h
-REGEN_COMMAND_MAX_A = 30.0             # Regen command ceiling (A)
-REGEN_PI_KP_A_PER_RPM = 0.0            # Proportional gain disabled — pure integral controller
-REGEN_PI_KI_A_PER_RPM_S = 1.0          # Integral gain — ramps to whatever current the load needs
-REGEN_PI_KI_DECAY_SCALE = 0.1          # Negative-error integral decay fraction (10% of KI)
-REGEN_PI_INTEGRAL_LIMIT_A = 30.0       # Anti-windup clamp — match regen command ceiling
-COMMAND_SLEW_A_PER_S = 30.0             # Shared slew rate for assist and regen commands
-EXCEPTION_LOG_MAX = 10                  # Max exception snapshots kept in RAM ring buffer
+# Motor RPM thresholds for regen detection (mechanical RPM, post-gear).
+# ENTRY: motor must exceed this RPM (with rising trend) while throttle is off.
+# EXIT:  motor must drop below this RPM to exit regen (hysteresis gap).
+REGEN_ENTRY_RPM = 30.0
+REGEN_EXIT_RPM = 15.0
+# Holdoff after throttle release before regen is allowed — prevents false
+# triggers from motor inertia after assist.  Tune on bench.
+REGEN_HOLDOFF_MS = 300
+# Regen current command ceiling and initial command on entry.
+REGEN_COMMAND_MAX_A = 30.0
+# Current backoff — when actual regen current is below this fraction of the
+# commanded current, the controller reduces the command to avoid carrier slip.
+# The backoff rate controls how fast the command decays (A per second).
+REGEN_BACKOFF_RATIO = 0.5              # actual/commanded threshold to trigger backoff
+REGEN_BACKOFF_RATE_A_PER_S = 10.0      # command decay rate when backing off
+EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM ring buffer
 
 # --- Bench debug logger (RAM ring buffer) ---
-BENCH_LOG_PERIOD_MS = 500             # Capture rate (~2 Hz), same as DEBUG_LOG_PERIOD_MS
+BENCH_LOG_PERIOD_MS = 500             # Capture rate (~2 Hz)
 BENCH_LOG_MAX_RECORDS = 2000           # ~160 KB at ~80 bytes/record, ~16 min at 2 Hz
 BENCH_LOG_FIELDS = (
     "system_state",
     "cap_voltage_v",
-    "wheel_speed_rpm",
     "vesc_mech_rpm",
+    "vesc_motor_current_a",
     "requested_mode",
     "requested_level",
     "assist_command_request",
     "regen_command_request",
-    "gear_carrier_speed_rpm",
-    "regen_speed_error_rpm",
 )
 
 # --- Energy estimation ---
@@ -164,6 +164,5 @@ STATE_MACHINE_PERIOD_MS = 10       # ~100 Hz — bounded to prevent free-running
 CONTROL_LOOP_PERIOD_MS = 10        # ~100 Hz
 COMMAND_TRANSMIT_PERIOD_MS = 20    # ~50 Hz
 THROTTLE_SAMPLE_PERIOD_MS = 10     # ~100 Hz
-TELEMETRY_REQUEST_PERIOD_MS = 10   # ~100 Hz — fast updates reduce motor RPM lag
+TELEMETRY_REQUEST_PERIOD_MS = 25   # ~40 Hz
 LCD_REFRESH_PERIOD_MS = 200        # ~5 Hz
-DEBUG_LOG_PERIOD_MS = 500          # ~2 Hz

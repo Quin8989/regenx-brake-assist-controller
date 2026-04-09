@@ -35,9 +35,8 @@ sensor data with no brake-lever switch required.
 ### 2.1 ASSIST (throttle applied)
 
 When the rider applies the throttle, the firmware maps the throttle position
-(0–100%) to a motor current command (0–40 A) and sends it to the VESC.  A
-slew-rate limiter prevents sudden torque jumps.  The VESC's inner FOC loop
-handles actual torque control.
+(0–100%) to a motor current command (0–40 A) and sends it to the VESC.
+The VESC's inner FOC loop handles actual current ramping and torque control.
 
 ### 2.2 COAST / NEUTRAL (throttle off, no brake)
 
@@ -54,43 +53,44 @@ When the rider squeezes the mechanical brake, the planetary carrier locks.
 This forces the wheel to drive the motor through the gear train.  The motor
 now spins at approximately `wheel_rpm × 5.0` (the gear ratio).
 
-The firmware detects this carrier lock by comparing motor RPM (reported by the
-VESC from back-EMF sensing, even with zero commanded current) to wheel RPM
-(from the hall sensor):
+The firmware detects regen conditions using motor RPM alone (reported by the
+VESC from back-EMF sensing, even with zero commanded current).  The wheel
+speed sensor is **not** used in the regen control path — it is retained only
+for the LCD speed display.
 
-- **Carrier locked (braking):** `motor_rpm ≈ wheel_rpm × 5.0`
-- **Carrier free (coasting):** `motor_rpm ≈ 0`
+- **Carrier locked (braking):** motor RPM above entry threshold (30 RPM)
+- **Carrier free (coasting):** motor RPM near zero
 
-Once in REGEN, a PI slip controller commands brake current to supplement the
-rider's mechanical braking and recover energy into the supercapacitor.  The PI
-loop holds a fixed carrier-slip target of 2%, meaning the electrical braking
-torque tracks the mechanical braking effort closely.
+Once in REGEN, a "max-then-backoff" controller commands brake current:
+
+1. On entry, immediately command `REGEN_COMMAND_MAX_A` (30 A).
+2. Each cycle, compare the VESC's actual motor current against the
+   commanded value.
+3. When `actual / commanded < REGEN_BACKOFF_RATIO` (0.5), the carrier is
+   slipping inside the band brake — the command is overkill.  Decay the
+   target at `REGEN_BACKOFF_RATE_A_PER_S` (10 A/s) until equilibrium.
+4. When the rider releases the brake, motor RPM drops below the exit
+   threshold and regen exits naturally.
 
 Regen is disabled entirely when the cap voltage reaches the soft cutoff
 (40.0 V) to prevent overcharging.
 
-### 2.4 Carrier-Lock Detection with Hysteresis
+### 2.4 Motor-RPM Regen Detection with Hysteresis
 
-The transition between COAST and REGEN uses hysteresis to prevent chatter at
-the engagement boundary:
+The transition between COAST and REGEN uses RPM thresholds with hysteresis
+and a holdoff timer to prevent false triggers from motor inertia after
+assist:
 
-| Transition | Condition |
+| Condition | Threshold |
 |---|---|
-| Enter REGEN | Carrier slip < 30% (motor ≥ 70% of locked speed) |
-| Exit REGEN | Carrier slip > 50% (motor < 50% of locked speed) |
+| Enter REGEN | `abs(motor_rpm)` ≥ 30 RPM AND throttle-off holdoff (300 ms) expired |
+| Stay in REGEN | `abs(motor_rpm)` ≥ 15 RPM (exit threshold) |
+| Exit REGEN | `abs(motor_rpm)` < 15 RPM |
 
-Carrier slip is defined as:
-
-```
-locked_motor_rpm = wheel_rpm × REGEN_LOCKED_RATIO      (e.g. 100 RPM × 5 = 500 RPM)
-lock_frac        = actual_motor_rpm / locked_motor_rpm  (0 = free, 1 = locked)
-carrier_slip     = 1 - lock_frac                        (0 = locked, 1 = free)
-```
-
-This means that once the system enters REGEN (tight 30% threshold), it will
-stay in REGEN even if slip drifts up to 49%, only exiting when the rider
-clearly releases the brake (slip > 50%).  Applying the throttle at any time
-overrides to ASSIST and clears the hysteresis flag.
+The holdoff timer starts when the throttle is released and prevents regen
+from triggering while the motor coasts down from assist.  If the throttle is
+reapplied and released again, the holdoff resets.  Applying the throttle at
+any time overrides to ASSIST.
 
 ### 2.5 Why No Brake Switch?
 
@@ -114,11 +114,11 @@ service is called once per main-loop cycle at its configured period.
 |---|---|---|---|
 | 1 | InputManager | 10 ms | Read throttle + wheel hall, decide ASSIST/REGEN/NEUTRAL |
 | 2 | VESCComm (RX) | continuous | Parse incoming VESC telemetry packets |
-| 3 | VESCComm (TX) | 50 ms | Request telemetry from VESC |
+| 3 | VESCComm (TX) | 25 ms | Request telemetry from VESC |
 | 4 | EnergyEstimator | 10 ms | Compute ½CV² stored energy and percentage |
 | 5 | SafetySupervisor | 10 ms | Check voltage limits, telemetry freshness, throttle validity |
 | 6 | StateMachine | 10 ms | Gate mode transitions with safety checks |
-| 7 | ControlLoop | 10 ms | Compute assist/regen current commands (slew + PI) |
+| 7 | ControlLoop | 10 ms | Compute assist/regen current commands (backoff) |
 | 8 | CommandManager | 20 ms | Transmit current commands to VESC over UART |
 | 9 | DisplayManager | 200 ms | Update 16×2 LCD with status/fault info |
 | 10 | Logger | 500 ms | Debug output to serial console |
@@ -126,12 +126,12 @@ service is called once per main-loop cycle at its configured period.
 ### 3.2 Data Flow
 
 ```
-Throttle ADC ──┐
-               ├──► InputManager ──► requested_mode + requested_level
-Wheel Hall ────┘                              │
-                                              ▼
+Throttle ADC ──────► InputManager ──► requested_mode + requested_level
+                          │
+                          ▼
 VESC Telemetry ──► VESCComm ──► SharedState ◄── SafetySupervisor
                                     │                   │
+Wheel Hall ──► (optional LCD) ──────┘                   │
                                     ▼                   ▼
                               StateMachine ──► system_state + inhibit flags
                                     │
@@ -170,30 +170,32 @@ OFF → PRECHARGE → COAST ⇄ ASSIST
 
 ---
 
-## 5. Regen PI Slip Controller
+## 5. Regen Max-Then-Backoff Controller
 
-When in REGEN state, the ControlLoop runs a PI controller that regulates
-braking current by controlling carrier slip:
+When in REGEN state, the ControlLoop uses a "max-then-backoff" strategy
+that does not require wheel speed — it relies only on the VESC's telemetry
+(motor current and RPM):
 
-1. **Estimate carrier RPM** from wheel speed and motor speed:
-   `carrier_rpm = wheel_rpm × (1 - motor_rpm / (wheel_rpm × 5.0))`
+1. **On REGEN entry**, set the internal target to `REGEN_COMMAND_MAX_A`
+   (30 A).  This front-loads maximum electrical braking.
 
-2. **Compute target carrier RPM** from the fixed slip target:
-   `target_rpm = wheel_rpm × 0.02`
+2. **Each cycle**, compare the VESC's actual motor current against the
+   commanded value from the previous cycle.
 
-3. **PI controller** drives the error (carrier_rpm − target_rpm) toward zero:
-   - P gain: 0.35 A/RPM
-   - I gain: 0.12 A/RPM·s
-   - Anti-windup clamp: ±25 A
+3. **If the ratio** `actual / commanded < REGEN_BACKOFF_RATIO` (0.5),
+   the carrier is slipping inside the band brake and the commanded
+   current exceeds what the motor can deliver.  Decay the target at
+   `REGEN_BACKOFF_RATE_A_PER_S` (10 A/s).
 
-4. **Scale** by rider authority (always 1.0 in REGEN) and **slew-limit**
-   the output at 20 A/s to prevent torque steps.
+4. **If the ratio recovers** (VESC catching up), the target holds steady.
 
-5. **Hard clamp** at REGEN_CURRENT_LIMIT_A (40 A).
+5. **Hard clamp** at `REGEN_COMMAND_MAX_A`.
+
+6. **On REGEN exit** (motor RPM drops below exit threshold), the regen
+   target is reset to zero.
 
 Regen preconditions (any failure → command goes to zero):
 - Cap voltage < 40.0 V (soft cutoff)
-- Wheel speed valid and ≥ 20 RPM
 - System not inhibited
 
 ---
@@ -216,7 +218,7 @@ auto-clear when the condition resolves.
 
 When any fault is active, the state machine forces FAULT state and
 `inhibit_motor_commands = True`, which zeros all current commands and resets
-all dynamic controller state (slew limiters, PI integrator).
+all dynamic controller state (regen backoff target).
 
 ---
 
@@ -324,14 +326,12 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 
 | Constant | Value | Description |
 |---|---|---|
-| REGEN_LOCKED_RATIO | 5.0 | Motor/wheel RPM ratio when carrier fully locked |
-| REGEN_ENGAGE_SLIP_FRAC | 0.30 | Enter REGEN below this carrier slip |
-| REGEN_DISENGAGE_SLIP_FRAC | 0.50 | Exit REGEN above this carrier slip |
-| REGEN_TARGET_SLIP_FRAC | 0.02 | PI slip target (2%) |
-| REGEN_MIN_WHEEL_RPM | 20.0 | Minimum wheel speed for regen |
-| REGEN_PI_KP | 0.35 A/RPM | Proportional gain |
-| REGEN_PI_KI | 0.12 A/RPM·s | Integral gain |
-| REGEN_PI_INTEGRAL_LIMIT | 25.0 A | Anti-windup clamp |
+| REGEN_ENTRY_RPM | 30.0 | Motor RPM threshold to enter regen |
+| REGEN_EXIT_RPM | 15.0 | Motor RPM threshold to exit regen (hysteresis) |
+| REGEN_HOLDOFF_MS | 300 | Delay after throttle release before regen can trigger |
+| REGEN_COMMAND_MAX_A | 30.0 | Initial (maximum) regen brake current command |
+| REGEN_BACKOFF_RATIO | 0.5 | actual/commanded ratio below which target decays |
+| REGEN_BACKOFF_RATE_A_PER_S | 10.0 | Rate at which regen target decays during backoff |
 
 ### Motor
 
@@ -352,8 +352,8 @@ fast.
 
 1. `BenchLogger.snapshot()` is called at `BENCH_LOG_PERIOD_MS` (default 500 ms,
    ~2 Hz) from step 12 of the main loop.
-2. Each record is a tuple of 11 values (timestamp + 10 state fields) stored in a
-   fixed-size circular buffer (`BENCH_LOG_MAX_RECORDS` = 2000, ~160 KB).
+2. Each record is a tuple of 9 values (timestamp + 8 state fields) stored in a
+   fixed-size circular buffer (`BENCH_LOG_MAX_RECORDS` = 2000, ~144 KB).
 3. When the buffer is full, the oldest record is silently overwritten.
 4. Pressing the **soft reset button** (GP8) automatically dumps the entire
    buffer as CSV to the serial console, then clears it.
@@ -366,14 +366,12 @@ fast.
 | 0 | `tick_ms` | `ticks_ms()` at capture time |
 | 1 | `system_state` | OFF / PRECHARGE / COAST / ASSIST / REGEN / FAULT |
 | 2 | `cap_voltage_v` | Supercap bus voltage from VESC telemetry |
-| 3 | `wheel_speed_rpm` | Fork-mounted hall sensor |
-| 4 | `vesc_mech_rpm` | VESC back-EMF mechanical RPM |
+| 3 | `vesc_mech_rpm` | VESC back-EMF mechanical RPM |
+| 4 | `vesc_motor_current_a` | VESC actual motor current (A) |
 | 5 | `requested_mode` | NEUTRAL / ASSIST / REGEN |
 | 6 | `requested_level` | 0.0–1.0 throttle fraction or regen authority |
 | 7 | `assist_command_request` | Assist current command (A) |
 | 8 | `regen_command_request` | Regen brake current command (A) |
-| 9 | `gear_carrier_speed_rpm` | Estimated planetary carrier RPM |
-| 10 | `regen_speed_error_rpm` | PI slip error (target − actual) |
 
 **Capture window:** 2000 records ÷ 2 Hz = ~16.7 minutes of continuous data.
 
@@ -394,7 +392,7 @@ boot.py              # MicroPython boot stub
 main.py              # Entry point — wires components, runs scheduler
 core.py              # Enums (SystemState, FaultCode, CommandMode),
                      #   FaultManager, SharedState
-utils.py             # clamp, linear_map, SlewLimiter, PeriodicTimer, Logger
+utils.py             # clamp, linear_map, PeriodicTimer, Logger
 
 config/
   settings.py        # All hardware pins, voltage/current limits, tuning constants
@@ -407,7 +405,7 @@ drivers/
 
 services/
   input_manager.py      # Reads throttle + wheel, decides ASSIST/REGEN/NEUTRAL
-  control_loop.py       # Assist current mapping + regen PI slip controller
+  control_loop.py       # Assist current mapping + regen max-then-backoff controller
   vesc_protocol.py      # VESC UART packet framing, CRC, command builders, parsing
   vesc_comm.py          # UARTPort + VESCComm (telemetry) + CommandManager (TX gate)
   safety_supervisor.py  # Overvoltage, undervoltage, timeout, throttle checks

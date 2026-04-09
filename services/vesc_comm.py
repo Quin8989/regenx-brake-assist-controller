@@ -95,30 +95,27 @@ class VESCComm:
         (
             s.vesc_temp_fet_c, s.vesc_temp_motor_c,
             s.vesc_motor_current_a, s.vesc_input_current_a,
-            s.vesc_id_current_a, s.vesc_iq_current_a,
-            s.vesc_duty_cycle, s.vesc_rpm, s.vesc_bus_voltage_v,
-            s.vesc_ah, s.vesc_ah_charged,
-            s.vesc_wh, s.vesc_wh_charged,
-            s.vesc_tach, s.vesc_tach_abs,
+            _, s.vesc_iq_current_a,
+            s.vesc_duty_cycle, erpm, s.vesc_bus_voltage_v,
+            _, _,
+            _, _,
+            _, _,
             s.vesc_fault_code,
         ) = vals
         s.cap_voltage_v = s.vesc_bus_voltage_v
-        s.vesc_mech_rpm = s.vesc_rpm * VESC_ERPM_TO_MECH_RPM
+        s.vesc_mech_rpm = erpm * VESC_ERPM_TO_MECH_RPM
         s.last_vesc_rx_ms = ticks_ms()
 
     # --- Commands ---
 
     def send_assist(self, current_a):
         self._uart.write(_build_set_current(current_a))
-        self._state.last_command_tx_ms = ticks_ms()
 
     def send_regen(self, current_a):
         self._uart.write(_build_set_brake_current(current_a))
-        self._state.last_command_tx_ms = ticks_ms()
 
     def send_neutral(self):
         self._uart.write(_build_set_current(0.0))
-        self._state.last_command_tx_ms = ticks_ms()
 
 
 # =============================================================================

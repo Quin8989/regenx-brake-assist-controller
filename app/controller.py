@@ -7,7 +7,6 @@ from config.settings import (
     BENCH_LOG_PERIOD_MS,
     COMMAND_TRANSMIT_PERIOD_MS,
     CONTROL_LOOP_PERIOD_MS,
-    DEBUG_LOG_PERIOD_MS,
     LCD_REFRESH_PERIOD_MS,
     SAFETY_SUPERVISOR_PERIOD_MS,
     STATE_MACHINE_PERIOD_MS,
@@ -21,7 +20,7 @@ from utils import PeriodicTimer
 class AppController:
     def __init__(self, state, input_mgr, vesc_comm,
                  safety, state_machine, control_loop,
-                 command_mgr, energy, display_mgr, logger,
+                 command_mgr, energy, display_mgr,
                  reset_button=None, fault_manager=None,
                  bench_logger=None):
         self._state = state
@@ -33,7 +32,6 @@ class AppController:
         self._command_mgr = command_mgr
         self._energy = energy
         self._display_mgr = display_mgr
-        self._logger = logger
         self._reset_button = reset_button
         self._fault_manager = fault_manager
         self._bench_logger = bench_logger
@@ -45,7 +43,6 @@ class AppController:
         self._t_control = PeriodicTimer(CONTROL_LOOP_PERIOD_MS)
         self._t_command = PeriodicTimer(COMMAND_TRANSMIT_PERIOD_MS)
         self._t_display = PeriodicTimer(LCD_REFRESH_PERIOD_MS)
-        self._t_debug = PeriodicTimer(DEBUG_LOG_PERIOD_MS)
         self._t_bench = PeriodicTimer(BENCH_LOG_PERIOD_MS)
 
     def update(self):
@@ -67,39 +64,28 @@ class AppController:
         if self._t_telem_req.ready():
             self._vesc_comm.request_telemetry()
 
-        # 4. Energy estimation
-        self._energy.update()
-
-        # 5. Safety supervisor
+        # 4. Safety supervisor
         if self._t_safety.ready():
             self._safety.update()
 
-        # 6. State machine
+        # 5. State machine
         if self._t_state.ready():
             self._state_machine.update()
 
-        # 7. Control loop
+        # 6. Control loop
         if self._t_control.ready():
             self._control_loop.update()
 
-        # 8. Command manager (transmit)
+        # 7. Command manager (transmit)
         if self._t_command.ready():
             self._command_mgr.update()
 
-        # 9. Display
+        # 8. Display (energy estimation + LCD)
         if self._t_display.ready():
+            self._energy.update()
             self._display_mgr.update()
 
-        # 10. Debug logging (low rate)
-        if self._t_debug.ready():
-            self._logger.debug(
-                "loop",
-                f"state={self._state.system_state} "
-                f"vcap={self._state.cap_voltage_v:.1f}V "
-                f"e={self._state.cap_energy_percent:.0f}%",
-            )
-
-        # 11. Bench data capture (RAM ring buffer)
+        # 9. Bench data capture (RAM ring buffer)
         if self._bench_logger is not None and self._t_bench.ready():
             self._bench_logger.snapshot()
 
@@ -120,4 +106,4 @@ class AppController:
         self._state.requested_level = 0.0
         self._state.assist_command_request = 0.0
         self._state.regen_command_request = 0.0
-        self._control_loop.update()  # resets slew/integral via inhibit path
+        self._control_loop.update()  # resets regen target via inhibit path

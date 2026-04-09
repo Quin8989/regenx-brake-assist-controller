@@ -9,10 +9,9 @@
 #   Any state → FAULT (when faults are present)
 #   FAULT → REGEN (when all faults clear)
 #
-# REGEN is the default running state.  The ControlLoop PI naturally
-# produces zero current when the carrier is free (coasting) or the
-# wheel is stopped/invalid, so there is no need for a separate COAST
-# state.
+# REGEN is the default running state.  The ControlLoop naturally
+# produces zero current when motor RPM is below threshold or when
+# safety gates (cap voltage, etc.) prevent braking.
 
 from config.settings import VCAP_MIN_OPERATING
 from core import CommandMode, SystemState

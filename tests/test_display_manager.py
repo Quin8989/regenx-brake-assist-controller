@@ -1,5 +1,7 @@
 # tests/test_display_manager.py — DisplayManager page selection and LCD safety
 
+import pytest
+
 from core import FAULT_LABELS, FaultCode, FaultManager, SharedState, SystemState
 from services.display_manager import DisplayManager
 
@@ -84,25 +86,19 @@ class TestNoneLCD:
 
 
 class TestLcdFaultTolerance:
-    def test_oserror_caught_silently(self):
+    @pytest.mark.parametrize("state_name,setup", [
+        (SystemState.REGEN, {"cap_voltage_v": 20.0}),
+        (SystemState.FAULT, {}),
+        (SystemState.PRECHARGE, {}),
+    ])
+    def test_oserror_caught_silently(self, state_name, setup):
         lcd = _FailLCD()
         s, f, _, dm = _make(lcd=lcd)
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 20.0
-        # Should not raise
-        dm.update()
-
-    def test_oserror_in_fault_page(self):
-        lcd = _FailLCD()
-        s, f, _, dm = _make(lcd=lcd)
-        s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.INTERNAL)
-        dm.update()  # should not raise
-
-    def test_oserror_in_precharge_page(self):
-        lcd = _FailLCD()
-        s, f, _, dm = _make(lcd=lcd)
-        s.system_state = SystemState.PRECHARGE
+        s.system_state = state_name
+        for k, v in setup.items():
+            setattr(s, k, v)
+        if state_name == SystemState.FAULT:
+            f.set_fault(FaultCode.INTERNAL)
         dm.update()  # should not raise
 
 
@@ -143,13 +139,14 @@ class TestRunPageContent:
         dm.update()
         assert "REGEN" in lcd.lines[0]
 
-    def test_run_page_shows_unknown_speed_when_wheel_invalid(self):
+    def test_run_page_shows_motor_rpm_when_wheel_invalid(self):
         s, f, lcd, dm = _make()
         s.system_state = SystemState.REGEN
         s.cap_voltage_v = 22.0
         s.wheel_speed_valid = False
+        s.vesc_mech_rpm = 120.0
         dm.update()
-        assert "--.-km/h" in lcd.lines[1]
+        assert "120RPM" in lcd.lines[1]
 
 
 # ---- TC-16: Display page correctness — FAULT ----
@@ -164,36 +161,18 @@ class TestFaultPageContent:
         dm.update()
         assert "FAULT" in lcd.lines[0]
 
-    def test_fault_shows_overvoltage_label(self):
+    @pytest.mark.parametrize("code", [
+        FaultCode.OVERVOLTAGE,
+        FaultCode.VESC_TIMEOUT,
+        FaultCode.THROTTLE_RANGE,
+        FaultCode.INTERNAL,
+    ])
+    def test_fault_shows_label_for_code(self, code):
         s, f, lcd, dm = _make()
         s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.OVERVOLTAGE)
+        f.set_fault(code)
         dm.update()
-        expected = FAULT_LABELS[FaultCode.OVERVOLTAGE]
-        assert expected[:16] in lcd.lines[1]
-
-    def test_fault_shows_vesc_timeout_label(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.VESC_TIMEOUT)
-        dm.update()
-        expected = FAULT_LABELS[FaultCode.VESC_TIMEOUT]
-        assert expected[:16] in lcd.lines[1]
-
-    def test_fault_shows_throttle_label(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.THROTTLE_RANGE)
-        dm.update()
-        expected = FAULT_LABELS[FaultCode.THROTTLE_RANGE]
-        assert expected[:16] in lcd.lines[1]
-
-    def test_fault_shows_internal_label(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.INTERNAL)
-        dm.update()
-        expected = FAULT_LABELS[FaultCode.INTERNAL]
+        expected = FAULT_LABELS[code]
         assert expected[:16] in lcd.lines[1]
 
     def test_fault_unknown_shows_fallback(self):
