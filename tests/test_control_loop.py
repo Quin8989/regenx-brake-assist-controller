@@ -1,4 +1,4 @@
-# tests/test_control_loop.py — ControlLoop assist mapping and regen backoff
+# tests/test_control_loop.py — ControlLoop assist mapping and regen tracking
 
 import tests.conftest as _ct
 from core import CommandMode, SharedState, SystemState
@@ -203,27 +203,79 @@ class TestNeutralStates:
         assert s.regen_command_request == REGEN_COMMAND_MAX_A
 
 
-# ---- Backoff recovery ----
+# ---- Integral tracking ----
 
-class TestBackoffRecovery:
-    def test_backoff_recovers_when_actual_tracks_again(self):
-        """After backing off, if actual starts tracking commanded again, command holds."""
+class TestIntegralTracking:
+    def test_ramps_up_after_backoff(self):
+        """After backing off, if actual tracks commanded, command ramps back up."""
         from config.settings import REGEN_COMMAND_MAX_A
         s, cl = _make()
         _ready_regen(s, motor_rpm=400.0, cap_v=20.0)
         cl.update()
         assert s.regen_command_request == REGEN_COMMAND_MAX_A
 
-        # Actual drops — trigger backoff
+        # Actual drops — integral backs off
         s.vesc_motor_current_a = 1.0
         for _ in range(500):
             cl.update()
         mid_cmd = s.regen_command_request
         assert mid_cmd < REGEN_COMMAND_MAX_A
 
-        # Actual tracks again — command should at least hold (no further decay)
+        # Actual tracks again — integral ramps back up
         for _ in range(500):
             s.vesc_motor_current_a = s.regen_command_request
             cl.update()
-        final_cmd = s.regen_command_request
-        assert final_cmd >= mid_cmd - 0.01
+        assert s.regen_command_request > mid_cmd
+
+    def test_restores_max_given_enough_cycles(self):
+        """Ramp-up eventually returns to REGEN_COMMAND_MAX_A."""
+        from config.settings import REGEN_COMMAND_MAX_A
+        s, cl = _make()
+        _ready_regen(s, motor_rpm=400.0, cap_v=20.0)
+        cl.update()
+
+        # Brief backoff
+        s.vesc_motor_current_a = 0.0
+        for _ in range(100):
+            cl.update()
+        assert s.regen_command_request < REGEN_COMMAND_MAX_A
+
+        # Rider brakes harder — actual matches commanded
+        for _ in range(5000):
+            s.vesc_motor_current_a = s.regen_command_request
+            cl.update()
+        assert s.regen_command_request == REGEN_COMMAND_MAX_A
+
+    def test_clamped_to_max(self):
+        """Integral cannot push command above REGEN_COMMAND_MAX_A."""
+        from config.settings import REGEN_COMMAND_MAX_A
+        s, cl = _make()
+        _ready_regen(s, motor_rpm=400.0, cap_v=20.0)
+        for _ in range(5000):
+            s.vesc_motor_current_a = s.regen_command_request
+            cl.update()
+        assert s.regen_command_request == REGEN_COMMAND_MAX_A
+
+    def test_holds_at_target_ratio(self):
+        """When actual/commanded == target ratio, command holds steady."""
+        from config.settings import REGEN_TARGET_RATIO
+        s, cl = _make()
+        _ready_regen(s, motor_rpm=400.0, cap_v=20.0)
+        cl.update()
+        cmd_before = s.regen_command_request
+
+        for _ in range(200):
+            s.vesc_motor_current_a = s.regen_command_request * REGEN_TARGET_RATIO
+            cl.update()
+        assert abs(s.regen_command_request - cmd_before) < 0.01
+
+    def test_backoff_is_gradual(self):
+        """One cycle at zero actual should not crash the command to zero."""
+        from config.settings import REGEN_COMMAND_MAX_A
+        s, cl = _make()
+        _ready_regen(s, motor_rpm=400.0, cap_v=20.0)
+        cl.update()
+
+        s.vesc_motor_current_a = 0.0
+        cl.update()
+        assert s.regen_command_request > REGEN_COMMAND_MAX_A * 0.5

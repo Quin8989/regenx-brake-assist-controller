@@ -1,6 +1,6 @@
 # config/settings.py — consolidated project constants
 #
-# Hardware: Raspberry Pi Pico (RP2040) + Flipsky Mini FSESC4.20 (VESC 4.12)
+# Hardware: Raspberry Pi Pico (RP2040) + Flipsky Mini FSESC4.20 (hw 410, FW 6.6)
 # All Pico GPIO are 3.3 V.
 # FSESC4.20 UART is also 3.3 V — direct connection, no level-shifter needed.
 
@@ -40,8 +40,7 @@ WHEEL_HALL_USE_PULLUP = True
 WHEEL_MAGNET_COUNT = 3
 WHEEL_SPEED_TIMEOUT_MS = 1200
 WHEEL_HALL_MIN_EDGE_US = 1500
-# Approximate loaded wheel circumference used for LCD speed conversion and
-# km/h-based regen thresholding.
+# Approximate loaded wheel circumference used for LCD speed display.
 WHEEL_CIRCUMFERENCE_M = 2.10
 # Wheel-speed plausibility filter.
 # - Reject impossible raw speed spikes above 80 km/h.
@@ -134,11 +133,13 @@ REGEN_EXIT_RPM = 15.0
 REGEN_HOLDOFF_MS = 300
 # Regen current command ceiling and initial command on entry.
 REGEN_COMMAND_MAX_A = 30.0
-# Current backoff — when actual regen current is below this fraction of the
-# commanded current, the controller reduces the command to avoid carrier slip.
-# The backoff rate controls how fast the command decays (A per second).
-REGEN_BACKOFF_RATIO = 0.5              # actual/commanded threshold to trigger backoff
-REGEN_BACKOFF_RATE_A_PER_S = 10.0      # command decay rate when backing off
+# Integral controller on actual/commanded current ratio.
+# Always starts at REGEN_COMMAND_MAX_A on entry — carrier freeze is the worst
+# UX failure, so the controller is biased high from the start.
+# Below target ratio → carrier slipping → command ramps down.
+# Above target ratio → motor absorbing well → command ramps up.
+REGEN_TARGET_RATIO = 0.7               # setpoint for actual/commanded ratio
+REGEN_KI_A_PER_S = 25.0                # integral gain (A per unit ratio error per second)
 EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM ring buffer
 
 # --- Bench debug logger (RAM ring buffer) ---

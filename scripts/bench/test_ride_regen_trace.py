@@ -148,7 +148,7 @@ try:
         # 5. State machine
         state_machine.update()
 
-        # 6. Control loop (max-then-backoff)
+        # 6. Control loop (integral controller)
         control_loop.update()
 
         # 7. Command manager (sends to VESC)

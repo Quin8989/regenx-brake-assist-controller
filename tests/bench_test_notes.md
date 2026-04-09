@@ -54,7 +54,7 @@ and observations during bring-up and troubleshooting.
 - [ ] Start with discharged capacitors
 - [ ] Verify precharge path activates
 - [ ] Verify voltage rise on capacitor bank
-- [ ] Verify transition to COAST at threshold
+- [ ] Verify transition to REGEN at threshold
 - [ ] Verify timeout fault if precharge fails
 
 ---

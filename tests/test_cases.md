@@ -11,13 +11,13 @@ Each entry describes the expected behavior and its pass criteria.
 
 ### TC-01: Startup from already-charged state
 - **Precondition:** Capacitor voltage ≥ 15 V, no faults
-- **Expected:** System transitions OFF → COAST, LCD shows COAST status
+- **Expected:** System transitions OFF → REGEN, LCD shows REGEN status
 - **Pass:** Motor commands are allowed, display shows energy level
 
 ### TC-02: Startup from low-voltage precharge state
 - **Precondition:** Capacitor voltage < 15 V, precharge hardware available
-- **Expected:** System transitions OFF → PRECHARGE → COAST
-- **Pass:** Precharge relay activates, voltage rises, COAST reached within timeout
+- **Expected:** System transitions OFF → PRECHARGE → REGEN
+- **Pass:** Precharge completes, voltage rises, REGEN reached within timeout
 
 ### TC-03: Startup with disconnected VESC
 - **Precondition:** VESC UART not connected
@@ -29,18 +29,18 @@ Each entry describes the expected behavior and its pass criteria.
 ## Assist
 
 ### TC-04: Assist inhibit below minimum voltage
-- **Precondition:** System in COAST, cap voltage < 15 V
+- **Precondition:** System in REGEN, cap voltage < 15 V
 - **Expected:** Throttle input does not produce motor command
 - **Pass:** Assist command request remains zero
 
 ### TC-05: Normal assist operation
-- **Precondition:** System in COAST, cap voltage ≥ 15 V, VESC telemetry healthy
+- **Precondition:** System in REGEN, cap voltage ≥ 15 V, VESC telemetry healthy
 - **Expected:** Throttle input produces proportional assist current command
 - **Pass:** VESC receives current command, state transitions to ASSIST
 
-### TC-06: Assist release returns to COAST
+### TC-06: Assist release returns to REGEN
 - **Precondition:** System in ASSIST, rider releases throttle
-- **Expected:** Assist command drops to zero, state returns to COAST
+- **Expected:** Assist command drops to zero, state returns to REGEN
 - **Pass:** Zero command sent to VESC
 
 ---

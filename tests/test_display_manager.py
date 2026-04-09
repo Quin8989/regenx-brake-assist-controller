@@ -102,10 +102,10 @@ class TestLcdFaultTolerance:
         dm.update()  # should not raise
 
 
-# ---- TC-15: Display page correctness — COAST ----
+# ---- TC-15: Display page correctness — run page ----
 
 class TestRunPageContent:
-    """TC-15: COAST page shows state, voltage, and energy percentage."""
+    """TC-15: Run page shows state, voltage, and energy percentage."""
 
     def test_ready_shows_voltage_value(self):
         s, f, lcd, dm = _make()

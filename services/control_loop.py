@@ -19,12 +19,13 @@
 #
 #    REGEN:
 #      On entry the controller immediately commands REGEN_COMMAND_MAX_A.
-#      Each cycle it compares the VESC's actual motor current against the
-#      commanded value.  When actual << commanded (ratio below
-#      REGEN_BACKOFF_RATIO), this means the carrier is slipping inside
-#      the band brake — the command is overkill.  The command decays at
-#      REGEN_BACKOFF_RATE_A_PER_S until equilibrium is reached.
-#      Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
+#      Each cycle an integral controller compares the ratio of actual
+#      motor current to commanded current against REGEN_TARGET_RATIO:
+#        ratio < target → carrier slipping → command ramps down
+#        ratio > target → motor absorbing well → command ramps up
+#        ratio = target → equilibrium → command holds
+#      Starting at max ensures the carrier never freezes on entry.
+#      Regen is disabled above VCAP_SOFT_REGEN_CUTOFF.
 #
 #    Any other state: both commands zero, regen target reset.
 #
@@ -41,17 +42,17 @@
 from config.settings import (
     CONTROL_LOOP_PERIOD_MS,
     MOTOR_CURRENT_MAX_A,
-    REGEN_BACKOFF_RATE_A_PER_S,
-    REGEN_BACKOFF_RATIO,
     REGEN_COMMAND_MAX_A,
+    REGEN_KI_A_PER_S,
+    REGEN_TARGET_RATIO,
     VCAP_SOFT_REGEN_CUTOFF,
 )
 from core import SystemState
 from utils import clamp
 
-# Precomputed loop constants
+# Precomputed loop constant
 _DT_S = CONTROL_LOOP_PERIOD_MS / 1000.0
-_BACKOFF_DELTA = REGEN_BACKOFF_RATE_A_PER_S * _DT_S
+_KI_DELTA = REGEN_KI_A_PER_S * _DT_S
 
 
 class ControlLoop:
@@ -107,13 +108,14 @@ class ControlLoop:
         s.assist_command_request = clamp(s.requested_level, 0.0, 1.0) * MOTOR_CURRENT_MAX_A
 
     def _compute_regen(self):
-        """Compute regen braking current via max-then-backoff strategy.
+        """Compute regen braking current via integral ratio tracking.
 
-        On each REGEN entry the target starts at REGEN_COMMAND_MAX_A.
-        Each cycle the actual motor current is compared to the current
-        command.  If actual is well below commanded (ratio < REGEN_BACKOFF_RATIO),
-        the target decays — the carrier is slipping, so the extra command
-        is wasted.
+        Starts at REGEN_COMMAND_MAX_A on entry.  Each cycle the integral
+        adjusts the target based on actual/commanded ratio vs setpoint:
+          error = ratio - target
+          target += KI * error * dt
+        Positive error (motor absorbing) ramps up, negative (slipping)
+        ramps down.  Starting at max avoids carrier freeze on entry.
         """
         s = self._state
 
@@ -126,16 +128,14 @@ class ControlLoop:
         # On first regen cycle (target still at 0), jump to max.
         if self._regen_target_a == 0.0:
             self._regen_target_a = REGEN_COMMAND_MAX_A
+            s.regen_command_request = self._regen_target_a
+            return
 
-        # Current backoff: compare actual regen current to what was commanded.
-        # vesc_motor_current_a is negative during regen on some VESC FW;
-        # use absolute value for comparison.
+        # Integral controller on actual/commanded ratio.
         actual_a = abs(s.vesc_motor_current_a)
-        commanded_a = s.regen_command_request  # previous cycle's output
+        commanded_a = s.regen_command_request
         if commanded_a > 0.0:
-            ratio = actual_a / commanded_a
-            if ratio < REGEN_BACKOFF_RATIO:
-                self._regen_target_a -= _BACKOFF_DELTA
-                self._regen_target_a = max(self._regen_target_a, 0.0)
+            error = (actual_a / commanded_a) - REGEN_TARGET_RATIO
+            self._regen_target_a += _KI_DELTA * error
 
         s.regen_command_request = clamp(self._regen_target_a, 0.0, REGEN_COMMAND_MAX_A)
