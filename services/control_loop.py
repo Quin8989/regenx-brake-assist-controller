@@ -14,128 +14,134 @@
 # 3. This module (ControlLoop) converts state + intent into current commands:
 #
 #    ASSIST:
-#      requested_level (0–1) × max current → assist command.
-#      The VESC inner FOC loop handles actual current control / ramping.
+#      requested_level (0–1) × max current → positive assist command.
 #
 #    REGEN:
-#      On entry the controller immediately commands REGEN_COMMAND_MAX_A.
-#      Each cycle an integral controller compares the ratio of actual
-#      motor current to commanded current against REGEN_TARGET_RATIO:
-#        ratio < target → carrier slipping → command ramps down
-#        ratio > target → motor absorbing well → command ramps up
-#        ratio = target → equilibrium → command holds
-#      Starting at max ensures the carrier never freezes on entry.
+#      Regen current targets efficiency-optimal recovery:
+#        I = (1−η) × λ·ωe / R_phase, clamped to [I_min, I_max].
+#      At the target efficiency (default 75%), copper losses are a fixed
+#      fraction of mechanical input.  Current still scales linearly with
+#      speed (gentle at low RPM, stronger at high RPM), and is clamped to
+#      a floor (guaranteed braking feel) and ceiling (thermal limit).
 #      Regen is disabled above VCAP_SOFT_REGEN_CUTOFF.
 #
-#    Any other state: both commands zero, regen target reset.
+#    All outputs pass through an upward-only slew limiter that caps
+#    the rate of change to COMMAND_SLEW_RATE_A_PER_S.  Downward
+#    changes are immediate (safety: fault shutdown, throttle release).
+#
+#    Any other state: both commands zero.
 #
 # 4. CommandManager transmits the computed values to the VESC over UART.
 #
 # Inputs read from shared state:
 #   system_state, inhibit_motor_commands
 #   requested_level (0..1), cap_voltage_v
-#   vesc_motor_current_a
 #
 # Outputs written to shared state:
-#   assist_command_request (A), regen_command_request (A)
+#   assist_command_request (A), regen_command_request (A), motor_command_a (A)
 
 from config.settings import (
+    COMMAND_SLEW_RATE_A_PER_S,
     CONTROL_LOOP_PERIOD_MS,
-    MOTOR_CURRENT_MAX_A,
-    REGEN_COMMAND_MAX_A,
-    REGEN_KI_A_PER_S,
-    REGEN_TARGET_RATIO,
+    FLUX_LINKAGE_WB,
+    MOTOR_COMMAND_LIMIT_A,
+    MOTOR_PHASE_RESISTANCE_OHM,
+    REGEN_CURRENT_MAX_A,
+    REGEN_EFFICIENCY_TARGET,
     VCAP_SOFT_REGEN_CUTOFF,
+    VESC_MOTOR_POLE_PAIRS,
 )
-from core import SystemState
+from core import CommandMode, SystemState
 from utils import clamp
 
-# Precomputed loop constant
-_DT_S = CONTROL_LOOP_PERIOD_MS / 1000.0
-_KI_DELTA = REGEN_KI_A_PER_S * _DT_S
+import math
+
+# Precomputed constants
+_SLEW_DELTA = COMMAND_SLEW_RATE_A_PER_S * (CONTROL_LOOP_PERIOD_MS / 1000.0)
+_RPM_TO_ELEC_RAD_S = VESC_MOTOR_POLE_PAIRS * 2.0 * math.pi / 60.0
+_REGEN_I_COEFF = (1.0 - REGEN_EFFICIENCY_TARGET) * FLUX_LINKAGE_WB / MOTOR_PHASE_RESISTANCE_OHM
 
 
 class ControlLoop:
     """Command-shaping layer between state machine and command transmitter.
 
-    This class owns regen current backoff dynamics.  It intentionally keeps
-    these in one place so that safety/state logic remains simple and command
-    transmission remains a pure output step.  The VESC's inner FOC loop
-    handles actual current ramping — no Pico-side slew limiting is needed.
+    Owns output slew limiting.  Safety/state logic and command
+    transmission remain separate concerns.
     """
 
     def __init__(self, shared_state):
         self._state = shared_state
-        # Current regen command target (decays via backoff).
-        self._regen_target_a = 0.0
+        self._prev_command_a = 0.0
 
     def update(self):
-        """Compute this cycle's assist/regen requests.
+        """Compute this cycle's motor command.
 
-        Behavior summary:
-        - If inhibited: zero everything and reset regen target.
-        - ASSIST state: run assist mapping only; regen zeroed.
-        - REGEN state: start at max, back off when actual << commanded.
-        - Any other state: hold at zero and reset regen target.
+        Behavior per system state:
+        - Inhibited: zero everything.
+        - ASSIST: map throttle level to current; regen zeroed.
+        - REGEN: set brake ceiling; VESC limits actual current by back-EMF.
+        - Other: hold at zero.
+
+        A single slew limiter on the net command smooths transitions.
+        Moves toward zero are always immediate (safety); all other
+        changes are rate-limited.
         """
         s = self._state
 
-        # Assist is always computed from scratch each cycle.
         s.assist_command_request = 0.0
+        s.regen_command_request = 0.0
 
-        # Inhibit is the master safety gate:
-        # no current commands and no dynamic state accumulation.
-        if s.inhibit_motor_commands:
-            s.regen_command_request = 0.0
-            self._regen_target_a = 0.0
-            return
+        if not s.inhibit_motor_commands:
+            if s.system_state == SystemState.ASSIST:
+                self._compute_assist()
+            elif s.system_state == SystemState.REGEN:
+                self._compute_regen()
 
-        if s.system_state == SystemState.ASSIST:
-            s.regen_command_request = 0.0
-            self._regen_target_a = 0.0
-            self._compute_assist()
-        elif s.system_state == SystemState.REGEN:
-            self._compute_regen()
-        else:
-            # OFF / PRECHARGE / FAULT / standstill: remain at zero.
-            # Next entry into ASSIST/REGEN starts from a known baseline.
-            s.regen_command_request = 0.0
-            self._regen_target_a = 0.0
+        # Single slew limiter on the actual value the VESC receives.
+        raw_net = s.assist_command_request - s.regen_command_request
+        s.motor_command_a = self._slew(raw_net)
+        self._prev_command_a = s.motor_command_a
+
+    def _slew(self, target):
+        """Rate-limit the net command sent to the VESC.
+
+        Toward zero → immediate (safety: fault shutdown, throttle release).
+        All other changes → rate-limited to _SLEW_DELTA per cycle.
+        This naturally handles sign reversals without a separate guard.
+        """
+        prev = self._prev_command_a
+        # Toward zero (same sign, shrinking magnitude) — always immediate
+        if prev >= 0 and 0 <= target <= prev:
+            return target
+        if prev <= 0 and prev <= target <= 0:
+            return target
+        # Everything else: ramp-up, direction reversal — rate-limit
+        delta = target - prev
+        if abs(delta) > _SLEW_DELTA:
+            return prev + (_SLEW_DELTA if delta > 0 else -_SLEW_DELTA)
+        return target
 
     def _compute_assist(self):
         """Compute forward-drive current request in ASSIST state."""
         s = self._state
-        s.assist_command_request = clamp(s.requested_level, 0.0, 1.0) * MOTOR_CURRENT_MAX_A
+        s.assist_command_request = clamp(s.requested_level, 0.0, 1.0) * MOTOR_COMMAND_LIMIT_A
 
     def _compute_regen(self):
-        """Compute regen braking current via integral ratio tracking.
+        """Compute regen current via efficiency-optimal model.
 
-        Starts at REGEN_COMMAND_MAX_A on entry.  Each cycle the integral
-        adjusts the target based on actual/commanded ratio vs setpoint:
-          error = ratio - target
-          target += KI * error * dt
-        Positive error (motor absorbing) ramps up, negative (slipping)
-        ramps down.  Starting at max avoids carrier freeze on entry.
+        I = (1−η) × λ × ωe / R_phase, clamped to [I_min, I_max].
+        At the target efficiency point, copper losses are a known fraction
+        of mechanical input — current scales with speed so efficiency is
+        constant across the RPM range.
         """
         s = self._state
 
-        # Safety gate — always checked every cycle.
         if s.cap_voltage_v >= VCAP_SOFT_REGEN_CUTOFF:
-            s.regen_command_request = 0.0
-            self._regen_target_a = 0.0
             return
 
-        # On first regen cycle (target still at 0), jump to max.
-        if self._regen_target_a == 0.0:
-            self._regen_target_a = REGEN_COMMAND_MAX_A
-            s.regen_command_request = self._regen_target_a
+        if s.requested_mode != CommandMode.REGEN:
             return
 
-        # Integral controller on actual/commanded ratio.
-        actual_a = abs(s.vesc_motor_current_a)
-        commanded_a = s.regen_command_request
-        if commanded_a > 0.0:
-            error = (actual_a / commanded_a) - REGEN_TARGET_RATIO
-            self._regen_target_a += _KI_DELTA * error
-
-        s.regen_command_request = clamp(self._regen_target_a, 0.0, REGEN_COMMAND_MAX_A)
+        omega_e = s.vesc_mech_rpm * _RPM_TO_ELEC_RAD_S
+        i_regen = _REGEN_I_COEFF * omega_e
+        s.regen_command_request = clamp(i_regen, 0.0, REGEN_CURRENT_MAX_A)

@@ -21,7 +21,6 @@
 from time import sleep_ms, ticks_ms, ticks_diff
 
 from core import SharedState, SystemState, CommandMode, FaultManager, FaultCode, EnergyEstimator
-from drivers.wheel_speed_hall import WheelSpeedHall
 from drivers.throttle import Throttle
 from services.vesc_comm import UARTPort, VESCComm, CommandManager
 from services.input_manager import InputManager
@@ -53,9 +52,8 @@ state = SharedState()
 faults = FaultManager(state)
 uart = UARTPort()
 throttle = Throttle()
-wheel = WheelSpeedHall()
 vesc = VESCComm(uart, state)
-input_mgr = InputManager(throttle, state, wheel)
+input_mgr = InputManager(throttle, state)
 control_loop = ControlLoop(state)
 command_mgr = CommandManager(vesc, state)
 safety = SafetySupervisor(state, faults)
@@ -82,7 +80,6 @@ def _ensure_data_dir():
 _CSV_HEADER = ",".join([
     "t_ms",
     "sys_state", "req_mode",
-    "whl_rpm", "whl_ok", "whl_fresh",
     "mot_rpm",
     "mot_i_actual", "regen_tgt",
     "regen_cmd",
@@ -163,12 +160,10 @@ try:
             last_log = now
             elapsed = ticks_diff(now, start)
 
-            line = "%d,%d,%d,%.1f,%d,%d,%.1f,%+.2f,%.2f,%.2f,%.2f,%+.2f,%+.2f,%.1f,%.1f,%s,%d" % (
+            line = "%d,%d,%d,%.1f,%+.2f,%.2f,%.2f,%.2f,%+.2f,%+.2f,%.1f,%.1f,%s,%d" % (
                 elapsed,
                 _SYS_STATE_MAP.get(state.system_state, -1),
                 _MODE_MAP.get(state.requested_mode, -1),
-                state.wheel_speed_rpm, int(state.wheel_speed_valid),
-                int(state.wheel_speed_fresh),
                 state.vesc_mech_rpm,
                 state.vesc_motor_current_a, control_loop._regen_target_a,
                 state.regen_command_request,
@@ -182,9 +177,9 @@ try:
 
             # Live status every 500ms
             if rows % 25 == 0:
-                print("  %5.1fs  st=%-8s mode=%-7s whl=%3.0f mot=%4.0f act=%+5.1fA tgt=%4.1f cmd=%4.1fA iq=%+5.1fA inh=%d" % (
+                print("  %5.1fs  st=%-8s mode=%-7s mot=%4.0f act=%+5.1fA tgt=%4.1f cmd=%4.1fA iq=%+5.1fA inh=%d" % (
                     elapsed / 1000.0, state.system_state, state.requested_mode,
-                    state.wheel_speed_rpm, state.vesc_mech_rpm,
+                    state.vesc_mech_rpm,
                     state.vesc_motor_current_a,
                     control_loop._regen_target_a,
                     state.regen_command_request,
@@ -199,7 +194,7 @@ except KeyboardInterrupt:
 
 # Neutral on exit
 for _ in range(10):
-    vesc.send_neutral()
+    vesc.send_current(0.0)
     sleep_ms(20)
 
 f.close()

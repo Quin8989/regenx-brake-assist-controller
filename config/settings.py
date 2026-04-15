@@ -12,7 +12,6 @@
 #   Pin 6  / GP4  / UART1 TX → FSESC UART RX
 #   Pin 7  / GP5  / UART1 RX ← FSESC UART TX
 #   Pin 11 / GP8  / Soft reset button (active-low, internal pull-up)
-#   Pin 12 / GP9  / Wheel speed hall sensor input (digital)
 #   Pin 22 / GP17 / LCD RS (Register Select)
 #   Pin 24 / GP18 / LCD E  (Enable)
 #   Pin 25 / GP19 / LCD D4
@@ -33,23 +32,6 @@ THROTTLE_ADC_PIN = 26         # GP26 / ADC0
 # --- Soft reset button (active-low, normally-open to GND, internal pull-up) ---
 RESET_BUTTON_PIN = 8          # GP8, Pico pin 11
 
-# --- Wheel speed hall sensor (fork-mounted, 3 spoke magnets) ---
-WHEEL_HALL_PIN = 9            # GP9, Pico pin 12 — digital input
-WHEEL_HALL_ACTIVE_HIGH = True
-WHEEL_HALL_USE_PULLUP = True
-WHEEL_MAGNET_COUNT = 3
-WHEEL_SPEED_TIMEOUT_MS = 1200
-WHEEL_HALL_MIN_EDGE_US = 1500
-# Approximate loaded wheel circumference used for LCD speed display.
-WHEEL_CIRCUMFERENCE_M = 2.10
-# Wheel-speed plausibility filter.
-# - Reject impossible raw speed spikes above 80 km/h.
-# - Limit how quickly reported speed can rise/fall to ride-plausible values,
-#   which masks single missed magnets and bogus ultra-fast samples.
-WHEEL_SPEED_MAX_RPM = (80.0 * 1000.0 / 60.0) / max(WHEEL_CIRCUMFERENCE_M, 1e-6)
-WHEEL_SPEED_MAX_ACCEL_KPH_PER_S = 40.0
-WHEEL_SPEED_MAX_DECEL_KPH_PER_S = 60.0
-WHEEL_SPEED_INVALID_HOLD_MS = 1500
 
 
 
@@ -69,13 +51,32 @@ LCD_ROWS = 2
 # =============================================================================
 
 # --- Supercapacitor voltage thresholds (volts) ---
-VCAP_MIN_OPERATING = 15.0      # Below this: precharge active, motor inhibited
-VCAP_SOFT_REGEN_CUTOFF = 40.0  # Software regen disable threshold
-VCAP_ABSOLUTE_MAX = 42.0       # Hard bus voltage limit — NEVER exceed
+VCAP_MIN_OPERATING = 10.0      # Below this: precharge active, motor inhibited
+VCAP_SOFT_REGEN_CUTOFF = 40.0  # Software regen disable — assist still works above this
+VCAP_ABSOLUTE_MAX = 42.0       # Hard bus voltage limit — cap bank rated max
 
 # --- Motor current limit (hard limit — must also be set in VESC Tool) ---
-# FSESC4.20 is rated 50 A; project hard limit is 40 A.
-MOTOR_CURRENT_MAX_A = 40.0     # Shared max motor current for assist and regen (amps)
+# FSESC4.20 is rated 50 A continuous.
+MOTOR_CURRENT_MAX_A = 50.0     # VESC-side motor current limit (amps)
+VESC_WATT_MAX = 500.0          # VESC watt limit — both drive and regen (watts)
+
+# Absolute maximum instantaneous phase current before ABS_OVER_CURRENT fault.
+# FSESC4.20 FETs handle 130 A+ transiently — this protects against dead-shorts,
+# not normal FOC commutation ripple.  Applied to VESC via Lisp conf-set.
+VESC_ABS_CURRENT_MAX_A = 130.0
+
+# Firmware command ceiling — the maximum current the Pico will ever command.
+# Set 5 A below MOTOR_CURRENT_MAX_A so that steady-state FOC tracking error
+# stays within the VESC's motor current limit.  Transient phase-current
+# spikes are handled by l_abs_current_max (set to 130 A in VESC Tool).
+MOTOR_COMMAND_LIMIT_A = 45.0
+
+# --- Command slew rate (overcurrent protection) ---
+# Maximum upward rate of change for current commands sent to the VESC.
+# Prevents transient FOC overshoot that trips ABS_OVER_CURRENT on step inputs.
+# Downward changes are always immediate (safety first).
+# 250 A/s at 100 Hz loop = 2.5 A step per cycle → 0–45 A in ~180 ms.
+COMMAND_SLEW_RATE_A_PER_S = 250.0
 
 # --- Throttle ---
 # Calibrated from measured WUXING 300X sweep at 3.3 V supply:
@@ -83,7 +84,8 @@ MOTOR_CURRENT_MAX_A = 40.0     # Shared max motor current for assist and regen (
 # Rounded to practical setpoints for stable 0-100% mapping.
 THROTTLE_RAW_MIN = 1070
 THROTTLE_RAW_MAX = 3240
-THROTTLE_DEADBAND = 0.03        # Fraction of range — intentional grace zone near zero
+THROTTLE_DEADBAND = 0.05        # Fraction of range — widens grace zone to cover RP2040 ADC noise
+THROTTLE_OVERSAMPLE = 4         # Average N reads per sample — halves noise amplitude
 THROTTLE_FAULT_LOW = 100        # Below this raw count → open-circuit / fault
 THROTTLE_FAULT_HIGH = 4000      # Above this raw count → short-circuit / fault
 
@@ -117,29 +119,58 @@ CONTINUE_ON_MAIN_LOOP_EXCEPTION = True
 #             The rider squeezes the mechanical brake, locking the carrier
 #             and back-driving the motor through the planetary gear.  The
 #             controller detects this via rising motor RPM while throttle
-#             is off, commands max brake current, then backs off based on
-#             actual vs. commanded current (actual << commanded means the
-#             carrier is slipping inside the band brake).
+#             is off, and issues COMM_SET_CURRENT (negative) with current
+#             derived from an efficiency-optimal model:
+#               I = (1−η) · λ·ωe / R_phase
+#             This targets a fixed regen efficiency (η) across all speeds,
+#             naturally taping to zero at low speed while routing energy
+#             to the DC bus instead of dissipating as heat.
 #
 # Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
 
 # Motor RPM thresholds for regen detection (mechanical RPM, post-gear).
 # ENTRY: motor must exceed this RPM (with rising trend) while throttle is off.
 # EXIT:  motor must drop below this RPM to exit regen (hysteresis gap).
-REGEN_ENTRY_RPM = 30.0
-REGEN_EXIT_RPM = 15.0
+# Set above the sensorless FOC instability floor (~200 ERPM / pp) so that
+# regen only runs where the VESC can track rotor angle cleanly.
+REGEN_ENTRY_RPM = 25.0
+REGEN_EXIT_RPM = 18.0
+
+# Motor physics constants for regen current computation.
+# Flux linkage measured via VESC Tool → FOC → Detect and Calculate.
+FLUX_LINKAGE_WB = 0.0111        # Puyan H01 flux linkage (weber)
+
+# Phase resistance from VESC FOC detection (foc_motor_r in MCCONF).
+# Read from vesc_snapshot_mcconf.bin offset 165 = 0.082261 Ω.
+# VERIFY in VESC Tool → Motor Settings → FOC → General → R.
+MOTOR_PHASE_RESISTANCE_OHM = 0.082
+
+# Efficiency-optimal regen current model
+# ======================================
+# Net power to caps:  P_net = λ·ωe·I − R_phase·I²
+# Max net power at:   I* = λ·ωe / (2·R_phase)  → 50% efficient
+# Target efficiency:  I  = (1−η) · λ·ωe / R_phase
+#
+# At 200 mech RPM with R=82 mΩ:
+#   25 A (old cap)  →  19 W net, 20% efficient — most energy wasted as heat
+#   15.6 A (I*)     →  30 W net, 50% efficient — max power recovery
+#    7.8 A (η=75%)  →  22 W net, 75% efficient — good braking + good recovery
+#
+# The current is clamped to REGEN_CURRENT_MAX_A (thermal / component
+# limit).  No floor needed — the model naturally gives non-zero current
+# at any non-zero RPM, and regen entry requires RPM ≥ 25.
+REGEN_EFFICIENCY_TARGET = 0.75  # 75% — trade-off between braking and recovery
+REGEN_CURRENT_MAX_A = 25.0      # Ceiling: thermal / component limit
 # Holdoff after throttle release before regen is allowed — prevents false
-# triggers from motor inertia after assist.  Tune on bench.
+# triggers from motor inertia after assist.
 REGEN_HOLDOFF_MS = 300
-# Regen current command ceiling and initial command on entry.
-REGEN_COMMAND_MAX_A = 30.0
-# Integral controller on actual/commanded current ratio.
-# Always starts at REGEN_COMMAND_MAX_A on entry — carrier freeze is the worst
-# UX failure, so the controller is biased high from the start.
-# Below target ratio → carrier slipping → command ramps down.
-# Above target ratio → motor absorbing well → command ramps up.
-REGEN_TARGET_RATIO = 0.7               # setpoint for actual/commanded ratio
-REGEN_KI_A_PER_S = 25.0                # integral gain (A per unit ratio error per second)
+
+# Grace period before exiting regen on an RPM dip (carrier slip).
+# While grace is active the efficiency model keeps running at whatever
+# (lower) RPM the motor reports, so braking tapers naturally instead of
+# snapping to zero.  Only exits regen if RPM stays below REGEN_EXIT_RPM
+# for the full grace window.
+REGEN_SLIP_GRACE_MS = 250
 EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM ring buffer
 
 # --- Bench debug logger (RAM ring buffer) ---
@@ -163,7 +194,7 @@ CAPACITANCE_F = 20.0
 SAFETY_SUPERVISOR_PERIOD_MS = 10   # ~100 Hz
 STATE_MACHINE_PERIOD_MS = 10       # ~100 Hz — bounded to prevent free-running
 CONTROL_LOOP_PERIOD_MS = 10        # ~100 Hz
-COMMAND_TRANSMIT_PERIOD_MS = 20    # ~50 Hz
+COMMAND_TRANSMIT_PERIOD_MS = 10    # ~100 Hz — matches control loop for tightest regen tracking
 THROTTLE_SAMPLE_PERIOD_MS = 10     # ~100 Hz
 TELEMETRY_REQUEST_PERIOD_MS = 25   # ~40 Hz
 LCD_REFRESH_PERIOD_MS = 200        # ~5 Hz

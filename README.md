@@ -19,7 +19,6 @@ controller.  Energy is stored in a supercapacitor bank rather than a battery.
 | Puyan H01 geared hub motor | 250–350 W class, 11 pole pairs, planetary gearbox with one-way freewheel clutch |
 | Supercapacitor bank (20 F) | Energy storage — charges via regen braking, discharges during assist |
 | Hall throttle | 3-wire analog (0.8–4.2 V typical), read on Pico ADC0 |
-| Wheel speed hall sensor | Fork-mounted, 3 spoke magnets, digital pulse input on GP9 |
 | RG1602A 16×2 LCD | Status display via 4-bit parallel GPIO (RS, E, D4–D7) |
 
 Communication between the Pico and VESC is over UART at 115200 baud.  Both
@@ -35,8 +34,10 @@ sensor data with no brake-lever switch required.
 ### 2.1 ASSIST (throttle applied)
 
 When the rider applies the throttle, the firmware maps the throttle position
-(0–100%) to a motor current command (0–40 A) and sends it to the VESC.
-The VESC's inner FOC loop handles actual current ramping and torque control.
+(0–100%) to a motor current command (0–45 A) and sends it to the VESC.
+The command passes through an upward-only slew limiter before transmission
+(see §5.1), preventing FOC transient overshoot on fast throttle applications.
+The VESC's inner FOC loop handles actual current control.
 
 ### 2.2 NEUTRAL (throttle off, no brake)
 
@@ -54,26 +55,26 @@ This forces the wheel to drive the motor through the gear train.  The motor
 now spins at approximately `wheel_rpm × 5.0` (the gear ratio).
 
 The firmware detects regen conditions using motor RPM alone (reported by the
-VESC from back-EMF sensing, even with zero commanded current).  The wheel
-speed sensor is **not** used in the regen control path — it is retained only
-for the LCD speed display.
+VESC from back-EMF sensing, even with zero commanded current).
 
-- **Carrier locked (braking):** motor RPM above entry threshold (30 RPM)
+- **Carrier locked (braking):** motor RPM above entry threshold (25 RPM)
 - **Carrier free (coasting):** motor RPM near zero
 
-Once in REGEN, an integral controller tracks the ratio of actual motor
-current to commanded current:
+Once in REGEN, the control loop computes the optimal current for energy
+recovery using an **efficiency-optimal model** derived from the motor's
+physical parameters:
 
-1. On entry, immediately command `REGEN_COMMAND_MAX_A` (30 A).
-2. Each cycle, compute the ratio `actual / commanded` and compare it
-   against `REGEN_TARGET_RATIO` (0.7).
-3. When ratio < target, the carrier is slipping — the integral ramps the
-   command down.  When ratio > target, the motor is absorbing well — the
-   integral ramps the command back up.
-4. This continuously tracks rider brake pressure in both directions.
-   Starting at max ensures the carrier never freezes on entry.
-5. When the rider releases the brake, motor RPM drops below the exit
-   threshold and regen exits naturally.
+$$I = (1 - \eta) \cdot \frac{\lambda \cdot \omega_e}{R_{phase}}$$
+
+where λ is flux linkage (0.0111 Wb), ωe is electrical angular velocity,
+R_phase is the motor phase resistance (82 mΩ), and η is the target
+efficiency (75%).  This targets a fixed power-recovery efficiency across
+all speeds — current scales linearly with RPM (gentle at low speed, stronger
+at high speed) while guaranteeing that 75% of mechanical input reaches the
+caps rather than being wasted as copper heat.
+
+The command is clamped to a 25 A ceiling (thermal limit) and passes through
+the slew limiter (§5.1) before transmission.
 
 Regen is disabled entirely when the cap voltage reaches the soft cutoff
 (40.0 V) to prevent overcharging.
@@ -86,9 +87,18 @@ assist:
 
 | Condition | Threshold |
 |---|---|
-| Enter REGEN | `abs(motor_rpm)` ≥ 30 RPM AND throttle-off holdoff (300 ms) expired |
-| Stay in REGEN | `abs(motor_rpm)` ≥ 15 RPM (exit threshold) |
-| Exit REGEN | `abs(motor_rpm)` < 15 RPM |
+| Enter REGEN | `motor_rpm` ≥ 25 RPM AND throttle-off holdoff (300 ms) expired |
+| Stay in REGEN | `motor_rpm` ≥ 18 RPM (exit threshold) OR slip grace (250 ms) active |
+| Exit REGEN | `motor_rpm` < 18 RPM for > 250 ms (grace period expired) |
+
+**Note:** Only positive motor RPM (forward wheel motion through the planetary
+gear) triggers regen.  Negative motor RPM — which occurs when rolling the
+bike backwards — is treated as zero and stays in NEUTRAL.  This prevents
+unintended regen engagement when manoeuvring the bike at rest.
+
+The entry/exit thresholds are set above the sensorless FOC instability floor
+(~200 ERPM ÷ 11 pole pairs ≈ 18 RPM) so that regen only runs where the VESC
+can reliably track rotor angle from back-EMF.
 
 The holdoff timer starts when the throttle is released and prevents regen
 from triggering while the motor coasts down from assist.  If the throttle is
@@ -116,13 +126,13 @@ service is called once per main-loop cycle at its configured period.
 | # | Service | Period | Purpose |
 |---|---|---|---|
 | 0 | ResetButton | continuous | Check soft reset button (GP8) |
-| 1 | InputManager | 10 ms | Read throttle + wheel hall, decide ASSIST/REGEN/NEUTRAL |
+| 1 | InputManager | 10 ms | Read throttle, decide ASSIST/REGEN/NEUTRAL |
 | 2 | VESCComm (RX) | continuous | Parse incoming VESC telemetry packets |
 | 3 | VESCComm (TX) | 25 ms | Request telemetry from VESC |
 | 4 | SafetySupervisor | 10 ms | Check voltage limits, telemetry freshness, throttle validity |
 | 5 | StateMachine | 10 ms | Gate mode transitions with safety checks |
-| 6 | ControlLoop | 10 ms | Compute assist/regen current commands (integral controller) |
-| 7 | CommandManager | 20 ms | Transmit current commands to VESC over UART |
+| 6 | ControlLoop | 10 ms | Compute assist/regen current commands (integral + slew limiter) |
+| 7 | CommandManager | 10 ms | Transmit current commands to VESC over UART |
 | 8 | Display + Energy | 200 ms | Compute ½CV² energy, update 16×2 LCD |
 | 9 | BenchLogger | 500 ms | RAM ring-buffer data capture |
 
@@ -134,19 +144,18 @@ Throttle ADC ──────► InputManager ──► requested_mode + reque
                           ▼
 VESC Telemetry ──► VESCComm ──► SharedState ◄── SafetySupervisor
                                     │                   │
-Wheel Hall ──► (optional LCD) ──────┘                   │
                                     ▼                   ▼
                               StateMachine ──► system_state + inhibit flags
                                     │
                                     ▼
                               ControlLoop ──► assist_command / regen_command
-                                    │
+                                    │         (slew-limited upward)
                                     ▼
                               CommandManager ──► VESC UART TX
 ```
 
 All services communicate through a single `SharedState` object — no queues,
-no callbacks, no interrupts (except the wheel hall edge ISR for timing).
+no callbacks, no interrupts.
 
 ---
 
@@ -155,7 +164,7 @@ no callbacks, no interrupts (except the wheel hall edge ISR for timing).
 | State | Description | Motor Commands |
 |---|---|---|
 | OFF | Initial state after boot | Inhibited |
-| PRECHARGE | Waiting for cap voltage ≥ 15.0 V | Inhibited |
+| PRECHARGE | Waiting for cap voltage ≥ 10.0 V | Inhibited |
 | REGEN | Default running state — no rider request or regen active | Active (regen when braking, zero otherwise) |
 | ASSIST | Rider requesting forward power | Active (assist) |
 | FAULT | One or more faults latched | Inhibited |
@@ -170,33 +179,79 @@ OFF → PRECHARGE → REGEN ⇄ ASSIST
 
 ---
 
-## 5. Regen Integral Controller
+## 5. Regen — Efficiency-Optimal Current Model
 
-When in REGEN state, the ControlLoop uses an integral controller that
-tracks the ratio of actual motor current to commanded current.  It relies
-only on VESC telemetry (motor current) — no wheel speed is needed:
+When in REGEN state, the ControlLoop computes the optimal motor current
+for energy recovery using the motor's physical parameters.
 
-1. **On REGEN entry**, set the internal target to `REGEN_COMMAND_MAX_A`
-   (30 A).  Starting at max ensures the carrier never freezes.
+### Physics
 
-2. **Each cycle**, compute `ratio = actual / commanded` and compare to
-   `REGEN_TARGET_RATIO` (0.7).  The error drives an integral:
-   `target += REGEN_KI_A_PER_S × error × dt`
+Net power delivered to the supercap bus:
 
-3. **If ratio < target** (carrier slipping, excess heat), the integral
-   ramps the command down.
+```
+P_net = λ·ωe·I − R_phase·I²
+```
 
-4. **If ratio > target** (motor absorbing well), the integral ramps
-   the command back up.
+The first term is mechanical power extracted from the wheel (via back-EMF).
+The second term is copper loss (heat in the stator windings).  Maximizing
+`P_net` with respect to `I` gives I* = λ·ωe / (2·R_phase) at 50% efficiency.
+Targeting a higher efficiency η gives:
 
-5. **Hard clamp** at `REGEN_COMMAND_MAX_A` on top, 0 on bottom.
+```
+I = (1 − η) · λ·ωe / R_phase
+```
 
-6. **On REGEN exit** (motor RPM drops below exit threshold), the regen
-   target is reset to zero.
+At 75% efficiency (η = 0.75), 75% of the mechanical power extracted from the
+wheel reaches the caps.  The remaining 25% is copper loss — unavoidable but
+minimized.
+
+### Why not maximize power (50% efficiency)?
+
+At 50% efficiency, half the energy extracted from the wheel becomes heat in
+the motor windings.  On a small geared hub motor (82 mΩ phase resistance),
+this is significant:
+
+| Model | Current @ 200 RPM | P_net (to caps) | Efficiency |
+|---|---|---|---|
+| Old (25 A cap) | 25.0 A | 19 W | 20% |
+| Max power (I*) | 15.6 A | 30 W | 50% |
+| **η = 75%** | **7.8 A** | **22 W** | **75%** |
+
+The 75% target recovers 22 W (73% of max-power) while wasting 3× less
+energy as heat.  The mechanical rim brake handles the difference in braking
+torque.
+
+### Slip Grace Period
+
+When the planetary carrier momentarily slips (RPM dip), a 250 ms grace
+window keeps the system in REGEN rather than snapping to NEUTRAL.  During
+the grace period the efficiency model continues running at the actual
+(lower) RPM, so braking tapers naturally.  If RPM recovers above the exit
+threshold within the window, regen continues uninterrupted.  If RPM stays
+below the exit threshold for the full 250 ms, the system exits to NEUTRAL.
 
 Regen preconditions (any failure → command goes to zero):
 - Cap voltage < 40.0 V (soft cutoff)
 - System not inhibited
+
+### 5.1 Command Slew Limiter
+
+All current commands (both assist and regen) pass through an upward-only
+slew limiter as the final step in `ControlLoop.update()`.
+
+- **Upward changes** are rate-limited to `COMMAND_SLEW_RATE_A_PER_S`
+  (250 A/s).  At the 100 Hz control loop rate this means ≤ 2.5 A per
+  cycle, reaching 0→45 A in ~180 ms.  This prevents FOC transient
+  overshoot from tripping the VESC `ABS_OVER_CURRENT` fault on fast
+  throttle application or regen entry.
+
+- **Downward changes** are immediate — no slew limiting.  This ensures
+  throttle release, fault shutdown, and mode transitions are never
+  delayed.
+
+The slew state is reset to zero whenever the system transitions out of
+ASSIST or REGEN (inhibit, OFF, FAULT), so each new engagement starts
+from a known baseline.
 
 ---
 
@@ -224,15 +279,37 @@ all dynamic controller state (regen integral target).
 
 ## 7. Precharge
 
-The supercapacitor bank must reach `VCAP_MIN_OPERATING` (15.0 V) before the
+The supercapacitor bank must reach `VCAP_MIN_OPERATING` (10.0 V) before the
 VESC can safely drive the motor.  The firmware handles this with a simple
 state gate: the state machine stays in PRECHARGE until telemetry reports
-cap voltage ≥ 15.0 V, then transitions to REGEN.
+cap voltage ≥ 10.0 V, then transitions to REGEN.
 
-The precharge hardware (how the caps get from 0 V to 15 V) is external to
+The precharge hardware (how the caps get from 0 V to 10 V) is external to
 the firmware — it may be a resistor from a bench supply, a dedicated
 precharge relay circuit, or manual charging.  The firmware does not control
 any precharge relay or boost converter.
+
+---
+
+## 7.1 Watchdog Timer (WDT)
+
+The RP2040 hardware watchdog has an 8-second timeout.  If the main loop
+stalls (uncaught exception, infinite loop, hardware lockup), the WDT resets
+the board.
+
+**Key behaviour:** The RP2040 hardware WDT survives soft resets.  When
+`mpremote` connects (Ctrl-C interrupts the main loop), the old WDT is still
+armed but nothing feeds it.  File copies and the subsequent import cascade
+can easily exceed 8 seconds.
+
+**Mitigation (3 layers):**
+
+1. **`boot.py`** re-arms the WDT immediately on every boot.  This buys a
+   fresh 8 s for the module import phase before `main()` starts.
+2. **`main()`** feeds the WDT twice during initialization — once after
+   driver construction (LCD init has ~60 ms of blocking sleeps) and once
+   after service construction.
+3. **`main()` loop** feeds the WDT at the top of every scheduler cycle.
 
 ---
 
@@ -245,7 +322,6 @@ any precharge relay or boost converter.
 | 6 | GP4 | UART1 TX → VESC RX |
 | 7 | GP5 | UART1 RX ← VESC TX |
 | 11 | GP8 | Soft reset button (active-low, internal pull-up) |
-| 12 | GP9 | Wheel speed hall sensor (digital input) |
 | 22 | GP17 | LCD RS (Register Select) |
 | 24 | GP18 | LCD E (Enable) |
 | 25 | GP19 | LCD D4 |
@@ -270,20 +346,9 @@ so no level-shifter is needed.
 | ADC valid range | 300–3800 (raw 12-bit counts) |
 | Fault low | < 100 (open circuit) |
 | Fault high | > 4000 (short circuit) |
-| Deadband | 3% of range |
+| Deadband | 5% of range |
 
-### 8.3 Wheel Speed Sensor
-
-Fork-mounted hall sensor with 3 spoke magnets.
-
-| Parameter | Value |
-|---|---|
-| GPIO | GP9 (digital input with internal pull-up) |
-| Magnets | 3 per revolution |
-| Timeout | 1200 ms (wheel stopped if no edge) |
-| Min edge spacing | 1500 µs (debounce) |
-
-### 8.4 LCD
+### 8.3 LCD
 
 RG1602A (ST7066U / HD44780-compatible) 16×2 character display driven
 directly via 4-bit parallel GPIO.  No I2C backpack required.  RW pin is tied
@@ -307,21 +372,26 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 
 | Constant | Value | Description |
 |---|---|---|
-| VCAP_MIN_OPERATING | 15.0 V | Minimum cap voltage for motor operation |
+| VCAP_MIN_OPERATING | 10.0 V | Minimum cap voltage for motor operation |
 | VCAP_SOFT_REGEN_CUTOFF | 40.0 V | Software regen disable threshold |
 | VCAP_ABSOLUTE_MAX | 42.0 V | Hard overvoltage limit |
-| MOTOR_CURRENT_MAX_A | 40.0 A | Shared max motor current for assist and regen |
+| MOTOR_CURRENT_MAX_A | 50.0 A | VESC-side motor current limit (set in VESC Tool) |
+| MOTOR_COMMAND_LIMIT_A | 45.0 A | Firmware command ceiling — 5 A headroom below VESC limit |
+| VESC_WATT_MAX | 500.0 W | VESC watt limit — both drive and regen |
+| COMMAND_SLEW_RATE_A_PER_S | 250.0 A/s | Max upward rate of change for current commands |
 
 ### Regen Tuning
 
 | Constant | Value | Description |
 |---|---|---|
-| REGEN_ENTRY_RPM | 30.0 | Motor RPM threshold to enter regen |
-| REGEN_EXIT_RPM | 15.0 | Motor RPM threshold to exit regen (hysteresis) |
+| REGEN_ENTRY_RPM | 25.0 | Motor RPM threshold to enter regen |
+| REGEN_EXIT_RPM | 18.0 | Motor RPM threshold to exit regen (hysteresis) |
 | REGEN_HOLDOFF_MS | 300 | Delay after throttle release before regen can trigger |
-| REGEN_COMMAND_MAX_A | 30.0 | Initial (maximum) regen brake current command |
-| REGEN_TARGET_RATIO | 0.7 | Desired actual/commanded current ratio (integral setpoint) |
-| REGEN_KI_A_PER_S | 25.0 | Integral gain — amps per second per unit ratio error |
+| REGEN_SLIP_GRACE_MS | 250 | Grace window before exiting regen on RPM dip |
+| REGEN_EFFICIENCY_TARGET | 0.75 | Target regen efficiency (75%) |
+| REGEN_CURRENT_MAX_A | 25.0 | Hard ceiling for regen current (thermal limit) |
+| FLUX_LINKAGE_WB | 0.0111 | Puyan H01 flux linkage (weber) |
+| MOTOR_PHASE_RESISTANCE_OHM | 0.082 | Phase resistance from VESC FOC detection |
 
 ### Motor
 
@@ -378,7 +448,7 @@ python -m serial.tools.miniterm COM3 115200 --raw > bench_log.csv
 ## 11. Project Layout
 
 ```
-boot.py              # MicroPython boot stub
+boot.py              # WDT re-arm on boot (survives soft reset)
 main.py              # Entry point — wires components, runs scheduler
 core.py              # Enums (SystemState, FaultCode, CommandMode),
                      #   FaultManager, SharedState
@@ -389,13 +459,12 @@ config/
 
 drivers/
   throttle.py        # ADC read → deadband → normalized fraction
-  wheel_speed_hall.py  # Hall edge timing → RPM with debounce/timeout
   gpio_io.py         # ResetButton (edge-detect soft reset)
   lcd_driver.py      # RG1602A HD44780 4-bit parallel GPIO driver
 
 services/
-  input_manager.py      # Reads throttle + wheel, decides ASSIST/REGEN/NEUTRAL
-  control_loop.py       # Assist current mapping + regen integral controller
+  input_manager.py      # Reads throttle, decides ASSIST/REGEN/NEUTRAL
+  control_loop.py       # Assist current mapping + regen integral + slew limiter
   vesc_protocol.py      # VESC UART packet framing, CRC, command builders, parsing
   vesc_comm.py          # UARTPort + VESCComm (telemetry) + CommandManager (TX gate)
   safety_supervisor.py  # Overvoltage, timeout, throttle, VESC fault checks
@@ -406,7 +475,7 @@ app/
   controller.py      # Orchestrator — sequences services via PeriodicTimers
   state_machine.py   # State transitions: OFF→PRECHARGE→REGEN/ASSIST, FAULT
 
-tests/               # pytest suite (243 tests)
+tests/               # pytest suite (221 tests)
 
 scripts/
    test_system_check.py         # Main integrated hardware check
@@ -469,7 +538,7 @@ Run the test suite:
 python -m pytest tests/ -q
 ```
 
-All 243 tests should pass.  The test suite uses mock hardware
+All 221 tests should pass.  The test suite uses mock hardware
 (see `tests/conftest.py`) and does not require a connected Pico.
 
 ### 12.1 Flash MicroPython
@@ -635,11 +704,11 @@ Go to **Motor Settings → General → Current**.
 
 | Setting | Value | Notes |
 |---|---|---|
-| Motor Current Max | 40.0 A | Must match `MOTOR_CURRENT_MAX_A` in settings.py |
-| Motor Current Max Brake | 40.0 A | Must match `MOTOR_CURRENT_MAX_A` in settings.py |
-| Absolute Maximum Current | 50.0 A | FSESC4.20 hardware limit — leave as default |
-| Battery Current Max | 40.0 A | Max current drawn from the supercap bank |
-| Battery Current Max Regen | 40.0 A | Max regen charging current into the supercap bank |
+| Motor Current Max | 50.0 A | Must match `MOTOR_CURRENT_MAX_A` in settings.py (firmware commands up to `MOTOR_COMMAND_LIMIT_A` = 45 A) |
+| Motor Current Max Brake | 50.0 A | Must match `MOTOR_CURRENT_MAX_A` in settings.py (firmware commands up to `MOTOR_COMMAND_LIMIT_A` = 45 A) |
+| Absolute Maximum Current | 130.0 A | FSESC4.20 hardware limit — leave as default |
+| Battery Current Max | 50.0 A | Max current drawn from the supercap bank |
+| Battery Current Max Regen | 50.0 A | Max regen charging current into the supercap bank |
 
 Click **Write Motor Configuration** to save.
 
@@ -655,11 +724,13 @@ Go to **Motor Settings → General → Voltage**.
 |---|---|---|
 | Minimum Input Voltage | 14.0 V | VESC shuts down below this (protects supercaps) |
 | Maximum Input Voltage | 42.0 V | Must not exceed supercap bank absolute max |
+| Watt Max | 500 W | Must match `VESC_WATT_MAX` in settings.py |
+| Watt Max Regen | 500 W | Must match `VESC_WATT_MAX` in settings.py |
 
 Click **Write Motor Configuration** to save.
 
 > These limits protect the supercapacitor bank.  The Pico firmware has its
-> own software limits (`VCAP_MIN_OPERATING` = 15 V, `VCAP_ABSOLUTE_MAX` = 42 V)
+> own software limits (`VCAP_MIN_OPERATING` = 10 V, `VCAP_ABSOLUTE_MAX` = 42 V)
 > but the VESC hardware limits are the last line of defense.
 
 #### 12.4.4 Enable UART App
@@ -981,7 +1052,5 @@ mpremote fs ls
   VESC bus voltage).
 - The VESC reports motor ERPM from back-EMF even with zero commanded current,
   which is what enables passive carrier-lock detection.
-- If using wheel-speed-based regen, set `WHEEL_HALL_PIN` and verify
-  `WHEEL_MAGNET_COUNT` for your hub.
 - For practical tuning, start with conservative PI gains and current limits
   before road testing.

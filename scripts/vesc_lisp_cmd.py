@@ -17,10 +17,10 @@ def main():
   if len(sys.argv) >= 2:
     expr = sys.argv[1]
 
-    vesc = VescUartTemplate(rxbuf=1024)
-    payload = bytes([COMM_LISP_REPL_CMD]) + expr.encode("utf-8") + b"\x00"
-    vesc.send_command(payload, expected_cmd=None, timeout_ms=0)
-    print("Sent Lisp command: %s" % expr)
+  vesc = VescUartTemplate(rxbuf=1024)
+  payload = bytes([COMM_LISP_REPL_CMD]) + expr.encode("utf-8") + b"\x00"
+  vesc.send_command(payload, expected_cmd=None, timeout_ms=0)
+  print("Sent Lisp command: %s" % expr)
 
 
 main()

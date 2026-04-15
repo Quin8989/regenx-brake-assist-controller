@@ -127,11 +127,11 @@ def _read_live_limits():
 
 def _service_once(cmd_mode, amps):
     if cmd_mode == "assist":
-        vesc.send_assist(amps)
+        vesc.send_current(amps)
     elif cmd_mode == "regen":
-        vesc.send_regen(amps)
+        vesc.send_current(-amps)
     else:
-        vesc.send_neutral()
+        vesc.send_current(0.0)
 
 
 def _spin_to_band():

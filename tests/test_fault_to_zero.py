@@ -71,6 +71,7 @@ class TestFaultToZero:
         assert state.inhibit_motor_commands is True
         assert state.assist_command_request == 0.0
         assert state.regen_command_request == 0.0
+        assert state.motor_command_a == 0.0
         assert len(uart._tx_buf) > 0
 
     def test_throttle_fault_during_assist(self):

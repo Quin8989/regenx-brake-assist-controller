@@ -23,67 +23,42 @@ def _make():
     return state, uart, cm
 
 
+def _sent_current(uart, index):
+    import struct
+    from services.vesc_protocol import _extract_payload
+    payload, _ = _extract_payload(bytearray(uart.sent[index]))
+    return struct.unpack(">i", payload[1:5])[0] / 1000.0
+
+
+def _sent_command_id(uart, index):
+    from services.vesc_protocol import _extract_payload
+    payload, _ = _extract_payload(bytearray(uart.sent[index]))
+    return payload[0]
+
+
 class TestCommandManager:
-    def test_inhibit_sends_neutral(self):
-        s, uart, cm = _make()
-        s.inhibit_motor_commands = True
-        s.assist_command_request = 30.0
-        s.regen_command_request = 20.0
-        cm.update()
-        assert len(uart.sent) == 1
-        import struct
-        from services.vesc_protocol import COMM_SET_CURRENT, _extract_payload
-        payload, _ = _extract_payload(bytearray(uart.sent[0]))
-        assert payload[0] == COMM_SET_CURRENT
-        value = struct.unpack(">i", payload[1:5])[0]
-        assert value == 0
-
-    def test_sends_assist_current(self):
+    def test_sends_positive_command(self):
         s, uart, cm = _make()
         s.inhibit_motor_commands = False
-        s.assist_command_request = 15.5
-        s.regen_command_request = 0.0
+        s.motor_command_a = 15.5
         cm.update()
-        import struct
-        from services.vesc_protocol import COMM_SET_CURRENT, _extract_payload
-        payload, _ = _extract_payload(bytearray(uart.sent[0]))
-        assert payload[0] == COMM_SET_CURRENT
-        value = struct.unpack(">i", payload[1:5])[0]
-        assert value == 15500
+        from services.vesc_protocol import COMM_SET_CURRENT
+        assert _sent_command_id(uart, 0) == COMM_SET_CURRENT
+        assert _sent_current(uart, 0) == 15.5
 
-    def test_sends_regen_current(self):
+    def test_sends_negative_command_as_regen(self):
+        """Negative motor_command_a routes to COMM_SET_CURRENT (regen)."""
         s, uart, cm = _make()
         s.inhibit_motor_commands = False
-        s.assist_command_request = 0.0
-        s.regen_command_request = 20.0
+        s.motor_command_a = -20.0
         cm.update()
-        import struct
-        from services.vesc_protocol import COMM_SET_BRAKE_CURRENT, _extract_payload
-        payload, _ = _extract_payload(bytearray(uart.sent[0]))
-        assert payload[0] == COMM_SET_BRAKE_CURRENT
-        value = struct.unpack(">i", payload[1:5])[0]
-        assert value == 20000
+        from services.vesc_protocol import COMM_SET_CURRENT
+        assert _sent_command_id(uart, 0) == COMM_SET_CURRENT
+        assert _sent_current(uart, 0) == -20.0  # negative = regen
 
-    def test_neutral_when_no_requests(self):
+    def test_sends_zero_when_no_command(self):
         s, uart, cm = _make()
         s.inhibit_motor_commands = False
-        s.assist_command_request = 0.0
-        s.regen_command_request = 0.0
+        s.motor_command_a = 0.0
         cm.update()
-        import struct
-        from services.vesc_protocol import COMM_SET_CURRENT, _extract_payload
-        payload, _ = _extract_payload(bytearray(uart.sent[0]))
-        assert payload[0] == COMM_SET_CURRENT
-        value = struct.unpack(">i", payload[1:5])[0]
-        assert value == 0
-
-    def test_assist_wins_if_both_nonzero(self):
-        """If control loop accidentally sets both, assist takes priority."""
-        s, uart, cm = _make()
-        s.inhibit_motor_commands = False
-        s.assist_command_request = 10.0
-        s.regen_command_request = 5.0
-        cm.update()
-        from services.vesc_protocol import COMM_SET_CURRENT, _extract_payload
-        payload, _ = _extract_payload(bytearray(uart.sent[0]))
-        assert payload[0] == COMM_SET_CURRENT  # assist, not brake
+        assert _sent_current(uart, 0) == 0.0

@@ -10,6 +10,7 @@ from config.settings import (
     THROTTLE_DEADBAND,
     THROTTLE_FAULT_HIGH,
     THROTTLE_FAULT_LOW,
+    THROTTLE_OVERSAMPLE,
     THROTTLE_RAW_MAX,
     THROTTLE_RAW_MIN,
 )
@@ -25,7 +26,11 @@ class Throttle:
 
     def update(self):
         """Sample throttle and compute normalized fraction."""
-        self.raw = self._adc.read_u16() >> 4  # 12-bit range (0–4095)
+        # Oversample to reduce RP2040 ADC noise (digital crosstalk).
+        total = 0
+        for _ in range(THROTTLE_OVERSAMPLE):
+            total += self._adc.read_u16() >> 4
+        self.raw = total // THROTTLE_OVERSAMPLE
 
         # Fault detection
         if self.raw < THROTTLE_FAULT_LOW or self.raw > THROTTLE_FAULT_HIGH:

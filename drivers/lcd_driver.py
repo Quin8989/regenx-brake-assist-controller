@@ -90,12 +90,6 @@ class LCDDriver:
         for ch in text:
             self._write(ord(ch), rs=1)
 
-    def backlight_on(self):
-        self._bl.value(1)
-
-    def backlight_off(self):
-        self._bl.value(0)
-
     def _command(self, value):
         self._write(value, rs=0)
 

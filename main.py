@@ -16,11 +16,10 @@ import sys
 from app.controller import AppController
 from app.state_machine import StateMachine
 from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX
-from core import FaultCode, FaultManager, SharedState, SystemState, EnergyEstimator
+from core import FaultCode, FaultManager, SharedState, SystemState
 from drivers.lcd_driver import LCDDriver
 from drivers.gpio_io import ResetButton
 from drivers.throttle import Throttle
-from drivers.wheel_speed_hall import WheelSpeedHall
 from services.control_loop import ControlLoop
 from services.display_manager import DisplayManager
 from services.input_manager import InputManager
@@ -48,7 +47,6 @@ def _capture_exception(exc, state, logger):
         "vcap": round(state.cap_voltage_v, 2),
         "vesc_fault": state.vesc_fault_code,
         "mech_rpm": round(state.vesc_mech_rpm, 1),
-        "wheel_rpm": round(state.wheel_speed_rpm, 1),
         "throttle_raw": state.throttle_raw,
         "inhibit": state.inhibit_motor_commands,
         "faults": list(state.fault_flags),
@@ -67,30 +65,32 @@ def _capture_exception(exc, state, logger):
 
 def main():
     # --- Hardware watchdog — resets Pico if main loop stalls ---
+    # boot.py already re-armed the WDT to handle stale-after-deploy.
+    # Creating it here resets the counter to a fresh 8 s.
     from machine import WDT
-    wdt = WDT(timeout=8000)  # 8 s — longest safe interval on RP2040
+    wdt = WDT(timeout=8000)
 
     # --- Shared state ---
     state = SharedState()
     faults = FaultManager(state)
     logger = Logger()
 
-    # --- Drivers ---
+    # --- Drivers (LCD init has ~60 ms of blocking sleeps) ---
     uart = UARTPort()
     throttle = Throttle()
-    wheel_speed = WheelSpeedHall()
     reset_button = ResetButton()
     lcd = LCDDriver()
+    wdt.feed()  # buy another 8 s after driver init
 
     # --- Services ---
     vesc_comm = VESCComm(uart, state)
-    input_mgr = InputManager(throttle, state, wheel_speed)
+    input_mgr = InputManager(throttle, state)
     control_loop = ControlLoop(state)
     command_mgr = CommandManager(vesc_comm, state)
     safety = SafetySupervisor(state, faults)
-    energy = EnergyEstimator(state)
     display_mgr = DisplayManager(lcd, state)
     bench_log = BenchLogger(state)
+    wdt.feed()  # buy another 8 s before app layer init
 
     # --- App layer ---
     state_machine = StateMachine(state, faults)
@@ -102,7 +102,6 @@ def main():
         state_machine=state_machine,
         control_loop=control_loop,
         command_mgr=command_mgr,
-        energy=energy,
         display_mgr=display_mgr,
         reset_button=reset_button,
         fault_manager=faults,
@@ -123,7 +122,7 @@ def main():
             state.inhibit_motor_commands = True
             state.system_state = SystemState.FAULT
             faults.set_fault(FaultCode.INTERNAL)
-            vesc_comm.send_neutral()
+            vesc_comm.send_current(0.0)
             if not CONTINUE_ON_MAIN_LOOP_EXCEPTION:
                 raise
 

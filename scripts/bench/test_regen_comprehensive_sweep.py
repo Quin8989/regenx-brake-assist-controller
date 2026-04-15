@@ -142,7 +142,7 @@ def _spin_to_band():
     confirmed_rpm = 0.0
     while ticks_diff(ticks_ms(), start) < SPIN_TIMEOUT_MS:
         last_req = _tick(last_req)
-        vesc.send_assist(SPIN_ASSIST_A)
+        vesc.send_current(SPIN_ASSIST_A)
         rpm = abs(state.vesc_mech_rpm)
         if TARGET_RPM_MIN <= rpm <= TARGET_RPM_MAX:
             in_band += 1
@@ -160,7 +160,7 @@ def _coast(duration_ms):
     last_req = start
     while ticks_diff(ticks_ms(), start) < duration_ms:
         last_req = _tick(last_req)
-        vesc.send_neutral()
+        vesc.send_current(0.0)
         sleep_ms(SAMPLE_PERIOD_MS)
 
 
@@ -191,7 +191,7 @@ def _measure_step(cmd_a, cur_limits, volt_limits):
     while ticks_diff(ticks_ms(), start) < MEASURE_MS:
         now = ticks_ms()
         last_req = _tick(last_req)
-        vesc.send_regen(cmd_a)
+        vesc.send_current(-cmd_a)
 
         t_rel = ticks_diff(now, start)
         iq    = state.vesc_iq_current_a
@@ -382,7 +382,7 @@ for cmd, m, pre_rpm in results:
 
 # Neutral at end
 for _ in range(15):
-    vesc.send_neutral()
+    vesc.send_current(0.0)
     sleep_ms(20)
 
 print()

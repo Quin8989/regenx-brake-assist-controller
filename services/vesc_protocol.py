@@ -16,7 +16,7 @@ FRAME_END = 0x03
 
 COMM_GET_VALUES = 4           # Request full telemetry
 COMM_SET_CURRENT = 6          # Set motor current (amps * 1000)
-COMM_SET_BRAKE_CURRENT = 7    # Set brake/regen current (amps * 1000)
+COMM_SET_CURRENT_BRAKE = 7    # Set brake current ceiling (amps * 1000, positive)
 
 # Telemetry struct: everything after the opcode byte
 # Includes dq current terms reported by VESC (avg_id, avg_iq).
@@ -70,7 +70,8 @@ def _build_set_current(amps):
 
 
 def _build_set_brake_current(amps):
-    return _wrap_frame(struct.pack(">Bi", COMM_SET_BRAKE_CURRENT, int(amps * 1000)))
+    """Build COMM_SET_CURRENT_BRAKE packet.  amps must be >= 0."""
+    return _wrap_frame(struct.pack(">Bi", COMM_SET_CURRENT_BRAKE, int(amps * 1000)))
 
 
 # =============================================================================
@@ -90,8 +91,8 @@ def _parse_telemetry(payload):
             motor_current_raw, input_current_raw,
             _avg_id, _avg_iq,
             duty_raw, rpm, v_in_raw,
-            ah_raw, ah_charged_raw, wh_raw, wh_charged_raw,
-            tach, tach_abs,
+            _ah, _ah_charged, _wh, _wh_charged,
+            _tach, _tach_abs,
             fault_code,
         ) = struct.unpack_from(_TELEMETRY_FMT, payload, 1)
     except Exception:
@@ -101,17 +102,10 @@ def _parse_telemetry(payload):
         temp_motor / 10.0,
         motor_current_raw / 100.0,
         input_current_raw / 100.0,
-        _avg_id / 100.0,
         _avg_iq / 100.0,
         duty_raw / 1000.0,
         rpm,
         v_in_raw / 10.0,
-        ah_raw / 10000.0,
-        ah_charged_raw / 10000.0,
-        wh_raw / 10000.0,
-        wh_charged_raw / 10000.0,
-        tach,
-        tach_abs,
         fault_code,
     )
 

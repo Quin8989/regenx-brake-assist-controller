@@ -145,22 +145,22 @@ class TestServiceRxBufferOverflow:
 
 
 class TestSendCommands:
-    def test_send_assist_writes_uart(self):
+    def test_send_current_positive_writes_uart(self):
         uart, state, vc = _make()
         set_clock_ms(500)
-        vc.send_assist(15.0)
+        vc.send_current(15.0)
         assert len(uart._tx_buf) > 0
 
-    def test_send_regen_writes_uart(self):
+    def test_send_current_negative_writes_uart(self):
         uart, state, vc = _make()
         set_clock_ms(600)
-        vc.send_regen(10.0)
+        vc.send_current(-10.0)
         assert len(uart._tx_buf) > 0
 
-    def test_send_neutral_writes_uart(self):
+    def test_send_current_zero_writes_uart(self):
         uart, state, vc = _make()
         set_clock_ms(700)
-        vc.send_neutral()
+        vc.send_current(0.0)
         assert len(uart._tx_buf) > 0
 
     def test_request_telemetry_writes_uart(self):

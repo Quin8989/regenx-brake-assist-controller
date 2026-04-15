@@ -20,7 +20,7 @@ from utils import PeriodicTimer
 class AppController:
     def __init__(self, state, input_mgr, vesc_comm,
                  safety, state_machine, control_loop,
-                 command_mgr, energy, display_mgr,
+                 command_mgr, display_mgr,
                  reset_button=None, fault_manager=None,
                  bench_logger=None):
         self._state = state
@@ -30,7 +30,6 @@ class AppController:
         self._state_machine = state_machine
         self._control_loop = control_loop
         self._command_mgr = command_mgr
-        self._energy = energy
         self._display_mgr = display_mgr
         self._reset_button = reset_button
         self._fault_manager = fault_manager
@@ -82,7 +81,6 @@ class AppController:
 
         # 8. Display (energy estimation + LCD)
         if self._t_display.ready():
-            self._energy.update()
             self._display_mgr.update()
 
         # 9. Bench data capture (RAM ring buffer)

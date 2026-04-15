@@ -54,7 +54,7 @@ def service_until(duration_ms, brake_cmd_a):
             last_req = now
 
         vesc.service_rx()
-        vesc.send_regen(brake_cmd_a)
+        vesc.send_current(-brake_cmd_a)
 
         iq_sum += state.vesc_iq_current_a
         rpm_sum += state.vesc_mech_rpm
@@ -86,7 +86,7 @@ for level in BRAKE_LEVELS_A:
 
 # Always return to neutral at end.
 for _ in range(10):
-    vesc.send_neutral()
+    vesc.send_current(0.0)
     sleep_ms(20)
 
 print("\nDone")

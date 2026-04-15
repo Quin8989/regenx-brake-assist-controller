@@ -15,7 +15,6 @@ from config.settings import (
     VESC_UART_TX,
 )
 from services.vesc_protocol import (
-    _build_set_brake_current,
     _build_set_current,
     _build_telemetry_request,
     _extract_payload,
@@ -95,11 +94,8 @@ class VESCComm:
         (
             s.vesc_temp_fet_c, s.vesc_temp_motor_c,
             s.vesc_motor_current_a, s.vesc_input_current_a,
-            _, s.vesc_iq_current_a,
+            s.vesc_iq_current_a,
             s.vesc_duty_cycle, erpm, s.vesc_bus_voltage_v,
-            _, _,
-            _, _,
-            _, _,
             s.vesc_fault_code,
         ) = vals
         s.cap_voltage_v = s.vesc_bus_voltage_v
@@ -108,14 +104,20 @@ class VESCComm:
 
     # --- Commands ---
 
-    def send_assist(self, current_a):
+    def send_current(self, current_a):
+        """Send a motor current command via COMM_SET_CURRENT.
+
+        Positive → forward drive.
+        Negative → FOC regen braking (energy flows motor → bus → caps).
+        Zero     → idle.
+
+        Always uses COMM_SET_CURRENT (cmd 6).  Negative values put the
+        FOC controller into standard current mode with negative iq,
+        which actively switches the inverter to return energy to the bus.
+        COMM_SET_CURRENT_BRAKE (cmd 7) is intentionally NOT used — its
+        phase-shorting behaviour dissipates energy as heat.
+        """
         self._uart.write(_build_set_current(current_a))
-
-    def send_regen(self, current_a):
-        self._uart.write(_build_set_brake_current(current_a))
-
-    def send_neutral(self):
-        self._uart.write(_build_set_current(0.0))
 
 
 # =============================================================================
@@ -129,18 +131,4 @@ class CommandManager:
         self._state = shared_state
 
     def update(self):
-        s = self._state
-
-        if s.inhibit_motor_commands:
-            self._vesc.send_neutral()
-            return
-
-        if s.assist_command_request > 0.0:
-            self._vesc.send_assist(s.assist_command_request)
-            return
-
-        if s.regen_command_request > 0.0:
-            self._vesc.send_regen(s.regen_command_request)
-            return
-
-        self._vesc.send_neutral()
+        self._vesc.send_current(self._state.motor_command_a)

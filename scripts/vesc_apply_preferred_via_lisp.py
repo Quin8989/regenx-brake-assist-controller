@@ -10,6 +10,8 @@ Run:
 
 from time import sleep_ms
 
+from machine import WDT
+
 from scripts.lib.vesc_uart_template import VescUartTemplate
 
 try:
@@ -49,6 +51,7 @@ def send_lisp_expr(vesc, expr):
 
 
 vesc = VescUartTemplate(rxbuf=2048)
+wdt = WDT(timeout=8000)
 
 print()
 print("=" * 54)
@@ -71,6 +74,7 @@ targets = get_flash_limits()
 commands = [
     "(conf-set 'l-current-max %.3f)" % targets["motor_max_current_a"],
     "(conf-set 'l-current-min %.3f)" % targets["motor_min_current_a"],
+    "(conf-set 'l-abs-current-max %.3f)" % targets["abs_current_max_a"],
     "(conf-set 'l-in-current-max %.3f)" % targets["battery_max_current_a"],
     "(conf-set 'l-in-current-min %.3f)" % targets["battery_min_current_a"],
     "(conf-set 'l-min-vin %.3f)" % targets["min_input_voltage_v"],
@@ -84,6 +88,7 @@ commands = [
 
 print("Applying commands:")
 for cmd in commands:
+    wdt.feed()
     print("  " + cmd)
     send_lisp_expr(vesc, cmd)
     # REPL command handling has a 0.5 s guard in firmware.

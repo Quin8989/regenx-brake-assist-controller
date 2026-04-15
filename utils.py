@@ -46,7 +46,6 @@ class PeriodicTimer:
 _ENABLED = {
     "startup": True,
     "main": True,
-    "loop": False,
 }
 
 
@@ -61,14 +60,3 @@ class Logger:
 
     def error(self, category, msg):
         self._emit("ERR ", category, msg)
-
-    def debug(self, category, msg):
-        self._emit("DBG ", category, msg)
-
-    @staticmethod
-    def enable(category):
-        _ENABLED[category] = True
-
-    @staticmethod
-    def disable(category):
-        _ENABLED[category] = False

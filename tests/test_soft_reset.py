@@ -55,7 +55,6 @@ def _make_app():
         state_machine=noop,
         control_loop=cl,
         command_mgr=noop,
-        energy=noop,
         display_mgr=noop,
         reset_button=btn,
         fault_manager=fm,

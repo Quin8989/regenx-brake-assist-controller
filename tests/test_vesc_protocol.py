@@ -4,12 +4,10 @@ import struct
 
 from services.vesc_protocol import (
     COMM_GET_VALUES,
-    COMM_SET_BRAKE_CURRENT,
     COMM_SET_CURRENT,
     FRAME_END,
     FRAME_START_SHORT,
     _TELEMETRY_FMT,
-    _build_set_brake_current,
     _build_set_current,
     _build_telemetry_request,
     _crc16,
@@ -95,13 +93,6 @@ class TestCommandBuilders:
         value = struct.unpack(">i", extracted[1:5])[0]
         assert value == -5000
 
-    def test_set_brake_current_encoding(self):
-        frame = _build_set_brake_current(20.0)
-        extracted, _ = _extract_payload(bytearray(frame))
-        assert extracted[0] == COMM_SET_BRAKE_CURRENT
-        value = struct.unpack(">i", extracted[1:5])[0]
-        assert value == 20000
-
     def test_set_current_zero(self):
         frame = _build_set_current(0.0)
         extracted, _ = _extract_payload(bytearray(frame))
@@ -141,9 +132,8 @@ class TestParseTelemetry:
         result = _parse_telemetry(payload)
         assert result is not None
         # tuple: (temp_fet, temp_motor, motor_current, input_current,
-        #         id_current, iq_current, duty, rpm, v_in, ah, ah_charged,
-        #         wh, wh_charged, tach, tach_abs, fault_code)
-        assert len(result) == 16
+        #         iq_current, duty, rpm, v_in, fault_code)
+        assert len(result) == 9
 
     def test_scaling_temp_fet(self):
         payload = _make_telemetry_payload(temp_fet=250)
@@ -168,62 +158,27 @@ class TestParseTelemetry:
     def test_scaling_duty(self):
         payload = _make_telemetry_payload(duty=500)
         result = _parse_telemetry(payload)
-        assert result[6] == 0.5  # 500 / 1000
-
-    def test_scaling_id_current(self):
-        payload = _make_telemetry_payload(avg_id=123)
-        result = _parse_telemetry(payload)
-        assert result[4] == 1.23
+        assert result[5] == 0.5  # 500 / 1000
 
     def test_scaling_iq_current(self):
         payload = _make_telemetry_payload(avg_iq=-456)
         result = _parse_telemetry(payload)
-        assert result[5] == -4.56
+        assert result[4] == -4.56
 
     def test_rpm_passed_raw(self):
         payload = _make_telemetry_payload(rpm=4500)
         result = _parse_telemetry(payload)
-        assert result[7] == 4500
+        assert result[6] == 4500
 
     def test_v_in_scaling(self):
         payload = _make_telemetry_payload(v_in=480)
         result = _parse_telemetry(payload)
-        assert abs(result[8] - 48.0) < 0.01  # 480 / 10
-
-    def test_ah_scaling(self):
-        payload = _make_telemetry_payload(ah=10000)
-        result = _parse_telemetry(payload)
-        assert result[9] == 1.0  # 10000 / 10000
-
-    def test_ah_charged_scaling(self):
-        payload = _make_telemetry_payload(ah_charged=5000)
-        result = _parse_telemetry(payload)
-        assert result[10] == 0.5
-
-    def test_wh_scaling(self):
-        payload = _make_telemetry_payload(wh=20000)
-        result = _parse_telemetry(payload)
-        assert result[11] == 2.0
-
-    def test_wh_charged_scaling(self):
-        payload = _make_telemetry_payload(wh_charged=8000)
-        result = _parse_telemetry(payload)
-        assert result[12] == 0.8
-
-    def test_tach_passed_raw(self):
-        payload = _make_telemetry_payload(tach=-100)
-        result = _parse_telemetry(payload)
-        assert result[13] == -100
-
-    def test_tach_abs_passed_raw(self):
-        payload = _make_telemetry_payload(tach_abs=5678)
-        result = _parse_telemetry(payload)
-        assert result[14] == 5678
+        assert abs(result[7] - 48.0) < 0.01  # 480 / 10
 
     def test_fault_code(self):
         payload = _make_telemetry_payload(fault=3)
         result = _parse_telemetry(payload)
-        assert result[15] == 3
+        assert result[8] == 3
 
     def test_wrong_opcode_returns_none(self):
         payload = _make_telemetry_payload()

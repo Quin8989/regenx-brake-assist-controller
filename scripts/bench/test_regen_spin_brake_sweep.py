@@ -54,11 +54,11 @@ def run_window(duration_ms, mode, amps=0.0):
         vesc.service_rx()
 
         if mode == "assist":
-            vesc.send_assist(amps)
+            vesc.send_current(amps)
         elif mode == "regen":
-            vesc.send_regen(amps)
+            vesc.send_current(-amps)
         else:
-            vesc.send_neutral()
+            vesc.send_current(0.0)
 
         iq_sum += state.vesc_iq_current_a
         rpm_sum += abs(state.vesc_mech_rpm)
@@ -95,7 +95,7 @@ for level in BRAKE_LEVELS_A:
 
 # Ensure neutral at end
 for _ in range(12):
-    vesc.send_neutral()
+    vesc.send_current(0.0)
     sleep_ms(20)
 
 print("\nDone")

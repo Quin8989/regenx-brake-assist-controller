@@ -36,13 +36,13 @@ for f in app/__init__.py app/controller.py app/state_machine.py; do
 done
 
 echo "=== Copying config/ ==="
-for f in config/__init__.py config/settings.py config/vesc_config.py; do
+for f in config/__init__.py config/settings.py; do
     echo "  cp $f → :/$f"
     $MPREMOTE cp "$f" ":/$f"
 done
 
 echo "=== Copying drivers/ ==="
-for f in drivers/__init__.py drivers/gpio_io.py drivers/lcd_driver.py drivers/throttle.py drivers/wheel_speed_hall.py; do
+for f in drivers/__init__.py drivers/gpio_io.py drivers/lcd_driver.py drivers/throttle.py; do
     echo "  cp $f → :/$f"
     $MPREMOTE cp "$f" ":/$f"
 done

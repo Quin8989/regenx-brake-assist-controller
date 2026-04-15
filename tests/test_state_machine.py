@@ -31,14 +31,14 @@ class TestOffTransitions:
     def test_off_to_precharge_at_exactly_threshold(self):
         s, f, sm = _make()
         s.system_state = SystemState.OFF
-        s.cap_voltage_v = 14.99
+        s.cap_voltage_v = 9.99
         sm.update()
         assert s.system_state == SystemState.PRECHARGE
 
     def test_off_to_regen_at_exactly_threshold(self):
         s, f, sm = _make()
         s.system_state = SystemState.OFF
-        s.cap_voltage_v = 15.0
+        s.cap_voltage_v = 10.0
         sm.update()
         assert s.system_state == SystemState.REGEN
 
@@ -49,7 +49,7 @@ class TestPrechargeTransitions:
     def test_precharge_stays_until_threshold(self):
         s, f, sm = _make()
         s.system_state = SystemState.PRECHARGE
-        s.cap_voltage_v = 10.0
+        s.cap_voltage_v = 8.0
         sm.update()
         assert s.system_state == SystemState.PRECHARGE
 

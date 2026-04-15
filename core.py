@@ -1,4 +1,4 @@
-# core.py — Enums, fault handling, shared system state, and energy estimation
+# core.py — Enums, fault handling, and shared system state
 #
 # Single module for all shared definitions and runtime state.
 
@@ -110,15 +110,10 @@ class SharedState:
         self.vesc_temp_fet_c = 0.0
         self.vesc_temp_motor_c = 0.0
 
-        # --- Wheel speed input (optional — used for LCD display only) ---
-        self.wheel_speed_rpm = 0.0
-        self.wheel_speed_raw_rpm = 0.0
-        self.wheel_speed_valid = False
-        self.wheel_speed_fresh = False
-
         # --- Command requests ---
         self.assist_command_request = 0.0
         self.regen_command_request = 0.0
+        self.motor_command_a = 0.0
 
         # --- Timestamps (ms) ---
         self.last_vesc_rx_ms = 0
@@ -127,36 +122,4 @@ class SharedState:
         self.last_exception_str = ""
 
 
-# =============================================================================
-# Energy estimator — ½CV² stored energy and usable percentage
-# =============================================================================
 
-from config.settings import (
-    CAPACITANCE_F,
-    VCAP_MIN_OPERATING,
-    VCAP_SOFT_REGEN_CUTOFF,
-)
-from utils import clamp
-
-# Precomputed energy bounds (constant for given capacitance and voltage window)
-_HALF_C = 0.5 * CAPACITANCE_F
-_E_MIN = _HALF_C * VCAP_MIN_OPERATING * VCAP_MIN_OPERATING
-_E_MAX = _HALF_C * VCAP_SOFT_REGEN_CUTOFF * VCAP_SOFT_REGEN_CUTOFF
-_E_RANGE = _E_MAX - _E_MIN if _E_MAX > _E_MIN else 0.0
-
-
-class EnergyEstimator:
-    def __init__(self, shared_state):
-        self._state = shared_state
-
-    def update(self):
-        """Recompute energy estimates from current cap voltage."""
-        v = self._state.cap_voltage_v
-
-        energy_j = _HALF_C * v * v
-
-        if _E_RANGE > 0.0:
-            pct = (energy_j - _E_MIN) / _E_RANGE * 100.0
-            self._state.cap_energy_percent = clamp(pct, 0.0, 100.0)
-        else:
-            self._state.cap_energy_percent = 0.0
