@@ -17,7 +17,7 @@ from machine import WDT
 from core import SharedState
 from drivers.lcd_driver import LCDDriver
 from drivers.throttle import Throttle
-from services.vesc_comm import UARTPort, VESCComm
+from services.vesc_comm import VESCComm
 
 # RP2040 watchdog max is 8388 ms.
 wdt = WDT(timeout=8000)
@@ -33,13 +33,12 @@ print("[INIT] Throttle...")
 throttle = Throttle()
 
 print("[INIT] VESC UART...")
-uart = UARTPort()
 
 print("[INIT] Shared state...")
 state = SharedState()
 
 print("[INIT] VESCComm...")
-vesc_comm = VESCComm(uart, state)
+vesc_comm = VESCComm(state)
 
 # Ensure motor is always inhibited during test
 state.inhibit_motor_commands = True

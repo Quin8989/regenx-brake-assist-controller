@@ -1,7 +1,15 @@
-# services/safety_supervisor.py — Highest-priority protection layer
+# services/system_supervisor.py — State transitions, safety checks, and inhibit policy
 #
+# Single authority for system state, fault detection, and motion inhibit.
 # Runs frequently and overrides all non-safety logic.
-# Ensures safe shutdown within the target of < 100 ms on detected fault.
+#
+# Update order within each call:
+#   1. Safety checks (overvoltage, telemetry, VESC fault, throttle)
+#   2. State transitions (PRECHARGE→REGEN, ASSIST↔REGEN, any→FAULT, FAULT→REGEN)
+#   3. Inhibit policy (derived from CURRENT state after transitions)
+#
+# This ordering ensures inhibit is always computed from the post-transition
+# state, eliminating the need for band-aid inhibit writes elsewhere.
 
 from time import ticks_diff, ticks_ms
 
@@ -10,29 +18,32 @@ from config.settings import (
     VCAP_MIN_OPERATING,
     VESC_TELEMETRY_TIMEOUT_MS,
 )
-from core import FaultCode, SystemState
+from core import CommandMode, FaultCode, SystemState
 
 # VESC fault codes (from datatypes.h mc_fault_code enum):
 #   0 = NONE, 1 = OVER_VOLTAGE, 2 = UNDER_VOLTAGE, 3 = DRV, 4 = ABS_OVER_CURRENT,
 #   5 = OVER_TEMP_FET, 6 = OVER_TEMP_MOTOR
 
 # Prebuilt sets for state membership checks (avoid recreating each call)
-_TELEMETRY_EXEMPT_STATES = {SystemState.OFF, SystemState.PRECHARGE}
-_INHIBIT_STATES = {SystemState.OFF, SystemState.PRECHARGE, SystemState.FAULT}
+_TELEMETRY_EXEMPT_STATES = {SystemState.PRECHARGE}
+_INHIBIT_STATES = {SystemState.PRECHARGE, SystemState.FAULT}
 
 
-class SafetySupervisor:
+class SystemSupervisor:
     def __init__(self, shared_state, fault_manager):
         self._state = shared_state
         self._faults = fault_manager
 
     def update(self):
-        """Run all safety checks. Call this at the highest priority rate."""
+        """Run all safety checks, transition state, then apply inhibit policy."""
         self._check_overvoltage()
         self._check_telemetry_health()
         self._check_vesc_fault()
         self._check_throttle_validity()
+        self._update_system_state()
         self._apply_inhibits()
+
+    # -- Safety checks --------------------------------------------------------
 
     def _check_overvoltage(self):
         if self._state.cap_voltage_v >= VCAP_ABSOLUTE_MAX:
@@ -69,6 +80,44 @@ class SafetySupervisor:
             self._faults.set_fault(FaultCode.THROTTLE_RANGE)
         else:
             self._faults.clear_fault(FaultCode.THROTTLE_RANGE)
+
+    # -- State transitions ----------------------------------------------------
+
+    def _update_system_state(self):
+        """Evaluate conditions and transition system state.
+
+        Transition map:
+          PRECHARGE → REGEN   (cap voltage reaches operating threshold)
+          ASSIST ↔ REGEN      (follows rider-requested mode)
+          Any → FAULT         (when faults are present)
+          FAULT → REGEN       (when all faults clear)
+        """
+        s = self._state
+
+        # Any state → FAULT (highest priority)
+        if self._faults.has_fault():
+            s.system_state = SystemState.FAULT
+            return
+
+        current = s.system_state
+
+        if current == SystemState.PRECHARGE:
+            if s.cap_voltage_v >= VCAP_MIN_OPERATING:
+                s.system_state = SystemState.REGEN
+            return
+
+        if current == SystemState.FAULT:
+            # All faults cleared — return to REGEN
+            s.system_state = SystemState.REGEN
+            return
+
+        # Normal operation: state follows rider intent
+        if s.requested_mode == CommandMode.ASSIST:
+            s.system_state = SystemState.ASSIST
+        else:
+            s.system_state = SystemState.REGEN
+
+    # -- Inhibit policy -------------------------------------------------------
 
     def _apply_inhibits(self):
         """Single source of truth for motion inhibit policy.

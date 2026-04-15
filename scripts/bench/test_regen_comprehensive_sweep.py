@@ -24,7 +24,7 @@ import math
 import struct
 
 from core import SharedState
-from services.vesc_comm import UARTPort, VESCComm
+from services.vesc_comm import VESCComm
 
 try:
     from machine import WDT
@@ -73,8 +73,7 @@ FAULT_NAMES = {
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 state = SharedState()
-uart  = UARTPort()
-vesc  = VESCComm(uart, state)
+vesc  = VESCComm(state)
 wdt   = WDT(timeout=8000) if WDT is not None else None
 
 
@@ -199,7 +198,7 @@ def _measure_step(cmd_a, cur_limits, volt_limits):
         inp   = state.vesc_input_current_a
         duty  = state.vesc_duty_cycle
         rpm   = state.vesc_mech_rpm
-        vin   = state.vesc_bus_voltage_v
+        vin   = state.cap_voltage_v
         fet   = state.vesc_temp_fet_c
         mtemp = state.vesc_temp_motor_c
         fault = int(state.vesc_fault_code)

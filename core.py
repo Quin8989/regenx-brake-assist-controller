@@ -8,7 +8,6 @@
 
 
 class SystemState:
-    OFF = "OFF"
     PRECHARGE = "PRECHARGE"
     ASSIST = "ASSIST"
     REGEN = "REGEN"
@@ -24,7 +23,6 @@ class FaultCode:
 
 
 class CommandMode:
-    NEUTRAL = "NEUTRAL"
     ASSIST = "ASSIST"
     REGEN = "REGEN"
 
@@ -79,7 +77,7 @@ class FaultManager:
 class SharedState:
     def __init__(self):
         # --- System state ---
-        self.system_state = SystemState.OFF
+        self.system_state = SystemState.PRECHARGE
 
         # --- Fault / inhibit ---
         self.fault_flags = set()
@@ -92,7 +90,7 @@ class SharedState:
         # --- Throttle ---
         self.throttle_raw = 0
         self.throttle_valid = False  # Set False until first valid ADC sample
-        self.requested_mode = CommandMode.NEUTRAL
+        self.requested_mode = CommandMode.REGEN
         self.requested_level = 0.0
 
         # --- VESC telemetry ---
@@ -100,7 +98,6 @@ class SharedState:
         # Additional fields (ah, wh, tach, id) are decoded from the wire
         # format but discarded — bench scripts read them directly via
         # vesc_comm.service_rx() if needed.
-        self.vesc_bus_voltage_v = 0.0
         self.vesc_motor_current_a = 0.0
         self.vesc_input_current_a = 0.0
         self.vesc_iq_current_a = 0.0
@@ -110,15 +107,15 @@ class SharedState:
         self.vesc_temp_fet_c = 0.0
         self.vesc_temp_motor_c = 0.0
 
-        # --- Command requests ---
+        # --- Motor command requests (written by ControlLoop) ---
         self.assist_command_request = 0.0
         self.regen_command_request = 0.0
         self.motor_command_a = 0.0
 
-        # --- Timestamps (ms) ---
+        # --- Timing ---
         self.last_vesc_rx_ms = 0
 
-        # --- Exception diagnostics ---
+        # --- Diagnostics ---
         self.last_exception_str = ""
 
 

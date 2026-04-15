@@ -9,7 +9,7 @@
 from time import sleep_ms, ticks_ms, ticks_diff
 
 from core import SharedState
-from services.vesc_comm import UARTPort, VESCComm
+from services.vesc_comm import VESCComm
 
 try:
     from machine import WDT
@@ -27,8 +27,7 @@ MEASURE_MS = 1200
 BRAKE_LEVELS_A = (5.0, 10.0, 15.0, 20.0, 30.0)
 
 state = SharedState()
-uart = UARTPort()
-vesc = VESCComm(uart, state)
+vesc = VESCComm(state)
 wdt = WDT(timeout=8000) if WDT is not None else None
 
 

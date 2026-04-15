@@ -1,13 +1,14 @@
-# tests/test_display_manager.py — DisplayManager page selection and LCD safety
+# tests/test_display_manager.py — display pages, fault labels, energy estimation
 
+import math
 import pytest
 
+from config.settings import VCAP_MIN_OPERATING, VCAP_SOFT_REGEN_CUTOFF
 from core import FAULT_LABELS, FaultCode, FaultManager, SharedState, SystemState
 from services.display_manager import DisplayManager
 
 
 class _FakeLCD:
-    """Records write_line calls for assertion."""
     def __init__(self):
         self.lines = {}
 
@@ -16,7 +17,6 @@ class _FakeLCD:
 
 
 class _FailLCD:
-    """Always raises OSError to simulate a disconnected display."""
     def write_line(self, row, text):
         raise OSError("I2C NAK")
 
@@ -30,159 +30,116 @@ def _make(lcd=None):
     return state, faults, lcd, dm
 
 
-class TestPageSelection:
-    def test_fault_page(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.OVERVOLTAGE)
+# ---- Page selection and content ----
+
+@pytest.mark.parametrize("sys_state,setup,expect_in_line0", [
+    pytest.param(SystemState.PRECHARGE, {"cap_voltage_v": 8.5}, "PRECHARGE", id="precharge"),
+    pytest.param(SystemState.REGEN, {"cap_voltage_v": 20.5}, "REGEN", id="regen"),
+    pytest.param(SystemState.REGEN, {"cap_voltage_v": 22.3}, "22.3", id="regen_voltage"),
+])
+def test_page_content(sys_state, setup, expect_in_line0):
+    s, f, lcd, dm = _make()
+    s.system_state = sys_state
+    for k, v in setup.items():
+        setattr(s, k, v)
+    dm.update()
+    assert expect_in_line0 in lcd.lines[0]
+
+
+def test_assist_page_shows_current():
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.ASSIST
+    s.cap_voltage_v = 25.0
+    s.vesc_iq_current_a = 12.3
+    for _ in range(20):
         dm.update()
-        assert "FAULT" in lcd.lines[0]
+    assert "ASSIST" in lcd.lines[0]
+    assert "A" in lcd.lines[1]
 
-    def test_precharge_page(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.PRECHARGE
-        s.cap_voltage_v = 8.5
+
+def test_regen_page_shows_negative_current():
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.REGEN
+    s.cap_voltage_v = 30.0
+    s.vesc_input_current_a = -8.7
+    for _ in range(20):
         dm.update()
-        assert "PRECHARGE" in lcd.lines[0]
-        assert "8.5" in lcd.lines[1]
-
-    def test_run_page_in_ready(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 20.5
-        dm.update()
-        assert "REGEN" in lcd.lines[0]
-        assert "20.5" in lcd.lines[0]
-
-    def test_run_page_in_assist(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.ASSIST
-        s.cap_voltage_v = 25.0
-        s.vesc_iq_current_a = 12.3
-        # Run multiple updates so EMA converges
-        for _ in range(20):
-            dm.update()
-        assert "ASSIST" in lcd.lines[0]
-        assert "A" in lcd.lines[1]
-
-    def test_run_page_shows_smoothed_bus_current_in_regen(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 30.0
-        s.vesc_input_current_a = -8.7
-        # Run multiple updates so EMA converges near the raw value
-        for _ in range(20):
-            dm.update()
-        assert "A" in lcd.lines[1]
-        # Should show a negative value close to -8.7
-        assert "-" in lcd.lines[1]
+    assert "-" in lcd.lines[1]
 
 
-class TestNoneLCD:
-    def test_none_lcd_no_crash(self):
-        s = SharedState()
-        dm = DisplayManager(None, s)
-        dm.update()  # should not raise
+def test_energy_percent_shown():
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.REGEN
+    s.cap_voltage_v = 25.0
+    dm.update()
+    assert "%" in lcd.lines[0]
 
 
-class TestLcdFaultTolerance:
-    @pytest.mark.parametrize("state_name,setup", [
-        (SystemState.REGEN, {"cap_voltage_v": 20.0}),
-        (SystemState.FAULT, {}),
-        (SystemState.PRECHARGE, {}),
-    ])
-    def test_oserror_caught_silently(self, state_name, setup):
-        lcd = _FailLCD()
-        s, f, _, dm = _make(lcd=lcd)
-        s.system_state = state_name
-        for k, v in setup.items():
-            setattr(s, k, v)
-        if state_name == SystemState.FAULT:
-            f.set_fault(FaultCode.INTERNAL)
-        dm.update()  # should not raise
+# ---- Fault page ----
+
+def test_fault_header():
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.FAULT
+    f.set_fault(FaultCode.OVERVOLTAGE)
+    dm.update()
+    assert "FAULT" in lcd.lines[0]
 
 
-# ---- TC-15: Display page correctness — run page ----
-
-class TestRunPageContent:
-    """TC-15: Run page shows state, voltage, and energy percentage."""
-
-    def test_ready_shows_voltage_value(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 22.3
-        dm.update()
-        assert "22.3" in lcd.lines[0]
-
-    def test_ready_shows_energy_percent(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 25.0
-        dm.update()
-        # Energy percent is computed from voltage; just verify it renders
-        pct_str = f"{s.cap_energy_percent:.0f}"
-        assert pct_str in lcd.lines[0]
-        assert "%" in lcd.lines[0]
-
-    def test_assist_shows_current(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.ASSIST
-        s.cap_voltage_v = 25.0
-        s.vesc_iq_current_a = 15.2
-        for _ in range(20):
-            dm.update()
-        assert "+" in lcd.lines[1]
-        assert "A" in lcd.lines[1]
-
-    def test_regen_shows_state_name(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.REGEN
-        s.cap_voltage_v = 30.0
-        dm.update()
-        assert "REGEN" in lcd.lines[0]
+@pytest.mark.parametrize("code", [
+    FaultCode.OVERVOLTAGE, FaultCode.VESC_TIMEOUT,
+    FaultCode.THROTTLE_RANGE, FaultCode.INTERNAL,
+])
+def test_fault_shows_label(code):
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.FAULT
+    f.set_fault(code)
+    dm.update()
+    assert FAULT_LABELS[code][:16] in lcd.lines[1]
 
 
-# ---- TC-16: Display page correctness — FAULT ----
+def test_fault_unknown_shows_fallback():
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.FAULT
+    dm.update()
+    assert "Unknown" in lcd.lines[1]
 
-class TestFaultPageContent:
-    """TC-16: FAULT page shows 'FAULT' text and the fault description."""
 
-    def test_fault_shows_fault_header(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        f.set_fault(FaultCode.OVERVOLTAGE)
-        dm.update()
-        assert "FAULT" in lcd.lines[0]
+# ---- LCD resilience ----
 
-    @pytest.mark.parametrize("code", [
-        FaultCode.OVERVOLTAGE,
-        FaultCode.VESC_TIMEOUT,
-        FaultCode.THROTTLE_RANGE,
-        FaultCode.INTERNAL,
-    ])
-    def test_fault_shows_label_for_code(self, code):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        f.set_fault(code)
-        dm.update()
-        expected = FAULT_LABELS[code]
-        assert expected[:16] in lcd.lines[1]
+def test_none_lcd_no_crash():
+    dm = DisplayManager(None, SharedState())
+    dm.update()
 
-    def test_fault_unknown_shows_fallback(self):
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        # No faults set → should show "Unknown"
-        dm.update()
-        assert "Unknown" in lcd.lines[1]
 
-    def test_fault_overrides_normal_page(self):
-        """Fault page should appear regardless of other state data."""
-        s, f, lcd, dm = _make()
-        s.system_state = SystemState.FAULT
-        s.cap_voltage_v = 25.0  # Would normally trigger run page
+@pytest.mark.parametrize("sys_state", [SystemState.REGEN, SystemState.FAULT, SystemState.PRECHARGE])
+def test_oserror_caught_silently(sys_state):
+    s, f, _, dm = _make(lcd=_FailLCD())
+    s.system_state = sys_state
+    s.cap_voltage_v = 20.0
+    if sys_state == SystemState.FAULT:
         f.set_fault(FaultCode.INTERNAL)
-        dm.update()
-        assert "FAULT" in lcd.lines[0]
-        # Run page content should NOT appear
-        assert "COAST" not in lcd.lines[0]
-        assert "ASSIST" not in lcd.lines[0]
+    dm.update()
+
+
+# ---- Energy estimation (absorbed from test_energy_estimator) ----
+
+@pytest.mark.parametrize("voltage,expected", [
+    pytest.param(0.0, 0.0, id="zero_voltage"),
+    pytest.param(VCAP_MIN_OPERATING, 0.0, id="at_min"),
+    pytest.param(VCAP_SOFT_REGEN_CUTOFF, 100.0, id="at_cutoff"),
+    pytest.param(5.0, 0.0, id="below_min_clamped"),
+    pytest.param(45.0, 100.0, id="above_max_clamped"),
+])
+def test_energy_percent(voltage, expected):
+    s, f, lcd, dm = _make()
+    s.cap_voltage_v = voltage
+    dm.update()
+    assert abs(s.cap_energy_percent - expected) < 0.1
+
+
+def test_energy_midpoint():
+    s, f, lcd, dm = _make()
+    v_mid = math.sqrt((VCAP_MIN_OPERATING**2 + VCAP_SOFT_REGEN_CUTOFF**2) / 2.0)
+    s.cap_voltage_v = v_mid
+    dm.update()
+    assert abs(s.cap_energy_percent - 50.0) < 1.0

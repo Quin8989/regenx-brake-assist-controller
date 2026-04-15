@@ -1,20 +1,15 @@
 # main.py — Firmware entry point and cooperative scheduler
 #
 # Execution order per main loop iteration:
-#  1. Poll local inputs
-#  2. Service UART receive / parse inbound VESC packets
-#  3. Refresh VESC telemetry requests if due
-#  4. Run safety supervisor
-#  5. Run state machine
-#  6. Run control loop
-#  7. Run command manager (transmit assist / regen / neutral)
-#  8. Energy estimation + Update LCD
-#  9. Bench data capture
+#  1. Service UART receive / parse inbound VESC packets
+#  2. Refresh VESC telemetry requests if due
+#  3. Fast loop: poll inputs → supervisor → control → command TX
+#  4. Energy estimation + Update LCD
+#  5. Bench data capture
 
 import sys
 
 from app.controller import AppController
-from app.state_machine import StateMachine
 from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX
 from core import FaultCode, FaultManager, SharedState, SystemState
 from drivers.lcd_driver import LCDDriver
@@ -23,9 +18,9 @@ from drivers.throttle import Throttle
 from services.control_loop import ControlLoop
 from services.display_manager import DisplayManager
 from services.input_manager import InputManager
-from services.safety_supervisor import SafetySupervisor
+from services.system_supervisor import SystemSupervisor
 from services.bench_logger import BenchLogger
-from services.vesc_comm import CommandManager, UARTPort, VESCComm
+from services.vesc_comm import VESCComm
 from utils import Logger
 
 # --- Exception log — ring buffer of state snapshots at crash time ---
@@ -76,40 +71,33 @@ def main():
     logger = Logger()
 
     # --- Drivers (LCD init has ~60 ms of blocking sleeps) ---
-    uart = UARTPort()
     throttle = Throttle()
     reset_button = ResetButton()
     lcd = LCDDriver()
     wdt.feed()  # buy another 8 s after driver init
 
     # --- Services ---
-    vesc_comm = VESCComm(uart, state)
+    vesc_comm = VESCComm(state)
     input_mgr = InputManager(throttle, state)
     control_loop = ControlLoop(state)
-    command_mgr = CommandManager(vesc_comm, state)
-    safety = SafetySupervisor(state, faults)
+    safety = SystemSupervisor(state, faults)
     display_mgr = DisplayManager(lcd, state)
     bench_log = BenchLogger(state)
     wdt.feed()  # buy another 8 s before app layer init
 
     # --- App layer ---
-    state_machine = StateMachine(state, faults)
     app = AppController(
         state=state,
         input_mgr=input_mgr,
         vesc_comm=vesc_comm,
         safety=safety,
-        state_machine=state_machine,
         control_loop=control_loop,
-        command_mgr=command_mgr,
         display_mgr=display_mgr,
         reset_button=reset_button,
         fault_manager=faults,
         bench_logger=bench_log,
     )
 
-    # --- Ensure motor commands are inhibited at startup ---
-    state.inhibit_motor_commands = True
     logger.info("startup", "Initialization complete — entering main loop")
 
     # --- Main cooperative scheduler loop ---

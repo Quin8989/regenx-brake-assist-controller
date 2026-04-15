@@ -30,7 +30,7 @@ for f in boot.py main.py core.py utils.py; do
 done
 
 echo "=== Copying app/ ==="
-for f in app/__init__.py app/controller.py app/state_machine.py; do
+for f in app/__init__.py app/controller.py; do
     echo "  cp $f → :/$f"
     $MPREMOTE cp "$f" ":/$f"
 done
@@ -48,7 +48,7 @@ for f in drivers/__init__.py drivers/gpio_io.py drivers/lcd_driver.py drivers/th
 done
 
 echo "=== Copying services/ ==="
-for f in services/__init__.py services/bench_logger.py services/control_loop.py services/display_manager.py services/input_manager.py services/safety_supervisor.py services/vesc_comm.py services/vesc_protocol.py; do
+for f in services/__init__.py services/bench_logger.py services/control_loop.py services/display_manager.py services/input_manager.py services/system_supervisor.py services/vesc_comm.py services/vesc_protocol.py; do
     echo "  cp $f → :/$f"
     $MPREMOTE cp "$f" ":/$f"
 done

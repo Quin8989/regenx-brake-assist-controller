@@ -18,7 +18,7 @@ except Exception:
 
 from core import SharedState
 from drivers.throttle import Throttle
-from services.vesc_comm import UARTPort, VESCComm
+from services.vesc_comm import VESCComm
 from config.settings import (
     THROTTLE_RAW_MIN,
     THROTTLE_DEADBAND,
@@ -30,8 +30,7 @@ RUN_S = 65             # run for ~65 seconds
 HEARTBEAT_MS = 2000    # status line every 2s
 
 state = SharedState()
-uart = UARTPort()
-vesc = VESCComm(uart, state)
+vesc = VESCComm(state)
 throttle = Throttle()
 wdt = WDT(timeout=8000) if WDT is not None else None
 

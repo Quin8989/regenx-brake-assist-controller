@@ -1,8 +1,6 @@
 # services/vesc_comm.py — VESC telemetry service and command output
 #
-# UARTPort: low-level UART access (raw serial read/write).
 # VESCComm: reads UART, parses telemetry into SharedState, sends commands.
-# CommandManager: final gate between control requests and VESC transmissions.
 
 from machine import UART, Pin
 from time import ticks_ms
@@ -23,31 +21,6 @@ from services.vesc_protocol import (
 
 
 # =============================================================================
-# UARTPort — low-level UART for VESC communication
-# =============================================================================
-
-
-class UARTPort:
-    def __init__(self):
-        self._uart = UART(
-            VESC_UART_ID,
-            baudrate=VESC_BAUD_RATE,
-            tx=Pin(VESC_UART_TX),
-            rx=Pin(VESC_UART_RX),
-        )
-
-    def write(self, data):
-        """Write bytes to the UART. Returns number of bytes written."""
-        return self._uart.write(data)
-
-    def read(self, nbytes=None):
-        """Non-blocking read. Returns bytes or None."""
-        if nbytes is None:
-            return self._uart.read()
-        return self._uart.read(nbytes)
-
-
-# =============================================================================
 # VESCComm — high-level communication service
 # =============================================================================
 
@@ -55,7 +28,14 @@ class UARTPort:
 class VESCComm:
     """UART telemetry service and motor command transmitter."""
 
-    def __init__(self, uart_port, shared_state):
+    def __init__(self, shared_state, uart_port=None):
+        if uart_port is None:
+            uart_port = UART(
+                VESC_UART_ID,
+                baudrate=VESC_BAUD_RATE,
+                tx=Pin(VESC_UART_TX),
+                rx=Pin(VESC_UART_RX),
+            )
         self._uart = uart_port
         self._state = shared_state
         self._rx_buf = bytearray()
@@ -78,10 +58,12 @@ class VESCComm:
             self._handle_payload(payload)
 
         if len(self._rx_buf) > 512:
-            # Find last frame-start byte to avoid splitting a partial frame.
+            # Find last short-frame-start byte to avoid splitting a partial frame.
+            # Only anchor on 0x02 (FRAME_START_SHORT) — 0x03 is ambiguous
+            # because it serves as both FRAME_START_LONG and FRAME_END.
             cut = len(self._rx_buf) - 256
             for i in range(cut, len(self._rx_buf)):
-                if self._rx_buf[i] == 0x02 or self._rx_buf[i] == 0x03:
+                if self._rx_buf[i] == 0x02:
                     cut = i
                     break
             self._rx_buf = self._rx_buf[cut:]
@@ -95,10 +77,9 @@ class VESCComm:
             s.vesc_temp_fet_c, s.vesc_temp_motor_c,
             s.vesc_motor_current_a, s.vesc_input_current_a,
             s.vesc_iq_current_a,
-            s.vesc_duty_cycle, erpm, s.vesc_bus_voltage_v,
+            s.vesc_duty_cycle, erpm, s.cap_voltage_v,
             s.vesc_fault_code,
         ) = vals
-        s.cap_voltage_v = s.vesc_bus_voltage_v
         s.vesc_mech_rpm = erpm * VESC_ERPM_TO_MECH_RPM
         s.last_vesc_rx_ms = ticks_ms()
 
@@ -118,17 +99,3 @@ class VESCComm:
         phase-shorting behaviour dissipates energy as heat.
         """
         self._uart.write(_build_set_current(current_a))
-
-
-# =============================================================================
-# CommandManager — final gate between control requests and VESC transmissions
-# =============================================================================
-
-
-class CommandManager:
-    def __init__(self, vesc_comm, shared_state):
-        self._vesc = vesc_comm
-        self._state = shared_state
-
-    def update(self):
-        self._vesc.send_current(self._state.motor_command_a)

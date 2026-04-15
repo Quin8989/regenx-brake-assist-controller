@@ -1,7 +1,7 @@
 # scripts/bench/test_ride_regen_trace.py
 #
 # Ride-ready regen diagnostic: runs the REAL production pipeline
-# (InputManager + StateMachine + ControlLoop + CommandManager)
+# (InputManager + SystemSupervisor + ControlLoop + VESCComm)
 # WITHOUT the LCD, with CSV logging.
 #
 # PURPOSE: The drill test works, but main.py (with LCD) doesn't.
@@ -22,11 +22,10 @@ from time import sleep_ms, ticks_ms, ticks_diff
 
 from core import SharedState, SystemState, CommandMode, FaultManager, FaultCode, EnergyEstimator
 from drivers.throttle import Throttle
-from services.vesc_comm import UARTPort, VESCComm, CommandManager
+from services.vesc_comm import VESCComm
 from services.input_manager import InputManager
 from services.control_loop import ControlLoop
-from services.safety_supervisor import SafetySupervisor
-from app.state_machine import StateMachine
+from services.system_supervisor import SystemSupervisor
 
 try:
     from machine import WDT
@@ -50,15 +49,12 @@ DATA_FILE = DATA_DIR + "/ride_trace.csv"
 
 state = SharedState()
 faults = FaultManager(state)
-uart = UARTPort()
 throttle = Throttle()
-vesc = VESCComm(uart, state)
+vesc = VESCComm(state)
 input_mgr = InputManager(throttle, state)
 control_loop = ControlLoop(state)
-command_mgr = CommandManager(vesc, state)
-safety = SafetySupervisor(state, faults)
+safety = SystemSupervisor(state, faults)
 energy = EnergyEstimator(state)
-state_machine = StateMachine(state, faults)
 
 wdt = WDT(timeout=8000) if WDT is not None else None
 
@@ -78,11 +74,11 @@ def _ensure_data_dir():
 
 
 _SYS_STATE_MAP = {
-    SystemState.OFF: 0, SystemState.PRECHARGE: 1,
+    SystemState.PRECHARGE: 1,
     SystemState.ASSIST: 3, SystemState.REGEN: 4, SystemState.FAULT: 5,
 }
 _MODE_MAP = {
-    CommandMode.NEUTRAL: 0, CommandMode.ASSIST: 1, CommandMode.REGEN: 2,
+    CommandMode.ASSIST: 1, CommandMode.REGEN: 2,
 }
 
 _CSV_HEADER = ",".join([
@@ -93,7 +89,7 @@ _CSV_HEADER = ",".join([
     "regen_cmd",
     "assist_cmd",
     "iq", "mot_i",
-    "cap_v", "bus_v", "fault",
+    "cap_v", "fault",
     "inhibit",
 ])
 
@@ -139,24 +135,21 @@ try:
         # 3. Energy estimation
         energy.update()
 
-        # 4. Safety supervisor
+        # 4. System supervisor (safety + state transitions + inhibit)
         safety.update()
 
-        # 5. State machine
-        state_machine.update()
-
-        # 6. Control loop (integral controller)
+        # 5. Control loop (integral controller)
         control_loop.update()
 
-        # 7. Command manager (sends to VESC)
-        command_mgr.update()
+        # 6. Transmit motor current to VESC
+        vesc.send_current(state.motor_command_a)
 
-        # 8. CSV log at 50 Hz
+        # 7. CSV log at 50 Hz
         if ticks_diff(now, last_log) >= LOG_PERIOD_MS:
             last_log = now
             elapsed = ticks_diff(now, start)
 
-            line = "%d,%d,%d,%.1f,%+.2f,%.2f,%.2f,%.2f,%+.2f,%+.2f,%.1f,%.1f,%s,%d" % (
+            line = "%d,%d,%d,%.1f,%+.2f,%.2f,%.2f,%.2f,%+.2f,%+.2f,%.1f,%s,%d" % (
                 elapsed,
                 _SYS_STATE_MAP.get(state.system_state, -1),
                 _MODE_MAP.get(state.requested_mode, -1),
@@ -165,13 +158,13 @@ try:
                 state.regen_command_request,
                 state.assist_command_request,
                 state.vesc_iq_current_a, state.vesc_motor_current_a,
-                state.cap_voltage_v, state.vesc_bus_voltage_v,
+                state.cap_voltage_v,
                 state.vesc_fault_code, int(state.inhibit_motor_commands),
             )
             f.write(line + "\n")
             rows += 1
 
-        # 9. Terminal status at 2 Hz
+        # 8. Terminal status at 2 Hz
         if ticks_diff(now, last_status) >= 500:
             last_status = now
             elapsed_s = ticks_diff(now, start) / 1000.0
@@ -185,7 +178,7 @@ try:
                 int(state.inhibit_motor_commands),
             ))
 
-        # 10. Fixed-rate loop
+        # 9. Fixed-rate loop
         sleep_ms(max(1, CONTROL_PERIOD_MS - ticks_diff(ticks_ms(), now)))
 
 except KeyboardInterrupt:

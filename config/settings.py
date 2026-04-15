@@ -32,9 +32,6 @@ THROTTLE_ADC_PIN = 26         # GP26 / ADC0
 # --- Soft reset button (active-low, normally-open to GND, internal pull-up) ---
 RESET_BUTTON_PIN = 8          # GP8, Pico pin 11
 
-
-
-
 # --- LCD (RG1602A, ST7066U/HD44780, 4-bit parallel GPIO, no I2C backpack) ---
 LCD_RS_PIN = 17               # GP17, Pico pin 22
 LCD_E_PIN = 18                # GP18, Pico pin 24
@@ -71,13 +68,6 @@ VESC_ABS_CURRENT_MAX_A = 130.0
 # spikes are handled by l_abs_current_max (set to 130 A in VESC Tool).
 MOTOR_COMMAND_LIMIT_A = 45.0
 
-# --- Command slew rate (overcurrent protection) ---
-# Maximum upward rate of change for current commands sent to the VESC.
-# Prevents transient FOC overshoot that trips ABS_OVER_CURRENT on step inputs.
-# Downward changes are always immediate (safety first).
-# 250 A/s at 100 Hz loop = 2.5 A step per cycle → 0–45 A in ~180 ms.
-COMMAND_SLEW_RATE_A_PER_S = 250.0
-
 # --- Throttle ---
 # Calibrated from measured WUXING 300X sweep at 3.3 V supply:
 #   idle ~1073 counts, full ~3238 counts.
@@ -105,10 +95,12 @@ VESC_ERPM_TO_MECH_RPM = 1.0 / VESC_MOTOR_POLE_PAIRS
 # --- UART / telemetry ---
 VESC_TELEMETRY_TIMEOUT_MS = 500  # Stale if no good packet in this window
 
-# --- Runtime behavior policy ---
+# =============================================================================
+# ERROR HANDLING / EXCEPTION POLICY
+# =============================================================================
+
 CONTINUE_ON_MAIN_LOOP_EXCEPTION = True
-
-
+EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM ring buffer
 
 # --- Regen braking (motor-RPM detection + current backoff) ---
 # The geared hub motor has a planetary carrier with a one-way freewheel clutch.
@@ -159,19 +151,11 @@ MOTOR_PHASE_RESISTANCE_OHM = 0.082
 # The current is clamped to REGEN_CURRENT_MAX_A (thermal / component
 # limit).  No floor needed — the model naturally gives non-zero current
 # at any non-zero RPM, and regen entry requires RPM ≥ 25.
-REGEN_EFFICIENCY_TARGET = 0.75  # 75% — trade-off between braking and recovery
+REGEN_COPPER_LOSS_FRACTION = 0.25  # 25% of mechanical input wasted as I²R heat
 REGEN_CURRENT_MAX_A = 25.0      # Ceiling: thermal / component limit
 # Holdoff after throttle release before regen is allowed — prevents false
 # triggers from motor inertia after assist.
 REGEN_HOLDOFF_MS = 300
-
-# Grace period before exiting regen on an RPM dip (carrier slip).
-# While grace is active the efficiency model keeps running at whatever
-# (lower) RPM the motor reports, so braking tapers naturally instead of
-# snapping to zero.  Only exits regen if RPM stays below REGEN_EXIT_RPM
-# for the full grace window.
-REGEN_SLIP_GRACE_MS = 250
-EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM ring buffer
 
 # --- Bench debug logger (RAM ring buffer) ---
 BENCH_LOG_PERIOD_MS = 500             # Capture rate (~2 Hz)
@@ -191,10 +175,6 @@ BENCH_LOG_FIELDS = (
 CAPACITANCE_F = 20.0
 
 # --- Task periods ---
-SAFETY_SUPERVISOR_PERIOD_MS = 10   # ~100 Hz
-STATE_MACHINE_PERIOD_MS = 10       # ~100 Hz — bounded to prevent free-running
-CONTROL_LOOP_PERIOD_MS = 10        # ~100 Hz
-COMMAND_TRANSMIT_PERIOD_MS = 10    # ~100 Hz — matches control loop for tightest regen tracking
-THROTTLE_SAMPLE_PERIOD_MS = 10     # ~100 Hz
-TELEMETRY_REQUEST_PERIOD_MS = 25   # ~40 Hz
+FAST_LOOP_PERIOD_MS = 10           # ~100 Hz — input, supervisor, control, command TX
+TELEMETRY_REQUEST_PERIOD_MS = 10   # ~100 Hz — match fast loop for tightest RPM tracking
 LCD_REFRESH_PERIOD_MS = 200        # ~5 Hz

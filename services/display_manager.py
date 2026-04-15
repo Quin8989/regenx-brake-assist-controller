@@ -120,10 +120,6 @@ class DisplayManager:
             self._show_precharge_page()
             return
 
-        if s.system_state == SystemState.OFF:
-            self._show_off_page()
-            return
-
         self._show_run_page()
 
     # ----- VESC hardware fault overlay -----
@@ -198,9 +194,3 @@ class DisplayManager:
 
         self._lcd.write_line(0, "!! FAULT !!")
         self._lcd.write_line(1, label[:16])
-
-    # ----- OFF page -----
-
-    def _show_off_page(self):
-        self._lcd.write_line(0, "ReGenX  v1.0")
-        self._lcd.write_line(1, "    Standby")

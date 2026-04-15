@@ -64,17 +64,18 @@ Once in REGEN, the control loop computes the optimal current for energy
 recovery using an **efficiency-optimal model** derived from the motor's
 physical parameters:
 
-$$I = (1 - \eta) \cdot \frac{\lambda \cdot \omega_e}{R_{phase}}$$
+$$I = k \cdot \frac{\lambda \cdot \omega_e}{R_{phase}}$$
 
 where λ is flux linkage (0.0111 Wb), ωe is electrical angular velocity,
-R_phase is the motor phase resistance (82 mΩ), and η is the target
-efficiency (75%).  This targets a fixed power-recovery efficiency across
+R_phase is the motor phase resistance (82 mΩ), and k = REGEN_COPPER_LOSS_FRACTION
+(default 0.25).  This targets a fixed 75% power-recovery efficiency across
 all speeds — current scales linearly with RPM (gentle at low speed, stronger
 at high speed) while guaranteeing that 75% of mechanical input reaches the
 caps rather than being wasted as copper heat.
 
-The command is clamped to a 25 A ceiling (thermal limit) and passes through
-the slew limiter (§5.1) before transmission.
+The command is clamped to a 25 A ceiling (thermal limit) and applied
+directly — no slew limiting.  The VESC FOC loop handles electrical
+ramping at 20+ kHz.
 
 Regen is disabled entirely when the cap voltage reaches the soft cutoff
 (40.0 V) to prevent overcharging.
@@ -88,8 +89,8 @@ assist:
 | Condition | Threshold |
 |---|---|
 | Enter REGEN | `motor_rpm` ≥ 25 RPM AND throttle-off holdoff (300 ms) expired |
-| Stay in REGEN | `motor_rpm` ≥ 18 RPM (exit threshold) OR slip grace (250 ms) active |
-| Exit REGEN | `motor_rpm` < 18 RPM for > 250 ms (grace period expired) |
+| Stay in REGEN | `motor_rpm` ≥ 18 RPM (exit threshold) |
+| Exit REGEN | `motor_rpm` < 18 RPM |
 
 **Note:** Only positive motor RPM (forward wheel motion through the planetary
 gear) triggers regen.  Negative motor RPM — which occurs when rolling the
@@ -126,15 +127,11 @@ service is called once per main-loop cycle at its configured period.
 | # | Service | Period | Purpose |
 |---|---|---|---|
 | 0 | ResetButton | continuous | Check soft reset button (GP8) |
-| 1 | InputManager | 10 ms | Read throttle, decide ASSIST/REGEN/NEUTRAL |
-| 2 | VESCComm (RX) | continuous | Parse incoming VESC telemetry packets |
-| 3 | VESCComm (TX) | 25 ms | Request telemetry from VESC |
-| 4 | SafetySupervisor | 10 ms | Check voltage limits, telemetry freshness, throttle validity |
-| 5 | StateMachine | 10 ms | Gate mode transitions with safety checks |
-| 6 | ControlLoop | 10 ms | Compute assist/regen current commands (integral + slew limiter) |
-| 7 | CommandManager | 10 ms | Transmit current commands to VESC over UART |
-| 8 | Display + Energy | 200 ms | Compute ½CV² energy, update 16×2 LCD |
-| 9 | BenchLogger | 500 ms | RAM ring-buffer data capture |
+| 1 | VESCComm (RX) | continuous | Parse incoming VESC telemetry packets |
+| 2 | VESCComm (TX) | 10 ms | Request telemetry from VESC |
+| 3 | Fast loop | 10 ms | Input → Supervisor → Control → Command TX |
+| 4 | Display + Energy | 200 ms | Compute ½CV² energy, update 16×2 LCD |
+| 5 | BenchLogger | 500 ms | RAM ring-buffer data capture |
 
 ### 3.2 Data Flow
 
@@ -142,16 +139,10 @@ service is called once per main-loop cycle at its configured period.
 Throttle ADC ──────► InputManager ──► requested_mode + requested_level
                           │
                           ▼
-VESC Telemetry ──► VESCComm ──► SharedState ◄── SafetySupervisor
-                                    │                   │
-                                    ▼                   ▼
-                              StateMachine ──► system_state + inhibit flags
-                                    │
+VESC Telemetry ──► VESCComm ──► SharedState ◄── SystemSupervisor
+                                    │             (safety + state + inhibit)
                                     ▼
-                              ControlLoop ──► assist_command / regen_command
-                                    │         (slew-limited upward)
-                                    ▼
-                              CommandManager ──► VESC UART TX
+                              ControlLoop ──► VESCComm ──► VESC UART TX
 ```
 
 All services communicate through a single `SharedState` object — no queues,
@@ -221,43 +212,78 @@ The 75% target recovers 22 W (73% of max-power) while wasting 3× less
 energy as heat.  The mechanical rim brake handles the difference in braking
 torque.
 
-### Slip Grace Period
+### Carrier Dynamics and Control Loop Behaviour
 
-When the planetary carrier momentarily slips (RPM dip), a 250 ms grace
-window keeps the system in REGEN rather than snapping to NEUTRAL.  During
-the grace period the efficiency model continues running at the actual
-(lower) RPM, so braking tapers naturally.  If RPM recovers above the exit
-threshold within the window, regen continues uninterrupted.  If RPM stays
-below the exit threshold for the full 250 ms, the system exits to NEUTRAL.
+The feedforward is **stateless**: each cycle reads motor RPM and outputs
+`I = k × λ·ωe / R`, with no memory of previous cycles.  How the system
+behaves depends entirely on whether the band brake can hold the planetary
+carrier.
+
+**Squeeze progression (no brake → full brake):**
+
+1. **No squeeze (coasting):** carrier freewheels, motor decoupled, RPM = 0,
+   current = 0.  True zero-drag coast.
+2. **Light squeeze:** friction begins to resist the carrier.  Wheel drives
+   the motor through the planetary gear — RPM rises from zero.  Once RPM
+   crosses the entry threshold (25 RPM), regen activates.  Current is small.
+3. **Medium squeeze:** carrier locked firmly.  Motor RPM is set by
+   `wheel_rpm × gear_ratio`.  Current is proportional to RPM — moderate
+   regen, smooth deceleration.  The motor's reaction torque is well below
+   brake holding force.  Stable — no oscillation.
+4. **Hard squeeze:** carrier solidly locked.  Motor RPM at maximum for this
+   wheel speed.  Current approaches the thermal ceiling (25 A).  Strong
+   regen.  Any additional squeeze force adds mechanical-only braking — regen
+   can't increase further because RPM is already set by wheel speed.
+5. **Release:** brake friction drops to zero, carrier freewheels, RPM drops
+   to zero in one cycle, current drops to zero.  Regen exits when RPM falls
+   below 18 RPM.
+
+**Stability:**
+
+Once the carrier is locked, motor RPM is mechanically determined by wheel
+speed.  Regen decelerates the wheel, so RPM (and current) slowly decrease
+as the bike slows.  Current can never increase while the carrier is locked —
+there is no integrator or accumulator.
+
+**Hunting at the torque boundary:**
+
+If the feedforward commands enough current that the motor's reaction torque
+on the carrier exceeds the brake's holding force, the carrier slips:
+
+1. Motor torque > brake friction → carrier slips forward
+2. Motor RPM drops (planetary constraint)
+3. Feedforward sees lower ωe → commands less current
+4. Less motor torque → brake can hold again → carrier locks
+5. Motor RPM jumps back to the gear-ratio value
+6. Current jumps back up → torque exceeds brake again → repeat from 1
+
+This is a **limit cycle**, not a damped convergence.  The carrier chatters
+between locked and slipping at the control loop rate (~50–100 Hz), perceived
+by the rider as a buzz or hum on the brake lever rather than grab-release
+judder.  Squeezing harder pushes past the boundary — brake wins, carrier
+locks, hunting stops.
+
+**The `k` knob (`REGEN_COPPER_LOSS_FRACTION`):**
+
+`k` scales the current-vs-RPM slope.  Higher `k` means more current (and
+more motor torque) at the same RPM.  This has two effects:
+- More energy recovered per revolution (but less efficiently)
+- The hunting boundary is reached at lower brake squeeze levels, because
+  the motor's reaction torque is higher relative to the brake's holding
+  force
+
+Lower `k` means less current at the same RPM — less regen, but the carrier
+is easier to hold and the system stays stable over a wider squeeze range.
 
 Regen preconditions (any failure → command goes to zero):
 - Cap voltage < 40.0 V (soft cutoff)
 - System not inhibited
 
-### 5.1 Command Slew Limiter
-
-All current commands (both assist and regen) pass through an upward-only
-slew limiter as the final step in `ControlLoop.update()`.
-
-- **Upward changes** are rate-limited to `COMMAND_SLEW_RATE_A_PER_S`
-  (250 A/s).  At the 100 Hz control loop rate this means ≤ 2.5 A per
-  cycle, reaching 0→45 A in ~180 ms.  This prevents FOC transient
-  overshoot from tripping the VESC `ABS_OVER_CURRENT` fault on fast
-  throttle application or regen entry.
-
-- **Downward changes** are immediate — no slew limiting.  This ensures
-  throttle release, fault shutdown, and mode transitions are never
-  delayed.
-
-The slew state is reset to zero whenever the system transitions out of
-ASSIST or REGEN (inhibit, OFF, FAULT), so each new engagement starts
-from a known baseline.
-
 ---
 
 ## 6. Safety and Fault Handling
 
-The SafetySupervisor runs at 100 Hz and checks:
+The SystemSupervisor runs at 100 Hz and checks:
 
 | Fault | Trigger | Latching? |
 |---|---|---|
@@ -271,7 +297,7 @@ Latching faults (OVERVOLTAGE, INTERNAL) require a soft reset button press
 or power cycle to clear.  Non-latching faults auto-clear when the condition
 resolves.
 
-When any fault is active, the state machine forces FAULT state and
+When any fault is active, the system supervisor forces FAULT state and
 `inhibit_motor_commands = True`, which zeros all current commands and resets
 all dynamic controller state (regen integral target).
 
@@ -281,7 +307,7 @@ all dynamic controller state (regen integral target).
 
 The supercapacitor bank must reach `VCAP_MIN_OPERATING` (10.0 V) before the
 VESC can safely drive the motor.  The firmware handles this with a simple
-state gate: the state machine stays in PRECHARGE until telemetry reports
+state gate: the system supervisor stays in PRECHARGE until telemetry reports
 cap voltage ≥ 10.0 V, then transitions to REGEN.
 
 The precharge hardware (how the caps get from 0 V to 10 V) is external to
@@ -378,7 +404,6 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 | MOTOR_CURRENT_MAX_A | 50.0 A | VESC-side motor current limit (set in VESC Tool) |
 | MOTOR_COMMAND_LIMIT_A | 45.0 A | Firmware command ceiling — 5 A headroom below VESC limit |
 | VESC_WATT_MAX | 500.0 W | VESC watt limit — both drive and regen |
-| COMMAND_SLEW_RATE_A_PER_S | 250.0 A/s | Max upward rate of change for current commands |
 
 ### Regen Tuning
 
@@ -387,8 +412,7 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 | REGEN_ENTRY_RPM | 25.0 | Motor RPM threshold to enter regen |
 | REGEN_EXIT_RPM | 18.0 | Motor RPM threshold to exit regen (hysteresis) |
 | REGEN_HOLDOFF_MS | 300 | Delay after throttle release before regen can trigger |
-| REGEN_SLIP_GRACE_MS | 250 | Grace window before exiting regen on RPM dip |
-| REGEN_EFFICIENCY_TARGET | 0.75 | Target regen efficiency (75%) |
+| REGEN_COPPER_LOSS_FRACTION | 0.25 | Fraction of mechanical input lost to I²R heat (25%) |
 | REGEN_CURRENT_MAX_A | 25.0 | Hard ceiling for regen current (thermal limit) |
 | FLUX_LINKAGE_WB | 0.0111 | Puyan H01 flux linkage (weber) |
 | MOTOR_PHASE_RESISTANCE_OHM | 0.082 | Phase resistance from VESC FOC detection |
@@ -463,17 +487,16 @@ drivers/
   lcd_driver.py      # RG1602A HD44780 4-bit parallel GPIO driver
 
 services/
-  input_manager.py      # Reads throttle, decides ASSIST/REGEN/NEUTRAL
+  input_manager.py      # Reads throttle, decides ASSIST/REGEN
   control_loop.py       # Assist current mapping + regen integral + slew limiter
   vesc_protocol.py      # VESC UART packet framing, CRC, command builders, parsing
-  vesc_comm.py          # UARTPort + VESCComm (telemetry) + CommandManager (TX gate)
-  safety_supervisor.py  # Overvoltage, timeout, throttle, VESC fault checks
+  vesc_comm.py          # VESCComm (UART init + telemetry + TX)
+  system_supervisor.py  # Safety checks, state transitions, inhibit policy
   display_manager.py    # LCD page rendering (run/precharge/fault pages)
   bench_logger.py       # RAM ring-buffer data logger for bench debugging
 
 app/
   controller.py      # Orchestrator — sequences services via PeriodicTimers
-  state_machine.py   # State transitions: OFF→PRECHARGE→REGEN/ASSIST, FAULT
 
 tests/               # pytest suite (221 tests)
 
