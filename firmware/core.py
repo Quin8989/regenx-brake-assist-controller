@@ -8,6 +8,7 @@
 
 
 class SystemState:
+    OFF = "OFF"
     PRECHARGE = "PRECHARGE"
     ASSIST = "ASSIST"
     REGEN = "REGEN"
@@ -95,22 +96,45 @@ class SharedState:
 
         # --- VESC telemetry ---
         # Fields populated by vesc_comm._handle_payload() each packet.
-        # Additional fields (ah, wh, tach, id) are decoded from the wire
-        # format but discarded — bench scripts read them directly via
-        # vesc_comm.service_rx() if needed.
         self.vesc_motor_current_a = 0.0
         self.vesc_input_current_a = 0.0
+        self.vesc_id_current_a = 0.0
         self.vesc_iq_current_a = 0.0
         self.vesc_mech_rpm = 0.0
         self.vesc_duty_cycle = 0.0
         self.vesc_fault_code = 0
         self.vesc_temp_fet_c = 0.0
         self.vesc_temp_motor_c = 0.0
+        self.vesc_tach = 0
+        self.vesc_tach_abs = 0
+        self.vesc_pid_pos = 0.0
+        self.vesc_controller_id = 0
+        self.vesc_temp_mos1_c = 0.0
+        self.vesc_temp_mos2_c = 0.0
+        self.vesc_temp_mos3_c = 0.0
+        self.vesc_vd = 0.0
+        self.vesc_vq = 0.0
+        self.vesc_status = 0
+
+        # --- VESC firmware identity (populated by COMM_FW_VERSION) ---
+        self.vesc_fw_major = 0
+        self.vesc_fw_minor = 0
+        self.vesc_hw_name = ""
+
+        # --- VESC LispBM push telemetry (COMM_CUSTOM_APP_DATA) ---
+        self.vesc_iq_instantaneous_a = 0.0   # lower-latency filtered iq from get-iq()
+        self.vesc_erpm_fast = 0.0            # less-filtered electrical RPM from get-rpm-fast()
+        self.vesc_mech_rpm_fast = 0.0        # vesc_erpm_fast / pole_pairs
+        self.last_push_iq_rx_ms = 0
 
         # --- Motor command requests (written by ControlLoop) ---
         self.assist_command_request = 0.0
         self.regen_command_request = 0.0
         self.motor_command_a = 0.0
+
+        # --- Wheel speed (optional Hall-sensor derived) ---
+        self.wheel_speed_valid = False
+        self.wheel_speed_rpm = 0.0
 
         # --- Timing ---
         self.last_vesc_rx_ms = 0

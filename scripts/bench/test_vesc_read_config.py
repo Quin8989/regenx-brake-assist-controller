@@ -10,6 +10,9 @@ import struct
 
 from scripts.lib.vesc_terminal import run_terminal_cmd
 from scripts.lib.vesc_uart_template import VescUartTemplate
+from scripts.lib.path_setup import ensure_firmware_path
+
+ensure_firmware_path()
 
 try:
     from config.settings import (
@@ -19,10 +22,9 @@ try:
         VESC_BAUD_RATE,
     )
 except ImportError:
-    MOTOR_CURRENT_MAX_A = 50.0
-    VCAP_MIN_OPERATING = 10.0
-    VCAP_ABSOLUTE_MAX = 42.0
-    VESC_BAUD_RATE = 115200
+    print("FAILED: Could not import firmware/config/settings.py")
+    print("Run with: mpremote mount . run scripts/bench/test_vesc_read_config.py")
+    raise SystemExit(1)
 
 
 COMM_FW_VERSION = 0

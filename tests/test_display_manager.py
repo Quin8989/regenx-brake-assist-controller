@@ -3,7 +3,7 @@
 import math
 import pytest
 
-from config.settings import VCAP_MIN_OPERATING, VCAP_SOFT_REGEN_CUTOFF
+from config.settings import VCAP_MIN_OPERATING, VCAP_REGEN_TAPER_START_V
 from core import FAULT_LABELS, FaultCode, FaultManager, SharedState, SystemState
 from services.display_manager import DisplayManager
 
@@ -126,7 +126,7 @@ def test_oserror_caught_silently(sys_state):
 @pytest.mark.parametrize("voltage,expected", [
     pytest.param(0.0, 0.0, id="zero_voltage"),
     pytest.param(VCAP_MIN_OPERATING, 0.0, id="at_min"),
-    pytest.param(VCAP_SOFT_REGEN_CUTOFF, 100.0, id="at_cutoff"),
+    pytest.param(VCAP_REGEN_TAPER_START_V, 100.0, id="at_taper_start"),
     pytest.param(5.0, 0.0, id="below_min_clamped"),
     pytest.param(45.0, 100.0, id="above_max_clamped"),
 ])
@@ -139,7 +139,7 @@ def test_energy_percent(voltage, expected):
 
 def test_energy_midpoint():
     s, f, lcd, dm = _make()
-    v_mid = math.sqrt((VCAP_MIN_OPERATING**2 + VCAP_SOFT_REGEN_CUTOFF**2) / 2.0)
+    v_mid = math.sqrt((VCAP_MIN_OPERATING**2 + VCAP_REGEN_TAPER_START_V**2) / 2.0)
     s.cap_voltage_v = v_mid
     dm.update()
     assert abs(s.cap_energy_percent - 50.0) < 1.0

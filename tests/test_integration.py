@@ -105,6 +105,9 @@ class _Noop:
     def update(self): pass
     def service_rx(self): pass
     def request_telemetry(self): pass
+    def send_current(self, a): pass
+    def send_alive(self): pass
+    def send_estop(self, t=1000): pass
     def debug(self, *args): pass
 
 
@@ -163,3 +166,101 @@ def test_reset_from_any_state():
     app.update()
     assert s.system_state == SystemState.PRECHARGE
     assert s.inhibit_motor_commands is True
+
+
+# ---- ESTOP on fault entry and keepalive (Phase 3) ----
+
+class _SpyVESC:
+    """VESC comm spy that records calls to send_alive, send_estop, etc."""
+    def __init__(self):
+        self.alive_count = 0
+        self.estop_count = 0
+        self.estop_last_timeout = 0
+        self.current_count = 0
+
+    def service_rx(self): pass
+    def request_telemetry(self): pass
+    def request_telemetry_selective(self): pass
+    def send_current(self, a):
+        self.current_count += 1
+    def send_alive(self):
+        self.alive_count += 1
+    def send_estop(self, timeout_ms=1000):
+        self.estop_count += 1
+        self.estop_last_timeout = timeout_ms
+
+
+def _make_app_spy():
+    state = SharedState()
+    fm = FaultManager(state)
+    cl = ControlLoop(state)
+    spy = _SpyVESC()
+    noop = _Noop()
+    app = AppController(
+        state=state,
+        input_mgr=noop,
+        vesc_comm=spy,
+        safety=noop,
+        control_loop=cl,
+        display_mgr=noop,
+        fault_manager=fm,
+    )
+    return state, fm, cl, spy, app
+
+
+def test_estop_sent_on_fault_entry():
+    """Entering FAULT state sends exactly one ESTOP command."""
+    s, fm, cl, spy, app = _make_app_spy()
+    s.system_state = SystemState.ASSIST
+    s.throttle_valid = True
+
+    # Run a few normal cycles
+    for i in range(5):
+        set_clock_ms(i * 10)
+        app.update()
+    assert spy.estop_count == 0
+
+    # Enter fault
+    s.system_state = SystemState.FAULT
+    set_clock_ms(100)
+    app.update()
+    assert spy.estop_count == 1
+
+    # Staying in fault should NOT send another ESTOP
+    set_clock_ms(110)
+    app.update()
+    assert spy.estop_count == 1
+
+
+def test_estop_resends_on_reentry():
+    """Clearing fault and re-entering sends a new ESTOP."""
+    s, fm, cl, spy, app = _make_app_spy()
+    s.system_state = SystemState.FAULT
+    set_clock_ms(10)
+    app.update()
+    assert spy.estop_count == 1
+
+    # Clear fault
+    s.system_state = SystemState.ASSIST
+    set_clock_ms(20)
+    app.update()
+    assert spy.estop_count == 1
+
+    # Re-enter fault
+    s.system_state = SystemState.FAULT
+    set_clock_ms(30)
+    app.update()
+    assert spy.estop_count == 2
+
+
+def test_keepalive_sent_periodically():
+    """COMM_ALIVE sent at VESC_ALIVE_PERIOD_MS intervals."""
+    s, fm, cl, spy, app = _make_app_spy()
+    s.system_state = SystemState.ASSIST
+    s.throttle_valid = True
+
+    # Run for 500 ms — at 200 ms interval, expect 2-3 alive packets
+    for ms in range(0, 500, 10):
+        set_clock_ms(ms)
+        app.update()
+    assert spy.alive_count >= 2

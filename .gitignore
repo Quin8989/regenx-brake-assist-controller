@@ -2,11 +2,24 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .venv/
 
 # IDE
 .vscode/
 .idea/
+
+# Sim output (large generated HTML / logs)
+sim/output/
+
+# Local device snapshots / bench artifacts
+/vesc_snapshot_appconf.bin
+/vesc_snapshot_mcconf.bin
+/vesc_snapshot_meta.txt
 
 # OS
 .DS_Store

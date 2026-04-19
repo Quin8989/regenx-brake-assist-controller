@@ -1,0 +1,18 @@
+{
+  "include": [
+    "firmware",
+    "scripts",
+    "sim",
+    "tests"
+  ],
+  "exclude": [
+    "sim/output",
+    ".venv",
+    "__pycache__"
+  ],
+  "extraPaths": [
+    "firmware"
+  ],
+  "venvPath": ".",
+  "venv": ".venv"
+}

@@ -48,14 +48,17 @@ LCD_ROWS = 2
 # =============================================================================
 
 # --- Supercapacitor voltage thresholds (volts) ---
-VCAP_MIN_OPERATING = 10.0      # Below this: precharge active, motor inhibited
-VCAP_SOFT_REGEN_CUTOFF = 40.0  # Software regen disable — assist still works above this
-VCAP_ABSOLUTE_MAX = 42.0       # Hard bus voltage limit — cap bank rated max
+# Cap bank: 48 V rated.  Motor: 48 V system.  VESC FSESC4.20: 50 V rated.
+# 42 V is the chosen operational ceiling — leaves 6 V headroom to cap rating.
+VCAP_MIN_OPERATING = 10.0        # Below this: precharge active, motor inhibited
+VCAP_REGEN_TAPER_START_V = 40.0  # Regen current starts linearly tapering down
+VCAP_REGEN_TAPER_END_V = 42.0    # Regen current reaches zero (software)
+VCAP_ABSOLUTE_MAX = 43.0         # Operational max — supervisor faults here (5 V below 48 V cap rating)
 
 # --- Motor current limit (hard limit — must also be set in VESC Tool) ---
 # FSESC4.20 is rated 50 A continuous.
 MOTOR_CURRENT_MAX_A = 50.0     # VESC-side motor current limit (amps)
-VESC_WATT_MAX = 500.0          # VESC watt limit — both drive and regen (watts)
+VESC_WATT_MAX = 1500.0         # VESC watt limit — both drive and regen (watts)
 
 # Absolute maximum instantaneous phase current before ABS_OVER_CURRENT fault.
 # FSESC4.20 FETs handle 130 A+ transiently — this protects against dead-shorts,
@@ -95,6 +98,10 @@ VESC_ERPM_TO_MECH_RPM = 1.0 / VESC_MOTOR_POLE_PAIRS
 # --- UART / telemetry ---
 VESC_TELEMETRY_TIMEOUT_MS = 500  # Stale if no good packet in this window
 
+# --- VESC keepalive & safety ---
+VESC_ALIVE_PERIOD_MS = 200        # Send COMM_ALIVE every N ms (VESC default timeout 1000 ms)
+VESC_ESTOP_TIMEOUT_MS = 1000      # ESTOP duration on fault (ms)
+
 # =============================================================================
 # ERROR HANDLING / EXCEPTION POLICY
 # =============================================================================
@@ -118,7 +125,8 @@ EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM rin
 #             naturally taping to zero at low speed while routing energy
 #             to the DC bus instead of dissipating as heat.
 #
-# Regen is disabled entirely above VCAP_SOFT_REGEN_CUTOFF.
+# Regen tapers linearly to zero between VCAP_REGEN_TAPER_START_V and
+# VCAP_REGEN_TAPER_END_V.
 
 # Motor RPM thresholds for regen detection (mechanical RPM, post-gear).
 # ENTRY: motor must exceed this RPM (with rising trend) while throttle is off.
@@ -152,7 +160,36 @@ MOTOR_PHASE_RESISTANCE_OHM = 0.082
 # limit).  No floor needed — the model naturally gives non-zero current
 # at any non-zero RPM, and regen entry requires RPM ≥ 25.
 REGEN_COPPER_LOSS_FRACTION = 0.25  # 25% of mechanical input wasted as I²R heat
-REGEN_CURRENT_MAX_A = 25.0      # Ceiling: thermal / component limit
+REGEN_CURRENT_MAX_A = 40.0      # Ceiling: thermal / component limit
+
+# Regen control strategy selection
+# =================================
+# Keep the runtime choice explicit but limited to the only two supported
+# controllers: the PI reference controller and the AIMD-FF model.
+REGEN_STRATEGY = "aimd_ff"
+REGEN_STRATEGY_PARAMS = {
+    "pi_controller": dict(
+        k_ff=0.2983663602904498,
+        kp=0.10346639382658865,
+        ki=0.24536574569948869,
+        slip_target=0.50705934014701,
+        alpha=0.25204223069920534,
+    ),
+    # AIMD_FF_AUTOGEN_START
+    # AIMD-FF model retained as the default production controller.
+    "aimd_ff": dict(
+        k_init=0.0655283,
+        k_ai=0.0011282397426644183,
+        beta_md=0.07298667082585253,
+        unlock_thresh=145.144,
+        rpm_scale=2500,
+        drpm_scale=6000,
+        iq_scale=60,
+        drpm_alpha=0.526797,
+    ),
+    # AIMD_FF_AUTOGEN_END
+}
+
 # Holdoff after throttle release before regen is allowed — prevents false
 # triggers from motor inertia after assist.
 REGEN_HOLDOFF_MS = 300
@@ -173,6 +210,9 @@ BENCH_LOG_FIELDS = (
 
 # --- Energy estimation ---
 CAPACITANCE_F = 20.0
+
+# --- Bike geometry ---
+WHEEL_RADIUS_M = 0.33            # 26" wheel with tyre (~660 mm diameter)
 
 # --- Task periods ---
 FAST_LOOP_PERIOD_MS = 10           # ~100 Hz — input, supervisor, control, command TX

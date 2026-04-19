@@ -6,13 +6,13 @@
 # Page layouts (16 columns × 2 rows):
 #
 #   RUN (ASSIST):    "ASSIST  25.2V 68%"
-#                    "     +12.3A      "
+#                    " +12.3A   124RPM"
 #
 #   RUN (REGEN):     "REGEN   25.2V 68%"
-#                    "     -12.3A      "
+#                    " -12.3A   124RPM"
 #
 #   RUN (idle):      "REGEN   25.2V 68%"
-#                    "      +0.0A      "
+#                    "  +0.0A     0RPM"
 #
 #   PRECHARGE:       "PRECHARGE...    "
 #                    "Vcap: 12.4V  31%"
@@ -25,28 +25,22 @@
 
 from time import ticks_ms, ticks_diff
 
+import math
+
 from config.settings import (
-    CAPACITANCE_F,
     VCAP_MIN_OPERATING,
-    VCAP_SOFT_REGEN_CUTOFF,
+    VCAP_REGEN_TAPER_START_V,
+    WHEEL_RADIUS_M,
 )
 from core import FAULT_LABELS, SystemState
-from utils import clamp
+
+_WHEEL_CIRCUMFERENCE_M = 2.0 * math.pi * WHEEL_RADIUS_M
+_CAP_V_MIN_SQ = VCAP_MIN_OPERATING ** 2
+_CAP_V_MAX_SQ = VCAP_REGEN_TAPER_START_V ** 2
+_CAP_RANGE_SQ = _CAP_V_MAX_SQ - _CAP_V_MIN_SQ
 
 _FAULT_FLASH_MS = 800  # Toggle period for fault page header
 _VESC_FAULT_SHOW_MS = 3000  # Duration to show VESC fault overlay after detection
-
-# EMA smoothing factor for displayed current (0..1).
-# Lower = smoother but laggier.  At 5 Hz display rate, 0.3 gives a
-# ~0.5 s settling time — responsive enough to see mode changes,
-# smooth enough to stop digit jitter while riding.
-_CURRENT_EMA_ALPHA = 0.3
-
-# Energy estimation constants (½CV²)
-_HALF_C = 0.5 * CAPACITANCE_F
-_E_MIN = _HALF_C * VCAP_MIN_OPERATING * VCAP_MIN_OPERATING
-_E_MAX = _HALF_C * VCAP_SOFT_REGEN_CUTOFF * VCAP_SOFT_REGEN_CUTOFF
-_E_RANGE = _E_MAX - _E_MIN if _E_MAX > _E_MIN else 0.0
 
 _VESC_FAULT_NAMES = {
     1:  "OVER VOLTAGE",
@@ -66,6 +60,10 @@ _VESC_FAULT_NAMES = {
 }
 
 
+def _rpm_to_kmh(rpm):
+    return (rpm * _WHEEL_CIRCUMFERENCE_M * 60.0) / 1000.0
+
+
 class DisplayManager:
     def __init__(self, lcd_driver, shared_state):
         self._lcd = lcd_driver
@@ -74,11 +72,10 @@ class DisplayManager:
         self._fault_index = 0
         self._vesc_fault_until_ms = 0
         self._last_vesc_fault_code = 0
-        self._smooth_current_a = 0.0
 
     def update(self):
-        """Recompute energy estimate then refresh LCD."""
-        self._update_energy()
+        """Refresh LCD based on current system state."""
+        self._update_energy_percent()
         if self._lcd is None:
             return
         try:
@@ -86,14 +83,15 @@ class DisplayManager:
         except OSError:
             pass
 
-    def _update_energy(self):
-        v = self._state.cap_voltage_v
-        energy_j = _HALF_C * v * v
-        if _E_RANGE > 0.0:
-            pct = (energy_j - _E_MIN) / _E_RANGE * 100.0
-            self._state.cap_energy_percent = clamp(pct, 0.0, 100.0)
-        else:
-            self._state.cap_energy_percent = 0.0
+    def _update_energy_percent(self):
+        """Compute cap_energy_percent from cap_voltage_v (capacitive: E ∝ V²)."""
+        v_sq = self._state.cap_voltage_v ** 2
+        pct = (v_sq - _CAP_V_MIN_SQ) / _CAP_RANGE_SQ * 100.0
+        if pct < 0.0:
+            pct = 0.0
+        elif pct > 100.0:
+            pct = 100.0
+        self._state.cap_energy_percent = pct
 
     def _update_page(self):
         s = self._state
@@ -118,6 +116,10 @@ class DisplayManager:
 
         if s.system_state == SystemState.PRECHARGE:
             self._show_precharge_page()
+            return
+
+        if s.system_state == SystemState.OFF:
+            self._show_off_page()
             return
 
         self._show_run_page()
@@ -148,13 +150,18 @@ class DisplayManager:
         pad0 = 16 - len(mode) - len(volts) - len(pct)
         line0 = mode + " " * max(pad0 - 1, 1) + volts + " " + pct
 
-        # Line 1: smoothed bus (input) current — this is what actually
-        # charges/discharges the caps, not the motor phase current.
-        raw = s.vesc_input_current_a
-        self._smooth_current_a += _CURRENT_EMA_ALPHA * (raw - self._smooth_current_a)
-        amps = f"{self._smooth_current_a:+.1f}A"
-        pad1 = 16 - len(amps)
-        line1 = " " * (pad1 // 2) + amps
+        # Line 1: " +12.3A  12.4km/h"
+        # ASSIST: show iq (motor effort); REGEN: show input_current (energy into caps).
+        if s.system_state == SystemState.REGEN:
+            amps = f"{s.vesc_input_current_a:+.1f}A"
+        else:
+            amps = f"{s.vesc_iq_current_a:+.1f}A"
+        if s.wheel_speed_valid:
+            speed_text = f"{_rpm_to_kmh(s.wheel_speed_rpm):.1f}km/h"
+        else:
+            speed_text = f"{abs(s.vesc_mech_rpm):.0f}RPM"
+        pad1 = 16 - len(amps) - len(speed_text)
+        line1 = " " * max(pad1 // 2, 1) + amps + " " * max(pad1 - pad1 // 2, 1) + speed_text
 
         self._lcd.write_line(0, line0[:16])
         self._lcd.write_line(1, line1[:16])
@@ -194,3 +201,9 @@ class DisplayManager:
 
         self._lcd.write_line(0, "!! FAULT !!")
         self._lcd.write_line(1, label[:16])
+
+    # ----- OFF page -----
+
+    def _show_off_page(self):
+        self._lcd.write_line(0, "ReGenX  v1.0")
+        self._lcd.write_line(1, "    Standby")

@@ -8,8 +8,12 @@
 
 set -e
 
-MPREMOTE="/home/q/Desktop/VSCode_Projects/.venv/bin/mpremote"
-PROJECT_DIR="/home/q/Desktop/VSCode_Projects/regenx-brake-assist-controller"
+MPREMOTE="$(command -v mpremote)"
+if [ -z "$MPREMOTE" ]; then
+    echo "ERROR: mpremote not found on PATH.  Install with: pip install mpremote"
+    exit 1
+fi
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 cd "$PROJECT_DIR"
 
@@ -18,40 +22,39 @@ pkill -f mpremote 2>/dev/null || true
 sleep 2
 
 echo "=== Creating directories on Pico ==="
-for dir in app config drivers services data; do
+for dir in app config drivers services data regen; do
     echo "  mkdir :/$dir"
     $MPREMOTE mkdir ":/$dir" 2>/dev/null || true
 done
 
+copy_firmware_tree() {
+    subdir="$1"
+    echo "=== Copying ${subdir}/ ==="
+    find "firmware/$subdir" -type f -name '*.py' | sort | while read -r src; do
+        rel="${src#firmware/}"
+        echo "  cp $src → :/$rel"
+        $MPREMOTE cp "$src" ":/$rel"
+    done
+}
+
 echo "=== Copying root files ==="
 for f in boot.py main.py core.py utils.py; do
-    echo "  cp $f → :/$f"
-    $MPREMOTE cp "$f" ":/$f"
+    echo "  cp firmware/$f → :/$f"
+    $MPREMOTE cp "firmware/$f" ":/$f"
 done
 
-echo "=== Copying app/ ==="
-for f in app/__init__.py app/controller.py; do
-    echo "  cp $f → :/$f"
-    $MPREMOTE cp "$f" ":/$f"
-done
+copy_firmware_tree app
+copy_firmware_tree config
+copy_firmware_tree drivers
+copy_firmware_tree services
+copy_firmware_tree regen
 
-echo "=== Copying config/ ==="
-for f in config/__init__.py config/settings.py; do
-    echo "  cp $f → :/$f"
-    $MPREMOTE cp "$f" ":/$f"
-done
-
-echo "=== Copying drivers/ ==="
-for f in drivers/__init__.py drivers/gpio_io.py drivers/lcd_driver.py drivers/throttle.py; do
-    echo "  cp $f → :/$f"
-    $MPREMOTE cp "$f" ":/$f"
-done
-
-echo "=== Copying services/ ==="
-for f in services/__init__.py services/bench_logger.py services/control_loop.py services/display_manager.py services/input_manager.py services/system_supervisor.py services/vesc_comm.py services/vesc_protocol.py; do
-    echo "  cp $f → :/$f"
-    $MPREMOTE cp "$f" ":/$f"
-done
+if [ "${RUN_VESC_PROVISION:-1}" = "1" ]; then
+    echo "=== Running VESC provisioning (limits + LispBM push install) ==="
+    $MPREMOTE mount . run scripts/vesc_provision.py
+else
+    echo "=== Skipping VESC provisioning (RUN_VESC_PROVISION=0) ==="
+fi
 
 echo ""
 echo "=== Flash deploy complete ==="

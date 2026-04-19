@@ -73,12 +73,12 @@ all speeds — current scales linearly with RPM (gentle at low speed, stronger
 at high speed) while guaranteeing that 75% of mechanical input reaches the
 caps rather than being wasted as copper heat.
 
-The command is clamped to a 25 A ceiling (thermal limit) and applied
+The command is clamped to a 40 A ceiling (thermal limit) and applied
 directly — no slew limiting.  The VESC FOC loop handles electrical
 ramping at 20+ kHz.
 
-Regen is disabled entirely when the cap voltage reaches the soft cutoff
-(40.0 V) to prevent overcharging.
+Regen tapers linearly to zero as the cap voltage rises from 40 V to
+42 V, preventing overcharging.
 
 ### 2.4 Motor-RPM Regen Detection with Hysteresis
 
@@ -231,7 +231,7 @@ carrier.
    regen, smooth deceleration.  The motor's reaction torque is well below
    brake holding force.  Stable — no oscillation.
 4. **Hard squeeze:** carrier solidly locked.  Motor RPM at maximum for this
-   wheel speed.  Current approaches the thermal ceiling (25 A).  Strong
+   wheel speed.  Current approaches the thermal ceiling (40 A).  Strong
    regen.  Any additional squeeze force adds mechanical-only braking — regen
    can't increase further because RPM is already set by wheel speed.
 5. **Release:** brake friction drops to zero, carrier freewheels, RPM drops
@@ -287,7 +287,7 @@ The SystemSupervisor runs at 100 Hz and checks:
 
 | Fault | Trigger | Latching? |
 |---|---|---|
-| OVERVOLTAGE | Cap voltage ≥ VCAP_ABSOLUTE_MAX (42.0 V) | Yes |
+| OVERVOLTAGE | Cap voltage ≥ VCAP_ABSOLUTE_MAX (43.0 V) | Yes |
 | VESC_TIMEOUT | No valid telemetry for 500 ms | No |
 | VESC_FAULT | VESC reports non-zero fault code | No |
 | THROTTLE_RANGE | ADC below 100 or above 4000 (open/short circuit) | No |
@@ -399,11 +399,12 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 | Constant | Value | Description |
 |---|---|---|
 | VCAP_MIN_OPERATING | 10.0 V | Minimum cap voltage for motor operation |
-| VCAP_SOFT_REGEN_CUTOFF | 40.0 V | Software regen disable threshold |
-| VCAP_ABSOLUTE_MAX | 42.0 V | Hard overvoltage limit |
+| VCAP_REGEN_TAPER_START_V | 40.0 V | Regen current starts linearly tapering down |
+| VCAP_REGEN_TAPER_END_V | 42.0 V | Regen current reaches zero (software) |
+| VCAP_ABSOLUTE_MAX | 43.0 V | Hard overvoltage limit |
 | MOTOR_CURRENT_MAX_A | 50.0 A | VESC-side motor current limit (set in VESC Tool) |
 | MOTOR_COMMAND_LIMIT_A | 45.0 A | Firmware command ceiling — 5 A headroom below VESC limit |
-| VESC_WATT_MAX | 500.0 W | VESC watt limit — both drive and regen |
+| VESC_WATT_MAX | 1500.0 W | VESC watt limit — both drive and regen |
 
 ### Regen Tuning
 
@@ -413,7 +414,7 @@ VDD powered from Pico 3V3(OUT).  Backlight driven from GP28 (no resistor).
 | REGEN_EXIT_RPM | 18.0 | Motor RPM threshold to exit regen (hysteresis) |
 | REGEN_HOLDOFF_MS | 300 | Delay after throttle release before regen can trigger |
 | REGEN_COPPER_LOSS_FRACTION | 0.25 | Fraction of mechanical input lost to I²R heat (25%) |
-| REGEN_CURRENT_MAX_A | 25.0 | Hard ceiling for regen current (thermal limit) |
+| REGEN_CURRENT_MAX_A | 40.0 | Hard ceiling for regen current (thermal limit) |
 | FLUX_LINKAGE_WB | 0.0111 | Puyan H01 flux linkage (weber) |
 | MOTOR_PHASE_RESISTANCE_OHM | 0.082 | Phase resistance from VESC FOC detection |
 
@@ -503,21 +504,14 @@ tests/               # pytest suite (221 tests)
 scripts/
    test_system_check.py         # Main integrated hardware check
    test_throttle_characterize.py # Throttle ADC characterization
-   test_vesc_fw_version.py      # Quick VESC UART connectivity check
    test_vesc_telemetry.py       # VESC telemetry snapshot
-   vesc_apply_safety_temp.py    # Apply supported Pico-side safety envelope persistence
+   vesc_provision.py            # One-shot: apply all limits + verify + save snapshot
    vesc_characterize_motor.py   # Terminal-assisted dc-cal + FOC characterization
-   vesc_save_snapshot.py        # Save final live VESC snapshot from Pico side
-   vesc_flash_config.py         # Guard script: persistent UART MCCONF flashing disabled
    bench/                       # Low-level or infrequent diagnostics
       test_uart_loopback.py
       test_uart_pins_gpio.py
       test_vesc_read_config.py
-      vesc_backup_save_to_pico.py
-   legacy/                      # Older one-off demos kept for reference
-      test_lcd.py
-      test_lcd_pages.py
-      test_lcd_throttle_percent.py
+   vesc_backup_save_to_pico.py  # deprecated (use vesc_provision.py)
 ```
 
 ---
@@ -592,10 +586,10 @@ Create directories and copy project files to the Pico:
 ```bash
 mpremote connect /dev/ttyACM0 fs mkdir :config
 mpremote connect /dev/ttyACM0 fs mkdir :drivers
-mpremote connect /dev/ttyACM0 fs cp config/__init__.py :config/__init__.py
-mpremote connect /dev/ttyACM0 fs cp config/settings.py :config/settings.py
-mpremote connect /dev/ttyACM0 fs cp drivers/__init__.py :drivers/__init__.py
-mpremote connect /dev/ttyACM0 fs cp drivers/lcd_driver.py :drivers/lcd_driver.py
+mpremote connect /dev/ttyACM0 fs cp firmware/config/__init__.py :config/__init__.py
+mpremote connect /dev/ttyACM0 fs cp firmware/config/settings.py :config/settings.py
+mpremote connect /dev/ttyACM0 fs cp firmware/drivers/__init__.py :drivers/__init__.py
+mpremote connect /dev/ttyACM0 fs cp firmware/drivers/lcd_driver.py :drivers/lcd_driver.py
 ```
 
 Repeat for all remaining project directories and files (`services/`, `app/`,
@@ -604,16 +598,16 @@ Repeat for all remaining project directories and files (`services/`, `app/`,
 ### 12.3 Hardware Test Scripts
 
 The supported day-to-day scripts stay at the top level of `scripts/`.
-Low-level diagnostics live in `scripts/bench/`, and older one-off demos live
-in `scripts/legacy/`.  Upload the required project files first (§12.2).
+Low-level diagnostics live in `scripts/bench/`.  Upload the required project files first (§12.2).
 Each script prints `PASS` or `FAIL` with details.
 
 #### 12.3.1 LCD Test
 
 **Wiring:** LCD connected per §8.4 pin map.
+LCD is tested as part of `test_system_check.py`.
 
 ```bash
-mpremote connect /dev/ttyACM0 run scripts/legacy/test_lcd.py
+mpremote run scripts/test_system_check.py
 ```
 
 **Expected result:**
@@ -648,15 +642,10 @@ Remove the jumper wire before proceeding to VESC tests.
 **Wiring:** Pico GP4 (TX) → VESC RX, Pico GP5 (RX) → VESC TX,
 Pico GND → VESC GND.  VESC must be powered.  Motor may be disconnected.
 
-```bash
-mpremote connect /dev/ttyACM0 run scripts/test_vesc_fw_version.py
-```
+Firmware version is checked as part of the provisioning script:
 
-**Expected result (example):**
-```
-FW Version: 5.2
-Hardware: 410
-PASS
+```bash
+mpremote mount . run scripts/vesc_provision.py
 ```
 
 The firmware version and hardware name will vary by VESC board and firmware.
@@ -746,14 +735,14 @@ Go to **Motor Settings → General → Voltage**.
 | Setting | Value | Notes |
 |---|---|---|
 | Minimum Input Voltage | 14.0 V | VESC shuts down below this (protects supercaps) |
-| Maximum Input Voltage | 42.0 V | Must not exceed supercap bank absolute max |
-| Watt Max | 500 W | Must match `VESC_WATT_MAX` in settings.py |
-| Watt Max Regen | 500 W | Must match `VESC_WATT_MAX` in settings.py |
+| Maximum Input Voltage | 43.0 V | Must not exceed supercap bank absolute max |
+| Watt Max | 1500 W | Must match `VESC_WATT_MAX` in settings.py |
+| Watt Max Regen | 1500 W | Must match `VESC_WATT_MAX` in settings.py |
 
 Click **Write Motor Configuration** to save.
 
 > These limits protect the supercapacitor bank.  The Pico firmware has its
-> own software limits (`VCAP_MIN_OPERATING` = 10 V, `VCAP_ABSOLUTE_MAX` = 42 V)
+> own software limits (`VCAP_MIN_OPERATING` = 10 V, `VCAP_ABSOLUTE_MAX` = 43 V)
 > but the VESC hardware limits are the last line of defense.
 
 #### 12.4.4 Enable UART App
@@ -782,14 +771,20 @@ After writing both motor and app configs:
 ### 12.5 VESC Configuration via Pico UART
 
 The VESC can also be configured directly from the Pico over UART, without
-needing VESC Tool or a USB connection to a PC.  The supported write/store
-workflow stays at the top level of `scripts/`.  The deeper inspection script
-for reading and decoding the full config now lives in `scripts/bench/`.
+needing VESC Tool or a USB connection to a PC.
+
+Canonical Pico-side VESC procedures:
+- `scripts/vesc_characterize_motor.py` (prepare + characterize)
+- `scripts/vesc_provision.py` (apply limits + verify + snapshot)
+- `scripts/bench/test_vesc_read_config.py` (read-only inspection)
+
+Deprecated duplicate bench probes are kept only as compatibility stubs and
+print guidance to the canonical scripts above.
 
 #### 12.5.1 Read Current Configuration
 
 ```bash
-mpremote run scripts/bench/test_vesc_read_config.py
+mpremote mount . run scripts/bench/test_vesc_read_config.py
 ```
 
 This reads the full MCCONF binary blob from the VESC and decodes key fields:
@@ -803,15 +798,15 @@ This reads the full MCCONF binary blob from the VESC and decodes key fields:
   Sensor mode:    Sensorless
 
   [Current Limits]
-  Motor max:      40.0 A
-  Motor min:      -40.0 A
-  Battery max:    40.0 A
-  Battery min:    -40.0 A
+  Motor max:      50.0 A
+  Motor min:      -50.0 A
+  Battery max:    50.0 A
+  Battery min:    -50.0 A
   Absolute max:   130.0 A
 
   [Voltage Limits]
   Min input V:    15.0 V
-  Max input V:    42.0 V
+  Max input V:    43.0 V
   Batt cut start: 15.0 V
   Batt cut end:   14.0 V
   ...
@@ -823,7 +818,7 @@ Use this to verify the current VESC settings at any time.
 
 The VESC scripts now share a single config file:
 
-- Shared repo module: `config/vesc_config.py`
+- Shared repo module: `firmware/config/vesc_config.py`
 
 Run the VESC scripts with a mounted repo so the Pico can import that shared
 Python module at runtime.
@@ -858,124 +853,61 @@ Run it with the driven wheel off the ground and the motor unloaded.
 If characterization fails, the temporary runtime envelope remains active until
 the VESC is power-cycled or another tool changes it.
 
-#### 12.5.4 Store Safety Envelope From Pico
+#### 12.5.4 Provision VESC (Apply Limits + Verify + Save Snapshot)
 
 ```bash
-mpremote mount . run scripts/vesc_apply_safety_temp.py
+mpremote mount . run scripts/vesc_provision.py
 ```
 
-This script uses only supported firmware packet paths from the Pico side:
-1. Applies the current/duty/ERPM/watt safety envelope with `COMM_SET_MCCONF_TEMP`
-2. Sets the battery cutoff start/end with `COMM_SET_BATTERY_CUT`
-3. Requests persistent storage for those fields on the VESC
-4. Verifies read-back with `COMM_GET_MCCONF_TEMP` and `COMM_GET_BATTERY_CUT`
-5. Audits the live MCCONF for unexpected serializer-level changes
+This single script performs the complete VESC provisioning workflow:
+1. Reads and verifies firmware version and hardware name
+2. Applies all repo limits via Lisp conf-set (current, voltage, watt, battery cut)
+3. Persists to VESC flash via conf-store
+4. Reads back MCCONF and verifies key fields match expected values
+5. Saves MCCONF/APPCONF snapshots + metadata to Pico filesystem
+6. Prints mpremote commands to copy snapshots into the repo
 
-On tested FW 6.6 this is the safe direct-from-Pico persistence path for:
-- motor current envelope scaling
-- battery current limits
-- ERPM limits
-- duty limits
-- watt limits
-- battery cutoff start/end
+All limit values come from `firmware/config/vesc_config.py` which derives them from
+`firmware/config/settings.py` — single source of truth.
 
-It does not write the full serialized MCCONF blob.
-
-Known limitation:
-- `l_min_vin` and `l_max_vin` do not have a dedicated safe UART packet in this workflow
-- if those two fields are already correct on the VESC, the rest of the safety envelope can be stored entirely from the Pico
-- if those two fields need to change, use VESC Tool once, then continue using the Pico workflow for the supported fields
-
-#### 12.5.5 Flash ReGenX Configuration
-
-```bash
-mpremote mount . run scripts/vesc_flash_config.py
-```
-
-Persistent UART flashing is intentionally disabled. The previous version of
-this script patched guessed byte offsets inside the serialized MCCONF blob and
-sent them with `COMM_SET_MCCONF`, which is not safe on all firmware versions.
-
-Use `scripts/vesc_apply_safety_temp.py` for supported Pico-side persistence.
-Use VESC Tool only when you need to change unsupported serialized-MCCONF
-fields such as `l_min_vin` or `l_max_vin`.
-
-To change the safe Pico-side characterization behavior, edit
-`VESC_TEMP_LIMITS` or `VESC_CHARACTERIZATION` in `config/vesc_config.py` and
-re-run the characterization script.
-
-Recommended order with the current safe workflow:
+Recommended order for a fresh motor setup:
 
 1. `mpremote mount . run scripts/vesc_characterize_motor.py`
-2. `mpremote mount . run scripts/vesc_apply_safety_temp.py`
-3. `mpremote run scripts/bench/test_vesc_read_config.py`
-4. `mpremote run scripts/vesc_save_snapshot.py`
-
-#### 12.5.6 Save Final Snapshot
-
-```bash
-mpremote run scripts/vesc_save_snapshot.py
-```
-
-This script captures the final live VESC state after preparation and flashing.
-It saves these files on the Pico:
-
-- `vesc_snapshot_mcconf.bin`
-- `vesc_snapshot_meta.txt`
-- `vesc_snapshot_appconf.bin` when APPCONF read succeeds
+2. `mpremote mount . run scripts/vesc_provision.py`
+3. Copy snapshots into the repo (commands printed by the script)
 
 At the end it prints the exact `mpremote fs cp` commands needed to copy those
-files into the repo `config/` directory.
+files into the repo `firmware/config/` directory.
 
-#### 12.5.7 Get And Set MCCONF
-
-Use these repo scripts when you want to read or write the full VESC motor
-configuration (`MCCONF`) over UART without using VESC Tool.
+#### 12.5.5 Get And Set MCCONF
 
 Get the current live MCCONF from the VESC:
 
-1. Read and save the final live config snapshot:
-
 ```bash
-mpremote run scripts/vesc_save_snapshot.py
+mpremote mount . run scripts/vesc_provision.py
 ```
 
-2. Copy the saved files from the Pico into the repo:
+This applies all repo limits, verifies them, and saves the MCCONF snapshot.
+Copy the saved files from the Pico into the repo:
 
 ```bash
-mpremote fs cp :vesc_snapshot_mcconf.bin config/vesc_snapshot_mcconf.bin
-mpremote fs cp :vesc_snapshot_meta.txt config/vesc_snapshot_meta.txt
-```
-
-3. If APPCONF was captured too, copy it as well:
-
-```bash
-mpremote fs cp :vesc_snapshot_appconf.bin config/vesc_snapshot_appconf.bin
+mpremote fs cp :vesc_snapshot_mcconf.bin firmware/config/vesc_snapshot_mcconf.bin
+mpremote fs cp :vesc_snapshot_meta.txt firmware/config/vesc_snapshot_meta.txt
+mpremote fs cp :vesc_snapshot_appconf.bin firmware/config/vesc_snapshot_appconf.bin
 ```
 
 Set MCCONF on the VESC from this repo workflow:
 
-1. Run safe temporary-limit characterization and motor detection:
+1. Run motor characterization (if needed for a new motor):
 
 ```bash
 mpremote mount . run scripts/vesc_characterize_motor.py
 ```
 
-2. Store the final persistent configuration with VESC Tool over USB.
-
-   Preferred path on FW 6.6 for supported safety fields:
+2. Apply all limits, verify, and save snapshot:
 
 ```bash
-mpremote mount . run scripts/vesc_apply_safety_temp.py
-```
-
-   Use VESC Tool only when unsupported serialized fields such as
-   `l_min_vin` / `l_max_vin` need to change.
-
-3. Verify the final result and save the full live MCCONF back into the repo:
-
-```bash
-mpremote run scripts/vesc_save_snapshot.py
+mpremote mount . run scripts/vesc_provision.py
 ```
 
 How the repo uses VESC MCCONF commands:
@@ -985,15 +917,10 @@ How the repo uses VESC MCCONF commands:
    - applies temporary limits with `COMM_SET_MCCONF_TEMP`
    - verifies temporary limits with `COMM_GET_MCCONF_TEMP`
    - re-reads live config with `COMM_GET_MCCONF`
-- `scripts/vesc_apply_safety_temp.py`
-   - applies supported persistent safety fields with `COMM_SET_MCCONF_TEMP`
-   - applies battery cutoff start/end with `COMM_SET_BATTERY_CUT`
-   - verifies with `COMM_GET_MCCONF_TEMP` and `COMM_GET_BATTERY_CUT`
-- `scripts/vesc_flash_config.py`
-   - deliberately blocks the old unsafe UART flash path
-- `scripts/vesc_save_snapshot.py`
-   - reads live config with `COMM_GET_MCCONF`
-   - saves the raw MCCONF blob for the repo
+- `scripts/vesc_provision.py`
+   - applies all limits via Lisp conf-set / conf-store
+   - verifies persisted MCCONF fields
+   - saves MCCONF/APPCONF snapshots
 
 Important:
 
@@ -1062,7 +989,7 @@ mpremote fs ls
 
 ### 12.6 Full Deployment
 
-1. Confirm hardware pin mapping in `config/settings.py`.
+1. Confirm hardware pin mapping in `firmware/config/settings.py`.
 2. Complete VESC Tool configuration (§12.4).
 3. Verify UART communication with test scripts (§12.3).
 4. Power cycle or reset the board; `boot.py` then `main.py` run automatically.

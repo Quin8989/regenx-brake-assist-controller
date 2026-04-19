@@ -6,9 +6,8 @@
 #
 # It then runs the VESC's built-in FOC commissioning routine over UART.
 #
-# It does not write the full serialized MCCONF blob. After characterization,
-# scripts/vesc_apply_safety_temp.py can store the supported safety-envelope
-# fields directly from the Pico on FW 6.6.
+# After characterization, run scripts/vesc_provision.py to apply all
+# repo limits, verify, and save the snapshot.
 #
 # Run: mpremote mount . run scripts/vesc_characterize_motor.py
 
@@ -18,11 +17,14 @@ from time import sleep_ms, ticks_ms, ticks_diff
 
 from scripts.lib.vesc_uart_template import VescUartTemplate, extract_frame
 from scripts.lib.vesc_terminal import help_has_command, run_terminal_cmd
+from scripts.lib.path_setup import ensure_firmware_path
+
+ensure_firmware_path()
 
 try:
     from config.vesc_config import VESC_CHARACTERIZATION, get_temp_limits
 except ImportError:
-    print("FAILED: Could not import config.vesc_config")
+    print("FAILED: Could not import firmware/config/vesc_config.py")
     print("Run with: mpremote mount . run scripts/vesc_characterize_motor.py")
     raise SystemExit(1)
 
@@ -439,8 +441,7 @@ for line in fault_lines:
     if line.strip():
         print("  Terminal fault: %s" % line.strip())
 print("\nNext step:")
-print("  Run mpremote mount . run scripts/vesc_apply_safety_temp.py to store the supported safety envelope from the Pico.")
-print("  If l_min_vin / l_max_vin still need correction, use VESC Tool once, then run mpremote run scripts/vesc_save_snapshot.py")
+print("  Run mpremote mount . run scripts/vesc_provision.py to apply all limits, verify, and save snapshot.")
 
 print("\n" + "=" * 50)
 print("  Done")

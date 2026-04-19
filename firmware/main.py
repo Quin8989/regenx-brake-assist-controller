@@ -10,7 +10,7 @@
 import sys
 
 from app.controller import AppController
-from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX
+from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX, VCAP_MIN_OPERATING
 from core import FaultCode, FaultManager, SharedState, SystemState
 from drivers.lcd_driver import LCDDriver
 from drivers.gpio_io import ResetButton
@@ -99,6 +99,17 @@ def main():
     )
 
     logger.info("startup", "Initialization complete — entering main loop")
+
+    # --- Startup VESC configuration ---
+    # These one-shot commands configure the VESC before the main loop.
+    # Responses (FW version) arrive asynchronously via service_rx.
+    vesc_comm.send_disable_output(0)       # Suppress any VESC app control (permanent until reset)
+    vesc_comm.request_fw_version()         # HW_NAME check — response populates SharedState
+    vesc_comm.set_battery_cut(             # Confirm low-side cap under-voltage cutoffs
+        start_v=VCAP_MIN_OPERATING,        # 10 V — VESC starts limiting current
+        end_v=VCAP_MIN_OPERATING - 1.0,    # 9 V — VESC cuts current to zero
+    )
+    wdt.feed()
 
     # --- Main cooperative scheduler loop ---
     while True:

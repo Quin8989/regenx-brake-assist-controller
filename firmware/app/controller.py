@@ -8,6 +8,8 @@ from config.settings import (
     FAST_LOOP_PERIOD_MS,
     LCD_REFRESH_PERIOD_MS,
     TELEMETRY_REQUEST_PERIOD_MS,
+    VESC_ALIVE_PERIOD_MS,
+    VESC_ESTOP_TIMEOUT_MS,
 )
 from core import SystemState
 from utils import PeriodicTimer
@@ -33,6 +35,8 @@ class AppController:
         self._t_telem_req = PeriodicTimer(TELEMETRY_REQUEST_PERIOD_MS)
         self._t_display = PeriodicTimer(LCD_REFRESH_PERIOD_MS)
         self._t_bench = PeriodicTimer(BENCH_LOG_PERIOD_MS)
+        self._t_alive = PeriodicTimer(VESC_ALIVE_PERIOD_MS)
+        self._was_fault = False  # track fault entry for ESTOP trigger
 
     def update(self):
         """Single update tick — called every iteration of the main loop."""
@@ -47,7 +51,7 @@ class AppController:
 
         # 2. Refresh VESC telemetry requests if due
         if self._t_telem_req.ready():
-            self._vesc_comm.request_telemetry()
+            self._vesc_comm.request_telemetry_selective()
 
         # 3. Fast loop (input → supervisor → control → command TX)
         if self._t_fast.ready():
@@ -55,6 +59,16 @@ class AppController:
             self._safety.update()
             self._control_loop.update()
             self._vesc_comm.send_current(self._state.motor_command_a)
+
+            # ESTOP on fault entry — sends motor release once when entering FAULT
+            is_fault = self._state.system_state == SystemState.FAULT
+            if is_fault and not self._was_fault:
+                self._vesc_comm.send_estop(VESC_ESTOP_TIMEOUT_MS)
+            self._was_fault = is_fault
+
+        # 3a. VESC keepalive
+        if self._t_alive.ready():
+            self._vesc_comm.send_alive()
 
         # 4. Display (energy estimation + LCD)
         if self._t_display.ready():
