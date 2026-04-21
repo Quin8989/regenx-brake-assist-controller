@@ -429,7 +429,7 @@ def _tune_one(
     else:
         de_kwargs: dict = dict(
             bounds=bounds,
-            rng=np.random.default_rng(seed),
+            seed=seed,
             maxiter=maxiter,
             popsize=popsize,
             tol=1e-3,
