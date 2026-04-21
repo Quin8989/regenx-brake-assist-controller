@@ -301,10 +301,10 @@ def _parse_fw_version(payload):
     fw_minor = payload[2]
     # HW_NAME is a null-terminated string starting at offset 3
     name_start = 3
-    name_end = payload.find(0, name_start)
+    name_end = payload.find(b"\x00", name_start)
     if name_end < 0:
         name_end = len(payload)
-    hw_name = payload[name_start:name_end].decode("ascii", errors="replace")
+    hw_name = payload[name_start:name_end].decode("ascii", "replace")
     return (fw_major, fw_minor, hw_name)
 
 

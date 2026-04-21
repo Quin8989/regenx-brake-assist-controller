@@ -80,6 +80,9 @@ class DisplayManager:
         self._last_vesc_fault_code = 0
         self._last_reinit_ms = ticks_ms()
         self._last_sys_state = shared_state.system_state
+        self._last_vesc_fault_present = False
+        self._last_line0 = None
+        self._last_line1 = None
 
     def update(self):
         """Refresh LCD based on current system state."""
@@ -104,17 +107,35 @@ class DisplayManager:
             return
         now = ticks_ms()
         sys_state = self._state.system_state
-        fault_edge = (sys_state == SystemState.FAULT) != (
-            self._last_sys_state == SystemState.FAULT
-        )
+        state_edge = sys_state != self._last_sys_state
+        vesc_fault_present = self._state.vesc_fault_code != 0
+        overlay_edge = vesc_fault_present != self._last_vesc_fault_present
         due = ticks_diff(now, self._last_reinit_ms) >= _LCD_REINIT_PERIOD_MS
-        if fault_edge or due:
+        if state_edge or overlay_edge or due:
             try:
                 reinit()
             except OSError:
                 pass
             self._last_reinit_ms = now
+            self._last_line0 = None
+            self._last_line1 = None
         self._last_sys_state = sys_state
+        self._last_vesc_fault_present = vesc_fault_present
+
+    def _write_lines(self, line0, line1):
+        """Only touch the LCD rows that actually changed.
+
+        Reduces GPIO/E-line traffic during noisy transitions, which lowers the
+        chance of desynchronising the HD44780's 4-bit nibble state.
+        """
+        line0 = line0[:16]
+        line1 = line1[:16]
+        if line0 != self._last_line0:
+            self._lcd.write_line(0, line0)
+            self._last_line0 = line0
+        if line1 != self._last_line1:
+            self._lcd.write_line(1, line1)
+            self._last_line1 = line1
 
     def _update_energy_percent(self):
         """Compute cap_energy_percent from cap_voltage_v (capacitive: E ∝ V²)."""
@@ -158,8 +179,7 @@ class DisplayManager:
     def _show_vesc_fault_overlay(self):
         code = self._last_vesc_fault_code
         name = _VESC_FAULT_NAMES.get(code, "FAULT %d" % code)
-        self._lcd.write_line(0, ("VESC F%d" % code)[:16])
-        self._lcd.write_line(1, name[:16])
+        self._write_lines("VESC F%d" % code, name)
 
     # ----- RUN page (ASSIST / REGEN) -----
 
@@ -192,8 +212,7 @@ class DisplayManager:
         pad1 = 16 - len(amps) - len(speed_text)
         line1 = " " * max(pad1 // 2, 1) + amps + " " * max(pad1 - pad1 // 2, 1) + speed_text
 
-        self._lcd.write_line(0, line0[:16])
-        self._lcd.write_line(1, line1[:16])
+        self._write_lines(line0, line1)
 
     # ----- PRECHARGE page -----
 
@@ -202,8 +221,7 @@ class DisplayManager:
         line0 = "PRECHARGE..."
         pct = f"{s.cap_energy_percent:.0f}%"
         line1 = f"Vcap:{s.cap_voltage_v:>5.1f}V {pct:>4s}"
-        self._lcd.write_line(0, line0)
-        self._lcd.write_line(1, line1[:16])
+        self._write_lines(line0, line1)
 
     # ----- FAULT page (cycles through active faults) -----
 
@@ -228,7 +246,6 @@ class DisplayManager:
         else:
             label = "Unknown"
 
-        self._lcd.write_line(0, "!! FAULT !!")
-        self._lcd.write_line(1, label[:16])
+        self._write_lines("!! FAULT !!", label)
 
 

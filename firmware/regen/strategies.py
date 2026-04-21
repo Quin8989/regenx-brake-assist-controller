@@ -178,14 +178,19 @@ class AimdFfRegenStrategy(_BaseStrategy):
 
     k_eff is the state.  Every tick:
 
-        if -ctx.drpm_peak_neg > unlock_thresh:           # carrier slipped
+                if slip_event:                                    # carrier slipped
             # MD: multiplicative decrease (graduated over 25% band to
             # avoid chatter at the detection boundary)
             level = clip((-drpm_peak_neg - unlock_thresh) / (0.25*unlock_thresh), 0, 1)
             k_eff *= 1 - beta_md * (0.35 + 0.65*level)
-        else:
+                elif not raw_slip:
             # AI: additive increase — probe up until the next slip
             k_eff += k_ai * dt
+
+        ``slip_event`` intentionally requires:
+            * rising edge of ``raw_slip`` (avoid repeat MD in one burst),
+            * a short refractory window after each MD,
+            * minimum |rpm| (ignore stop-end zero-crossing oscillation).
 
     Uses ``ctx.drpm_peak_neg`` directly (most-negative per-sample
     d(rpm)/dt, sampled at 1 kHz on the VESC, peak-held between the Pico's
@@ -209,6 +214,8 @@ class AimdFfRegenStrategy(_BaseStrategy):
     # Fixed internal constants — not tuned.
     _K_FLOOR = 0.02
     _K_CEIL = 1.0
+    _SLIP_REFRACTORY_S = 0.15
+    _SLIP_MIN_ABS_RPM = 60.0
 
     def __init__(self, k=0.131, beta_md=0.05, unlock_thresh=1500.0, k_ai=0.05):
         self.k = float(k)
@@ -219,9 +226,13 @@ class AimdFfRegenStrategy(_BaseStrategy):
         self.name = "AIMD-FF Regen Controller"
 
         self._k_eff = self.k
+        self._t_s = 0.0
+        self._slip_prev_raw = False
+        self._slip_rearm_at_s = 0.0
 
     def _reset(self):
         self._k_eff = self.k
+        self._slip_prev_raw = False
 
     def update(self, ctx):
         rpm, _iq_actual, taper = self._begin_update(ctx)
@@ -230,17 +241,31 @@ class AimdFfRegenStrategy(_BaseStrategy):
             return 0.0
 
         dt = ctx.dt_ctrl if ctx.dt_ctrl > 0.0 else 0.01
+        self._t_s += dt
 
         unlock_band = max(10.0, 0.25 * self.unlock_thresh)
         unlock_excess = (-ctx.drpm_peak_neg) - self.unlock_thresh
         unlock_level = self._clip(unlock_excess / unlock_band, 0.0, 1.0)
+        raw_slip = unlock_level > 0.0
 
-        if unlock_level > 0.0:
+        # Guard MD from stop-end RPM chatter: require sufficient speed,
+        # a rising edge, and a short dead-time between MD events.
+        slip_event = (
+            raw_slip
+            and abs(rpm) >= self._SLIP_MIN_ABS_RPM
+            and not self._slip_prev_raw
+            and self._t_s >= self._slip_rearm_at_s
+        )
+
+        if slip_event:
             md = self.beta_md * (0.35 + 0.65 * unlock_level)
             self._k_eff *= (1.0 - md)
-        else:
+            self._slip_rearm_at_s = self._t_s + self._SLIP_REFRACTORY_S
+        elif not raw_slip:
             # AI: grow k toward the ceiling until the next slip event.
             self._k_eff += self.k_ai * dt
+
+        self._slip_prev_raw = raw_slip
 
         self._k_eff = self._clip(self._k_eff, self._K_FLOOR, self._K_CEIL)
 

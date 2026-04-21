@@ -19,7 +19,7 @@ Dimensions (0–100 each):
                (``speed_baseline``).
   smoothness — ride quality via RMS wheel jerk.
 
-Ten weighted scenarios model everyday riding.  Each scenario defines a
+Weighted scenarios model everyday riding.  Each scenario defines a
 non-overlapping speed band so low-speed behaviour is never double-counted.
 Emergency scenarios override dimension weights to prioritise braking.
 
@@ -49,6 +49,18 @@ TRACKING_CUTOFF_KMH = 5.0
 # scores < 70 here is almost certainly ringing or dithering at a
 # frequency that will be audible/felt.
 J_REF = 10.0
+
+# ── Energy anti-pathology penalty tuning ─────────────────────────────
+# Heavily penalise periods where commanded braking is active but the
+# device's net conversion is negative (capture < summed device losses).
+#
+# Net conversion power proxy:
+#   p_net_device = p_elec - (p_copper + p_drg + p_brake)
+# Negative net periods are penalised proportionally to both duration and
+# magnitude relative to demanded brake power.
+NEG_EFFICIENCY_SPEED_CUTOFF_KMH = TRACKING_CUTOFF_KMH
+NEG_EFFICIENCY_BRAKE_POWER_MIN_W = 20.0
+NEG_EFFICIENCY_PENALTY_GAIN = 220.0
 
 # ── Normal dimension weights ─────────────────────────────────────────
 W_ENERGY_NORMAL     = 0.40
@@ -94,6 +106,9 @@ SCREEN_MASSES = [
 #          "step" — brake=0 until STEP_DELAY, then jumps to constant.
 #                   Stresses controller transient response to a step
 #                   demand (catches ringing, overshoot, slow rise).
+#          "cycle" — continuous run with repeated brake on/off windows.
+#                   Models real riding where braking is applied in
+#                   bursts without resetting initial conditions.
 #          "hold" — constant_speed=True, no KE to dissipate.
 #                   Simulates holding speed on a descent where gravity
 #                   supplies energy at `mass·g·sin(θ)·v`; decel_ms2 is
@@ -114,36 +129,52 @@ STEP_DELAY   = 0.3
 # Duration of "hold" kind scenarios (s) — long enough for controller
 # transients to settle and steady-state regen to dominate the score.
 HOLD_T_END   = 3.0
+CYCLE_T_END = 9.0
+CYCLE_INITIAL_COAST_S = 0.6
+CYCLE_PERIOD_S = 2.0
+CYCLE_BRAKE_ON_S = 1.1
+
+# Hill scenario parameters for real-world style scoring.
+HILL_ACCEL_MS2 = 0.65     # ~6.6% equivalent downhill grade
+HILL_STEP_T_END = 7.0
+HILL_CYCLE_T_END = 11.0
+HILL_CYCLE_INITIAL_COAST_S = 0.7
+HILL_CYCLE_PERIOD_S = 2.4
+HILL_CYCLE_BRAKE_ON_S = 1.35
 
 SCENARIOS = [
     # Low speed — motor RPM is low
-    ("low_light",        10,  5, 0.15, 0.04, False, "ramp"),
-    ("low_medium",       10,  3, 0.40, 0.04, False, "ramp"),
+    ("low_light",        10,  5, 0.15, 0.03, False, "cycle"),
+    ("low_medium",       10,  3, 0.40, 0.03, False, "cycle"),
     # City speed — bulk of riding
-    ("city_light",       20, 15, 0.20, 0.13, False, "ramp"),
-    ("city_medium",      20, 10, 0.40, 0.17, False, "ramp"),
-    ("city_heavy",       20,  5, 0.70, 0.08, False, "ramp"),
+    ("city_light",       20, 15, 0.20, 0.12, False, "cycle"),
+    ("city_medium",      20, 10, 0.40, 0.16, False, "cycle"),
+    ("city_heavy",       20,  5, 0.70, 0.08, False, "cycle"),
     # Fast — motor in good operating range
-    ("fast_light",       30, 25, 0.25, 0.08, False, "ramp"),
-    ("fast_medium",      30, 15, 0.50, 0.12, False, "ramp"),
-    ("fast_heavy",       30, 10, 0.80, 0.08, False, "ramp"),
+    ("fast_light",       30, 25, 0.25, 0.07, False, "cycle"),
+    ("fast_medium",      30, 15, 0.50, 0.11, False, "cycle"),
+    ("fast_heavy",       30, 10, 0.80, 0.08, False, "cycle"),
     # Saturated — at/beyond motor limit, tracking-only scoring
     ("saturated_fast",   30,  5, 1.00, 0.04, True,  "ramp"),
-    ("saturated_high",   40, 10, 1.10, 0.04, True,  "ramp"),
+    ("saturated_high",   40, 10, 1.10, 0.03, True,  "ramp"),
     # Step demand — rider cruises, then clamps brake fully in one motion
-    ("city_step",        25, 10, 0.60, 0.10, False, "step"),
+    ("city_step",        25, 10, 0.60, 0.08, False, "step"),
     # Hill hold — long descent at constant speed (~5% grade @ 25 km/h)
-    ("hill_hold",        25, 25, 0.50, 0.08, False, "hold"),
+    ("hill_hold",        25, 25, 0.50, 0.06, False, "hold"),
+    # Downhill acceleration before brake clamp (real descent entry).
+    ("hill_accel_step",  22, 10, 0.65, 0.06, False, "hill_step"),
+    # Consecutive continuous downhill runs (brake on/off cycles).
+    ("hill_cont_runs",   24, 10, 0.60, 0.05, False, "hill_cycle"),
 ]
 
-# Screening set for DE phase.  Covers the two highest-weight ramps
-# PLUS city_step (the step-response scenario) so DE actually sees the
-# transient-response weakness during optimisation instead of only at
-# the full-eval phase.  Weights are taken as-is from SCENARIOS.
+# Screening set for DE phase. Focus on dominant continuous-run scenarios,
+# plus one step transient and one downhill continuous case.
 SCREEN_SCENARIOS = [
     s for s in SCENARIOS
-    if s[0] in ("city_medium", "city_light", "fast_medium",
-                "fast_heavy", "city_step")
+    if s[0] in (
+        "city_medium", "city_light", "fast_medium",
+        "city_heavy", "fast_heavy", "city_step", "hill_cont_runs"
+    )
 ]
 
 
@@ -218,6 +249,8 @@ def energy_score(result, mass_kg):
     p_elec = np.asarray(result['p_elec'], dtype=float)
     p_copper = np.asarray(result['p_copper'], dtype=float)
     p_brake = np.asarray(result['p_brake'], dtype=float)
+    speed_kmh = np.asarray(result['speed'], dtype=float)
+    brake_demand = np.asarray(result['brake_demand'], dtype=float)
     # p_drg is not logged directly; recover from eta denominator.
     # eta = p_elec / (p_elec + p_copper + p_drg + p_brake), so
     # p_drg = p_elec * (1/eta - 1) - p_copper - p_brake, but easier
@@ -239,7 +272,27 @@ def energy_score(result, mass_kg):
     e_den = float(np.sum(device_power) * dt)
     if e_den <= 1e-6:
         return 0.0
-    return _clamp01(e_num / e_den) * 100.0
+
+    # Heavy penalty for "negative-efficiency" braking windows:
+    # active brake demand + meaningful speed where device losses exceed
+    # electrical capture (net conversion negative).
+    speed_ms = speed_kmh / 3.6
+    demand_power = brake_demand * speed_ms / R_WHEEL
+    active = (
+        (speed_kmh >= NEG_EFFICIENCY_SPEED_CUTOFF_KMH)
+        & (demand_power >= NEG_EFFICIENCY_BRAKE_POWER_MIN_W)
+    )
+    p_losses = np.maximum(device_power - p_elec, 0.0)
+    neg_net = np.maximum(p_losses - p_elec, 0.0)
+    d_den = float(np.sum(demand_power[active]) * dt)
+    if d_den > 1e-9:
+        neg_ratio = float(np.sum(neg_net[active]) * dt) / d_den
+    else:
+        neg_ratio = 0.0
+
+    base = _clamp01(e_num / e_den) * 100.0
+    penalty = min(100.0, NEG_EFFICIENCY_PENALTY_GAIN * max(0.0, neg_ratio))
+    return max(0.0, base - penalty)
 
 
 def tracking_score(result):
@@ -499,6 +552,24 @@ def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
             return _b if t >= _d else 0.0
         return brake_fn, sim_kw, v_end
 
+    if kind == "cycle":
+        sim_kw["t_end"] = CYCLE_T_END
+        sim_kw["v_min_kmh"] = float(v_end)
+
+        def brake_fn(
+            t,
+            _b=brake_nm,
+            _coast=CYCLE_INITIAL_COAST_S,
+            _period=CYCLE_PERIOD_S,
+            _on=CYCLE_BRAKE_ON_S,
+        ):
+            if t < _coast:
+                return 0.0
+            phase = (t - _coast) % _period
+            return _b if phase < _on else 0.0
+
+        return brake_fn, sim_kw, v_end
+
     if kind == "hold":
         # Real descent physics: gravity supplies forward accel of
         # decel_ms2 m/s², controller + brake demand cancels it to hold
@@ -511,6 +582,40 @@ def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
         sim_kw["t_end"] = HOLD_T_END
         sim_kw["grade_rad"] = _math.asin(sin_theta)
         return brake_nm, sim_kw, None
+
+    if kind == "hill_step":
+        import math as _math
+        from .physics import G_ACCEL as _G
+        sim_kw["t_end"] = HILL_STEP_T_END
+        sim_kw["v_min_kmh"] = float(v_end)
+        sim_kw["grade_rad"] = _math.asin(max(-1.0, min(1.0, HILL_ACCEL_MS2 / _G)))
+        delay = STEP_DELAY
+
+        def brake_fn(t, _b=brake_nm, _d=delay):
+            return _b if t >= _d else 0.0
+
+        return brake_fn, sim_kw, v_end
+
+    if kind == "hill_cycle":
+        import math as _math
+        from .physics import G_ACCEL as _G
+        sim_kw["t_end"] = HILL_CYCLE_T_END
+        sim_kw["v_min_kmh"] = float(v_end)
+        sim_kw["grade_rad"] = _math.asin(max(-1.0, min(1.0, HILL_ACCEL_MS2 / _G)))
+
+        def brake_fn(
+            t,
+            _b=brake_nm,
+            _coast=HILL_CYCLE_INITIAL_COAST_S,
+            _period=HILL_CYCLE_PERIOD_S,
+            _on=HILL_CYCLE_BRAKE_ON_S,
+        ):
+            if t < _coast:
+                return 0.0
+            phase = (t - _coast) % _period
+            return _b if phase < _on else 0.0
+
+        return brake_fn, sim_kw, v_end
 
     raise ValueError(f"Unknown scenario kind: {kind!r}")
 

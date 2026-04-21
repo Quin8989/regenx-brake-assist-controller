@@ -23,26 +23,51 @@ def _set_tick(ms):
 
 
 def test_snapshot_captures_all_fields():
-    """Snapshot records all 9 fields from SharedState."""
+    """Snapshot records the full ride-debug field set from SharedState."""
     state = SharedState()
     state.system_state = SystemState.REGEN
     state.cap_voltage_v = 30.0
     state.vesc_mech_rpm = 245.0
     state.vesc_motor_current_a = 15.0
+    state.vesc_input_current_a = -8.0
+    state.vesc_duty_cycle = 0.42
+    state.vesc_fault_code = 3
     state.requested_mode = CommandMode.REGEN
     state.requested_level = 0.75
+    state.throttle_raw = 1234
+    state.throttle_valid = True
+    state.inhibit_motor_commands = False
     state.assist_command_request = 0.0
     state.regen_command_request = 12.5
+    state.motor_command_a = -12.5
     bl = BenchLogger(state, max_records=5)
     _set_tick(999)
     bl.snapshot()
     assert bl.records_stored == 1
-    assert bl._buf[0] == (999, "REGEN", 30.0, 245.0, 15.0, "REGEN", 0.75, 0.0, 12.5)
+    assert bl._buf[0] == (
+        999,
+        "REGEN",
+        30.0,
+        245.0,
+        15.0,
+        -8.0,
+        0.42,
+        3,
+        "REGEN",
+        0.75,
+        1234,
+        True,
+        False,
+        0.0,
+        12.5,
+        -12.5,
+    )
 
 
 def test_ring_buffer_wraps_and_preserves_order():
     """After overflow, oldest records are overwritten; dump shows correct order."""
     state = SharedState()
+    state.requested_level = 0.2
     bl = BenchLogger(state, max_records=3)
     for i in range(5):
         _set_tick(i * 100)
@@ -54,7 +79,9 @@ def test_ring_buffer_wraps_and_preserves_order():
 
 
 def test_clear_resets_buffer():
-    bl = BenchLogger(SharedState(), max_records=10)
+    s = SharedState()
+    s.requested_level = 0.2
+    bl = BenchLogger(s, max_records=10)
     for _ in range(3):
         bl.snapshot()
     bl.clear()
@@ -69,6 +96,7 @@ def test_dump_empty_and_nonempty(capsys):
 
     state = SharedState()
     state.system_state = SystemState.REGEN
+    state.requested_level = 0.2
     bl2 = BenchLogger(state, max_records=10)
     _set_tick(0)
     bl2.snapshot()
@@ -81,8 +109,27 @@ def test_dump_empty_and_nonempty(capsys):
     assert len(lines) == 3  # header + 2 data rows
 
 
+def test_dump_header_matches_expanded_field_set(capsys):
+    state = SharedState()
+    state.requested_level = 0.2
+    bl = BenchLogger(state, max_records=2)
+    _set_tick(0)
+    bl.snapshot()
+    bl.dump()
+
+    header = capsys.readouterr().out.strip().split("\n")[0]
+    assert header == (
+        "tick_ms,system_state,cap_voltage_v,vesc_mech_rpm,vesc_motor_current_a,"
+        "vesc_input_current_a,vesc_duty_cycle,vesc_fault_code,requested_mode,"
+        "requested_level,throttle_raw,throttle_valid,inhibit_motor_commands,"
+        "assist_command_request,regen_command_request,motor_command_a"
+    )
+
+
 def test_dump_order_after_wrap(capsys):
-    bl = BenchLogger(SharedState(), max_records=3)
+    s = SharedState()
+    s.requested_level = 0.2
+    bl = BenchLogger(s, max_records=3)
     for i in range(5):
         _set_tick(i * 10)
         bl.snapshot()
@@ -91,3 +138,17 @@ def test_dump_order_after_wrap(capsys):
     data = lines[1:]
     assert int(data[0].split(",")[0]) == 20
     assert int(data[-1].split(",")[0]) == 40
+
+
+def test_selective_capture_skips_idle_samples():
+    s = SharedState()
+    bl = BenchLogger(s, max_records=5)
+    _set_tick(0)
+    bl.snapshot()
+    assert bl.records_stored == 0
+
+    # Mark as active via requested level.
+    s.requested_level = 0.2
+    _set_tick(100)
+    bl.snapshot()
+    assert bl.records_stored == 1

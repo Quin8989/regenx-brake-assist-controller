@@ -11,9 +11,11 @@ from services.display_manager import DisplayManager
 class _FakeLCD:
     def __init__(self):
         self.lines = {}
+        self.write_calls = []
 
     def write_line(self, row, text):
         self.lines[row] = text
+        self.write_calls.append((row, text))
 
 
 class _FailLCD:
@@ -148,6 +150,33 @@ def test_reinit_on_fault_edge():
     s.system_state = SystemState.REGEN
     dm.update()
     assert lcd.reinit_calls == base + 2
+
+
+def test_reinit_on_state_transition():
+    s, f, lcd, dm = _make(lcd=_ReinitLCD())
+    s.cap_voltage_v = 25.0
+    s.system_state = SystemState.PRECHARGE
+    dm.update()
+    base = lcd.reinit_calls
+
+    s.system_state = SystemState.REGEN
+    dm.update()
+
+    assert lcd.reinit_calls == base + 1
+
+
+def test_skips_redundant_lcd_writes():
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.REGEN
+    s.cap_voltage_v = 25.0
+    s.vesc_input_current_a = -3.2
+
+    dm.update()
+    first_call_count = len(lcd.write_calls)
+
+    dm.update()
+
+    assert len(lcd.write_calls) == first_call_count
 
 
 def test_reinit_periodic(monkeypatch):

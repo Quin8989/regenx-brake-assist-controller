@@ -155,6 +155,10 @@ class ControlLoop:
         """
         s = self._state
 
+        # Regen must be explicitly requested by input/state logic.
+        if s.requested_level <= 0.0:
+            return
+
         if s.cap_voltage_v >= VCAP_REGEN_TAPER_END_V:
             return
 

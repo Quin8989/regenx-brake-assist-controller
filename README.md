@@ -632,6 +632,57 @@ python -m sim.run_gallery                             # writes sim/output/eff_ga
 python -m pytest -q
 ```
 
+### 11.8 Capture short unplugged sprint tests
+
+The firmware keeps a rolling in-RAM debug log of the most recent ~60 seconds of
+runtime (`600` samples at `100 ms` intervals), and also mirrors records to a
+persistent CSV on Pico flash (`/data/ride_log.csv`).
+
+This means ride data is still recoverable even if a runtime fault or watchdog
+reset happens before you reconnect USB.
+
+Fields captured per sample:
+
+```text
+tick_ms,system_state,cap_voltage_v,vesc_mech_rpm,vesc_motor_current_a,
+vesc_input_current_a,vesc_duty_cycle,vesc_fault_code,requested_mode,
+requested_level,throttle_raw,throttle_valid,inhibit_motor_commands,
+assist_command_request,regen_command_request,motor_command_a
+```
+
+Recommended workflow:
+
+1. Deploy current firmware.
+2. Ride with the Pico fully unplugged from USB.
+3. Reconnect USB after the ride.
+4. Copy the persistent ride log file from Pico flash.
+
+Linux example:
+
+```bash
+/home/q/Desktop/VSCode_Projects/.venv/bin/python -m mpremote connect /dev/ttyACM0 cp :/data/ride_log.csv ride_log.csv
+```
+
+Windows example:
+
+```bash
+python -m mpremote connect COM3 cp :/data/ride_log.csv ride_log.csv
+```
+
+Notes:
+
+- Persistent file path is configured by `BENCH_LOG_PERSIST_PATH`.
+- File rollover size is configured by `BENCH_LOG_PERSIST_MAX_BYTES`.
+- The persistent file is reset on each firmware boot/session.
+- If needed, delete the file manually from host:
+
+```bash
+/home/q/Desktop/VSCode_Projects/.venv/bin/python -m mpremote connect /dev/ttyACM0 rm :/data/ride_log.csv
+```
+
+- If a host tool such as `mpremote repl` is open during the ride, that no
+   longer represents true standalone behaviour.
+
 If a tune produces drifted params, copy them by hand into
 `firmware/config/settings.py → REGEN_STRATEGY_PARAMS` (keep the
 `AIMD_FF_AUTOGEN_START` / `_END` sentinels intact — future tools may
@@ -640,6 +691,77 @@ in the git history.
 
 ---
 
-## 12. License
+## 12. Troubleshooting Notes
+
+### 12.1 LCD blanks or shows corrupted characters
+
+The HD44780-compatible LCD is driven in 4-bit write-only mode with `RW`
+grounded.  That means the Pico cannot read the controller state back.  If a
+single `E` pulse is missed because of EMI or a local supply dip, the LCD's
+internal nibble framing can desynchronise and the next writes look like random
+characters or a blank page.
+
+The firmware mitigates this in two ways:
+
+- `DisplayManager` re-runs the LCD init sequence periodically and on display
+  mode transitions.
+- The display path only rewrites rows whose text actually changed, reducing
+  `E`-line traffic during noisy transitions.
+
+If the LCD still corrupts and then later fixes itself, that strongly suggests
+an electrical problem rather than bad page-formatting logic.  Check these in
+order:
+
+1. Keep LCD wires short, especially `E` and `RS`.
+2. Twist or route LCD ground close to the Pico ground return.
+3. Verify the LCD 5 V rail does not sag during regen/current transients.
+4. Add local decoupling near the LCD module if not already present.
+5. Keep LCD wiring physically separated from motor phase, battery, and VESC
+   switching-current paths.
+
+### 12.2 Bike feels different with Pico USB plugged in
+
+The firmware does not have a normal "USB-connected mode".  Merely plugging the
+Pico into a computer should not change control logic by itself.
+
+There are two real mechanisms that can change behaviour:
+
+1. **Host interaction:** if `mpremote`, a REPL session, or a serial monitor
+   opens the Pico, it can interrupt normal runtime.  `mpremote` in particular
+   uses raw REPL, which can stop the main loop long enough to affect watchdog
+   feeding and control timing.
+2. **Electrical changes:** USB adds another ground path and often changes the
+   effective noise environment.  That can shift throttle ADC noise, UART signal
+   integrity, and LCD robustness.  If the system behaves differently with USB
+   attached even when no host tool is connected, treat that as a grounding /
+   EMI / supply-reference issue.
+
+Recommended A/B checks:
+
+1. Pico standalone, no USB.
+2. Pico plugged into USB, but no serial client open.
+3. Pico plugged into USB with `mpremote repl` or another active host session.
+4. Laptop on battery vs laptop on charger.
+
+Interpretation:
+
+- `1` vs `2` different: mostly electrical.
+- `2` vs `3` different: host/tool interference.
+- Battery vs charger different: grounding / common-mode noise issue.
+
+Quick checks:
+
+```bash
+ps -ef | grep -i mpremote | grep -v grep
+python -m serial.tools.list_ports
+```
+
+If you want the bike behaviour during testing to match standalone riding as
+closely as possible, power the Pico from its normal bike supply and leave USB
+fully disconnected unless you are actively collecting logs.
+
+---
+
+## 13. License
 
 Private project.  No license granted.

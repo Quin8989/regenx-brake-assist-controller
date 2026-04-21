@@ -29,15 +29,19 @@ def parse_offsets(lines):
             parts = line.replace(":", " ").split()
             nums = []
             for token in parts:
-                if token.isdigit():
-                    nums.append(int(token))
+                try:
+                    nums.append(int(round(float(token))))
+                except ValueError:
+                    continue
             if len(nums) >= 3:
                 return nums[-3:]
     return None
 
 
 def offsets_pass(offsets):
-    deltas = [abs(v - MIDDLE_ADC) for v in offsets]
+    # Some VESC variants report a placeholder 0.00 for an unused third shunt.
+    valid_offsets = [v for v in offsets if v > 0]
+    deltas = [abs(v - MIDDLE_ADC) for v in valid_offsets]
     return all(d <= MAX_DELTA for d in deltas), deltas
 
 

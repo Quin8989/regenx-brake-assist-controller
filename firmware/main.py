@@ -25,6 +25,37 @@ from utils import Logger
 
 # --- Exception log — ring buffer of state snapshots at crash time ---
 exception_log = []
+runtime_refs = {
+    "bench_logger": None,
+    "state": None,
+}
+
+
+def dump_bench_log(clear=False):
+    """Dump the rolling ride log from the running firmware over USB serial.
+
+    Intended for use from a resumed REPL session after an unplugged ride:
+        mpremote resume exec "import main; main.dump_bench_log()"
+    """
+    bench_logger = runtime_refs.get("bench_logger")
+    if bench_logger is None:
+        print("bench_log: unavailable")
+        return False
+    bench_logger.dump()
+    if clear:
+        bench_logger.clear()
+    return True
+
+
+def clear_bench_log():
+    """Clear the rolling ride log without dumping it."""
+    bench_logger = runtime_refs.get("bench_logger")
+    if bench_logger is None:
+        print("bench_log: unavailable")
+        return False
+    bench_logger.clear()
+    print("bench_log: cleared")
+    return True
 
 
 def _capture_exception(exc, state, logger):
@@ -83,6 +114,8 @@ def main():
     safety = SystemSupervisor(state, faults)
     display_mgr = DisplayManager(lcd, state)
     bench_log = BenchLogger(state)
+    runtime_refs["bench_logger"] = bench_log
+    runtime_refs["state"] = state
     wdt.feed()  # buy another 8 s before app layer init
 
     # --- App layer ---

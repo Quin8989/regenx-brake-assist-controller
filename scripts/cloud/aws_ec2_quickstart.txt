@@ -1,0 +1,27 @@
+AWS EC2 quickstart for cloud tuning
+
+1) Launch instance
+- Ubuntu Server 22.04 LTS
+- Instance type: c7i.8xlarge (32 vCPU) or c7i.12xlarge (48 vCPU)
+- Storage: 80 GB gp3
+- Security Group: allow SSH (22) from your IP only
+
+2) SSH and clone repo
+ssh -i /path/to/key.pem ubuntu@YOUR_VM_IP
+
+git clone YOUR_REPO_URL
+cd regenx-brake-assist-controller
+
+3) Bootstrap and run
+bash scripts/cloud/bootstrap_ubuntu_vm.sh
+bash scripts/cloud/run_cloud_tune.sh
+
+4) Monitor
+tail -f sim/output/tune/*/run.log
+
+5) Copy results back to local machine
+scp -i /path/to/key.pem -r \
+  ubuntu@YOUR_VM_IP:~/regenx-brake-assist-controller/sim/output/tune \
+  ./sim-output-cloud
+
+6) Stop/terminate instance when done

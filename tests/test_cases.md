@@ -105,14 +105,38 @@ Each entry describes the expected behavior and its pass criteria.
 - **Expected:** LCD shows "FAULT" and fault description, overrides normal page
 - **Pass:** Fault text visible, other pages suppressed
 
+### TC-17: LCD recovers from transient bus corruption
+- **Precondition:** LCD connected, system running, electrical transient or EMI event causes temporary display corruption
+- **Expected:** Periodic LCD re-init and page refresh restore readable text without requiring a power cycle
+- **Pass:** Display returns to a valid page within the configured recovery window
+
+### TC-18: LCD remains readable across mode transitions
+- **Precondition:** System transitions PRECHARGE -> REGEN, REGEN -> ASSIST, ASSIST -> REGEN, or any state -> FAULT
+- **Expected:** Page changes do not leave the LCD blank or stuck on corrupted characters
+- **Pass:** Correct page appears after the transition and stays readable
+
 ---
 
 ## Command Exclusivity
 
-### TC-17: Assist and regen mutual exclusion
+### TC-19: Assist and regen mutual exclusion
 - **Precondition:** Both assist and regen somehow requested simultaneously
 - **Expected:** Only one command mode is active; system does not send both
 - **Pass:** command_manager sends only one command type per cycle
+
+---
+
+## USB / Bench Interaction
+
+### TC-20: USB attached with no host session does not change control state machine
+- **Precondition:** Pico powered normally, USB connected to a computer, no REPL / mpremote / serial client open
+- **Expected:** Control logic and state transitions match standalone operation
+- **Pass:** Requested mode, commanded current, and fault behavior remain unchanged within measurement tolerance
+
+### TC-21: Active host session is treated as bench-only operation
+- **Precondition:** `mpremote`, REPL, or another host tool opens the Pico while firmware is running
+- **Expected:** Any timing disturbance is understood as a tooling side effect, not a riding configuration
+- **Pass:** Bench notes clearly record that active host sessions can perturb runtime behavior
 
 ---
 

@@ -374,6 +374,18 @@ def test_regen_negative_strategy_output_is_clamped():
     assert s.regen_command_request == 0.0
 
 
+def test_regen_level_zero_forces_zero_command():
+    s, cl = _make()
+    cl._strategy = _CaptureStrategy(return_current=20.0)
+    _ready_regen(s, cap_v=25.0, rpm=600.0)
+    s.requested_level = 0.0
+
+    cl.update()
+
+    assert s.regen_command_request == 0.0
+    assert s.motor_command_a == 0.0
+
+
 def test_aimd_ff_regen_strategy_can_be_selected_and_is_bounded():
     """The aimd_ff strategy can be injected and its command stays within limits."""
     s, cl = _make()

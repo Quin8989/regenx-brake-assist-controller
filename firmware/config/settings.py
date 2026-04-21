@@ -195,19 +195,44 @@ REGEN_STRATEGY_PARAMS = {
 # triggers from motor inertia after assist.
 REGEN_HOLDOFF_MS = 300
 
-# --- Bench debug logger (RAM ring buffer) ---
-BENCH_LOG_PERIOD_MS = 500             # Capture rate (~2 Hz)
-BENCH_LOG_MAX_RECORDS = 2000           # ~160 KB at ~80 bytes/record, ~16 min at 2 Hz
+# --- Ride / bench debug logger (RAM ring buffer) ---
+# Tuned for short dynamic tests (hallway sprints): 600 records at 10 Hz
+# captures the most recent ~60 s with enough resolution to see brief regen
+# engagement windows.
+BENCH_LOG_PERIOD_MS = 100
+BENCH_LOG_MAX_RECORDS = 600
 BENCH_LOG_FIELDS = (
     "system_state",
     "cap_voltage_v",
     "vesc_mech_rpm",
     "vesc_motor_current_a",
+    "vesc_input_current_a",
+    "vesc_duty_cycle",
+    "vesc_fault_code",
     "requested_mode",
     "requested_level",
+    "throttle_raw",
+    "throttle_valid",
+    "inhibit_motor_commands",
     "assist_command_request",
     "regen_command_request",
+    "motor_command_a",
 )
+
+# Persist ride logs to Pico flash so data survives runtime faults/resets.
+# File is reset each firmware boot/session and rolls over when reaching
+# BENCH_LOG_PERSIST_MAX_BYTES.
+BENCH_LOG_PERSIST_ENABLE = True
+BENCH_LOG_PERSIST_PATH = "/data/ride_log.csv"
+BENCH_LOG_PERSIST_MAX_BYTES = 220000
+
+# Selective capture: record only meaningful motion/torque windows.
+# This avoids filling logs with long stationary periods between sprints.
+BENCH_LOG_SELECTIVE_CAPTURE = True
+BENCH_LOG_ACTIVE_RPM_MIN = 5.0
+BENCH_LOG_ACTIVE_CMD_A_MIN = 0.5
+BENCH_LOG_ACTIVE_INPUT_A_MIN = 0.3
+BENCH_LOG_ACTIVE_LEVEL_MIN = 0.05
 
 # --- Energy estimation ---
 CAPACITANCE_F = 20.0

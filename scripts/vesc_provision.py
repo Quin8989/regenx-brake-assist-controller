@@ -51,7 +51,7 @@ MCCONF_FILE = "vesc_snapshot_mcconf.bin"
 APPCONF_FILE = "vesc_snapshot_appconf.bin"
 META_FILE = "vesc_snapshot_meta.txt"
 LISP_PUSH_FILE = "scripts/vesc_lisp_push_iq.lisp"
-LISP_WRITE_CHUNK = 384
+LISP_WRITE_CHUNK = 128
 
 
 # ---------------------------------------------------------------------------
