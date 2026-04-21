@@ -297,6 +297,37 @@ def test_full_then_selective():
     assert abs(state.cap_voltage_v - 20.0) < 0.01
 
 
+# ---- Opcode whitelist ----
+
+def test_unknown_opcode_does_not_corrupt_state():
+    """A valid-framing frame with an unknown opcode must be dropped, not
+    silently mis-parsed as full telemetry.  This guards the C2 fix.
+    """
+    uart, state, vc = _make()
+    # Pre-seed state so we can assert it's untouched
+    state.cap_voltage_v = 12.34
+
+    # Build a COMM_GET_VALUES-shaped body but label it opcode 0x99
+    # (not in the firmware's whitelist).  If the whitelist were missing,
+    # _parse_telemetry would overwrite cap_voltage_v with 25.0.
+    body = struct.pack(
+        _TELEMETRY_FMT,
+        250, 300, 1500, 800, 0, 0,
+        500, 4500, 2500,  # v_in=25.0 V if mis-parsed
+        10000, 5000, 20000, 8000,
+        1234, 5678, 0,
+    )
+    body += struct.pack(
+        _TELEMETRY_FMT_EXT,
+        0, 0, 0, 0, 0, 0, 0, 0,
+    )
+    frame = _wrap_frame(bytes([0x99]) + body)
+    uart._rx_buf.extend(frame)
+    vc.service_rx()
+
+    assert state.cap_voltage_v == pytest.approx(12.34)
+
+
 def test_request_telemetry_selective_writes_uart():
     uart, state, vc = _make()
     vc.request_telemetry_selective()
@@ -310,19 +341,30 @@ def test_request_telemetry_selective_writes_uart():
 VESC_ERPM_TO_MECH_RPM = 1.0 / 11.0   # mirror the constant from vesc_comm
 
 
-def _build_push_iq_frame(iq=5.0, erpm=3300.0):
-    """Build a COMM_CUSTOM_APP_DATA frame with iq + erpm floats."""
-    payload = bytes([COMM_CUSTOM_APP_DATA]) + struct.pack(">ff", iq, erpm)
+def _build_push_iq_frame(iq=5.0, erpm=3300.0, drpm_mean=0.0, drpm_peak_neg=0.0):
+    """Build a COMM_CUSTOM_APP_DATA frame with the 16-byte aggregate packet.
+
+    Matches scripts/vesc_lisp_push_iq.lisp layout:
+      [0..3]   rpm_now (erpm)
+      [4..7]   drpm_mean (erpm/s)
+      [8..11]  drpm_peak_neg (erpm/s)
+      [12..15] iq_mean (A)
+    """
+    payload = bytes([COMM_CUSTOM_APP_DATA]) + struct.pack(
+        ">ffff", erpm, drpm_mean, drpm_peak_neg, iq)
     return _wrap_frame(payload)
 
 
 def test_push_iq_populates_instantaneous_fields():
     uart, state, vc = _make()
-    uart._rx_buf.extend(_build_push_iq_frame(iq=-4.2, erpm=2200.0))
+    uart._rx_buf.extend(_build_push_iq_frame(
+        iq=-4.2, erpm=2200.0, drpm_mean=-500.0, drpm_peak_neg=-3000.0))
     vc.service_rx()
-    assert abs(state.vesc_iq_instantaneous_a - (-4.2)) < 1e-4
+    assert abs(state.vesc_iq_mean_a - (-4.2)) < 1e-4
     assert abs(state.vesc_erpm_fast - 2200.0) < 1e-2
     assert abs(state.vesc_mech_rpm_fast - 2200.0 * VESC_ERPM_TO_MECH_RPM) < 0.1
+    assert abs(state.vesc_drpm_mean_mech - (-500.0) * VESC_ERPM_TO_MECH_RPM) < 0.1
+    assert abs(state.vesc_drpm_peak_neg_mech - (-3000.0) * VESC_ERPM_TO_MECH_RPM) < 0.1
 
 
 def test_push_iq_updates_timestamp():
@@ -342,7 +384,7 @@ def test_push_iq_after_selective():
     # Selective field intact
     assert abs(state.cap_voltage_v - 30.0) < 0.1
     # Push-iq fields populated
-    assert abs(state.vesc_iq_instantaneous_a - (-7.5)) < 1e-4
+    assert abs(state.vesc_iq_mean_a - (-7.5)) < 1e-4
     assert abs(state.vesc_erpm_fast - 4400.0) < 1e-2
 
 
@@ -354,6 +396,6 @@ def test_push_iq_does_not_clobber_averaged_iq():
     vc.service_rx()
     # Averaged iq unchanged (from selective)
     assert abs(state.vesc_iq_current_a - (-3.3)) < 0.1
-    # Instantaneous iq from push
-    assert abs(state.vesc_iq_instantaneous_a - (-7.5)) < 1e-4
+    # Mean iq from push
+    assert abs(state.vesc_iq_mean_a - (-7.5)) < 1e-4
 

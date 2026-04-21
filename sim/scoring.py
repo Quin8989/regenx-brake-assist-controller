@@ -1,9 +1,23 @@
 """sim.scoring — Score a simulate() result on three dimensions + robustness.
 
 Dimensions (0–100 each):
-  energy     — fraction of dissipated KE captured electrically
-  tracking   — how well motor torque matched brake demand
-  smoothness — ride quality via RMS jerk
+  energy     — device conversion efficiency:
+                   ∫P_elec dt  /  ∫(P_elec + P_copper + P_drg + P_brake) dt
+               i.e. what fraction of the power the *device* is
+               processing ends up stored electrically.  Losses counted
+               in the denominator are motor copper + cap ESR
+               (``p_copper``), rotor drag (``p_drg``), and band-slip
+               heat (``p_brake``).  Rolling resistance and grade are
+               excluded — they are identical on the baseline bike and
+               are not the device's job.
+  tracking   — closeness of our wheel deceleration to a traditional
+               mechanical brake at the same rider clamping force.  The
+               baseline bike's pads are continuously sliding, so its
+               wheel torque is ``brake_val · µ_k/µ_s`` (kinetic
+               level), not ``brake_val`` (static holding).  Baseline
+               is integrated in parallel by physics.simulate()
+               (``speed_baseline``).
+  smoothness — ride quality via RMS wheel jerk.
 
 Ten weighted scenarios model everyday riding.  Each scenario defines a
 non-overlapping speed band so low-speed behaviour is never double-counted.
@@ -11,6 +25,8 @@ Emergency scenarios override dimension weights to prioritise braking.
 
 Robustness analysis via Monte Carlo perturbation of physical constants.
 """
+
+import math
 
 import numpy as np
 
@@ -27,10 +43,12 @@ from .physics import (
 TRACKING_CUTOFF_KMH = 5.0
 
 # ── Jerk reference (m/s³) — e-bike braking context ──────────────────
-# ISO 18738 elevator limit is 6 m/s³, but a bike rider on pavement
-# routinely experiences 10-50 m/s³ from road bumps.  20 m/s³ penalises
-# genuine control instability while tolerating mild dither pulsing.
-J_REF = 20.0
+# A tight reference for controller-induced jerk.  Real pavement jerk
+# from bumps alone is 10-50 m/s³, so this metric does not map to
+# rider-perceived comfort — it's a stability indicator: a tune that
+# scores < 70 here is almost certainly ringing or dithering at a
+# frequency that will be audible/felt.
+J_REF = 10.0
 
 # ── Normal dimension weights ─────────────────────────────────────────
 W_ENERGY_NORMAL     = 0.40
@@ -65,13 +83,22 @@ SCREEN_MASSES = [
 
 # ── Scenario table ───────────────────────────────────────────────────
 # Each tuple: (name, v_start_kmh, v_end_kmh, decel_ms2,
-#              scenario_weight, is_emergency)
+#              scenario_weight, is_emergency, kind)
 #
 # v_start: initial speed for simulate().
 # v_end:   scoring ignores timesteps once speed drops below this.
 # decel_ms2: desired deceleration (m/s²).  Converted to band-brake
 #            torque at runtime via  τ = a · m · R_wheel · (1+N)/N,
 #            so heavier riders squeeze harder for the same decel.
+# kind:    "ramp" — constant brake from t=0 (standard deceleration test).
+#          "step" — brake=0 until STEP_DELAY, then jumps to constant.
+#                   Stresses controller transient response to a step
+#                   demand (catches ringing, overshoot, slow rise).
+#          "hold" — constant_speed=True, no KE to dissipate.
+#                   Simulates holding speed on a descent where gravity
+#                   supplies energy at `mass·g·sin(θ)·v`; decel_ms2 is
+#                   the effective grade accel (e.g. 0.5 m/s² ≈ 5% grade).
+#                   Scores steady-state energy capture.
 # Mass is sampled from MASS_DISTRIBUTION for each scenario.
 # Scenario weights sum to 1.0.
 #
@@ -82,27 +109,41 @@ SCREEN_MASSES = [
 #   heavy     = 55-75%  (heavy riders may see carrier slip)
 #   saturated = 80-100%+ (at/beyond motor limit, scored on tracking only)
 
+# Delay before brake step in "step" kind scenarios (s).
+STEP_DELAY   = 0.3
+# Duration of "hold" kind scenarios (s) — long enough for controller
+# transients to settle and steady-state regen to dominate the score.
+HOLD_T_END   = 3.0
+
 SCENARIOS = [
     # Low speed — motor RPM is low
-    ("low_light",        10,  5, 0.15, 0.05, False),
-    ("low_medium",       10,  3, 0.40, 0.05, False),
+    ("low_light",        10,  5, 0.15, 0.04, False, "ramp"),
+    ("low_medium",       10,  3, 0.40, 0.04, False, "ramp"),
     # City speed — bulk of riding
-    ("city_light",       20, 15, 0.20, 0.15, False),
-    ("city_medium",      20, 10, 0.40, 0.20, False),
-    ("city_heavy",       20,  5, 0.70, 0.10, False),
+    ("city_light",       20, 15, 0.20, 0.13, False, "ramp"),
+    ("city_medium",      20, 10, 0.40, 0.17, False, "ramp"),
+    ("city_heavy",       20,  5, 0.70, 0.08, False, "ramp"),
     # Fast — motor in good operating range
-    ("fast_light",       30, 25, 0.25, 0.10, False),
-    ("fast_medium",      30, 15, 0.50, 0.15, False),
-    ("fast_heavy",       30, 10, 0.80, 0.10, False),
+    ("fast_light",       30, 25, 0.25, 0.08, False, "ramp"),
+    ("fast_medium",      30, 15, 0.50, 0.12, False, "ramp"),
+    ("fast_heavy",       30, 10, 0.80, 0.08, False, "ramp"),
     # Saturated — at/beyond motor limit, tracking-only scoring
-    ("saturated_fast",   30,  5, 1.00, 0.05, True),
-    ("saturated_high",   40, 10, 1.10, 0.05, True),
+    ("saturated_fast",   30,  5, 1.00, 0.04, True,  "ramp"),
+    ("saturated_high",   40, 10, 1.10, 0.04, True,  "ramp"),
+    # Step demand — rider cruises, then clamps brake fully in one motion
+    ("city_step",        25, 10, 0.60, 0.10, False, "step"),
+    # Hill hold — long descent at constant speed (~5% grade @ 25 km/h)
+    ("hill_hold",        25, 25, 0.50, 0.08, False, "hold"),
 ]
 
-# Top-4 scenarios by weight for fast screening during DE.
+# Screening set for DE phase.  Covers the two highest-weight ramps
+# PLUS city_step (the step-response scenario) so DE actually sees the
+# transient-response weakness during optimisation instead of only at
+# the full-eval phase.  Weights are taken as-is from SCENARIOS.
 SCREEN_SCENARIOS = [
     s for s in SCENARIOS
-    if s[0] in ("city_medium", "city_light", "fast_medium", "fast_heavy")
+    if s[0] in ("city_medium", "city_light", "fast_medium",
+                "fast_heavy", "city_step")
 ]
 
 
@@ -160,69 +201,95 @@ def _dt_from_result(result):
 # =====================================================================
 
 def energy_score(result, mass_kg):
-    """Fraction of *demanded* braking energy captured electrically.
+    """Device conversion efficiency (0–100).
 
-    Denominator is the integral of demanded braking power over time,
-    not the actual ΔKE.  This prevents a naïve controller from scoring
-    high by barely braking but efficiently capturing the little it does.
+    ``score = 100 * ∫P_elec dt / ∫(P_elec + P_copper + P_drg + P_brake) dt``
 
-    Args:
-        result:   dict from simulate(), already cropped to speed band.
-        mass_kg:  bike + rider mass (kg).
+    where the denominator is the total power the device is processing:
+    electrical capture + motor copper + cap ESR (grouped in ``p_copper``)
+    + rotor drag + band-slip heat.  Rolling resistance and grade are
+    excluded because they are identical on a plain bike with a
+    traditional brake and do not represent device-side losses.
 
-    Returns:
-        float in [0, 100].
+    When the denominator is effectively zero (coast without braking
+    demand), returns 0.
     """
     dt = _dt_from_result(result)
-    speed_ms = result['speed'] / 3.6
+    p_elec = np.asarray(result['p_elec'], dtype=float)
+    p_copper = np.asarray(result['p_copper'], dtype=float)
+    p_brake = np.asarray(result['p_brake'], dtype=float)
+    # p_drg is not logged directly; recover from eta denominator.
+    # eta = p_elec / (p_elec + p_copper + p_drg + p_brake), so
+    # p_drg = p_elec * (1/eta - 1) - p_copper - p_brake, but easier
+    # to just have physics log p_drg.  We reconstruct it instead from
+    # eta since we don't want to churn the log schema further.
+    eta = np.asarray(result['eta'], dtype=float)
+    device_power = np.zeros_like(p_elec)
+    valid = eta > 0.0
+    device_power[valid] = p_elec[valid] / eta[valid]
+    # For samples where eta is 0 (no captured power), denominator is
+    # still copper + brake + drag + 0; use p_copper + p_brake as lower
+    # bound (p_drg unobserved without eta).  These samples contribute
+    # nothing to numerator anyway, so underestimating denominator is
+    # conservative (inflates score slightly).  Acceptable trade-off to
+    # avoid widening the physics log schema.
+    device_power[~valid] = p_copper[~valid] + p_brake[~valid]
 
-    # Demanded braking energy = ∫ brake_demand · ω_wheel dt
-    #   brake_demand is ring-gear torque (Nm), ω_wheel = v / R_wheel
-    demanded_power = result['brake_demand'] * speed_ms / R_WHEEL
-    demanded_energy = float(np.sum(demanded_power) * dt)
-    if demanded_energy <= 0.0:
+    e_num = float(np.sum(p_elec) * dt)
+    e_den = float(np.sum(device_power) * dt)
+    if e_den <= 1e-6:
         return 0.0
-
-    e_harvested = float(np.sum(result['p_elec']) * dt)
-    return _clamp01(e_harvested / demanded_energy) * 100.0
+    return _clamp01(e_num / e_den) * 100.0
 
 
 def tracking_score(result):
-    """Ratio of delivered braking torque to demanded braking torque.
+    """Closeness of our wheel deceleration to the rider's demand (0–100).
 
-    Timesteps where wheel speed is below TRACKING_CUTOFF_KMH are excluded
-    because back-EMF is too low for meaningful regen at those speeds.
+    ``speed_baseline`` is a parallel integration performed by
+    physics.simulate() of an *idealized non-slipping brake*: the rider's
+    clamping force applied as a wheel torque at the full static-friction
+    level (``brake_val``), with the same mass, C_rr, and grade.  This is
+    what the rider asked for before any pad slip, and it is exactly the
+    µ_s boundary the regen controller tries to target (push carrier just
+    to the verge of slipping).  A real mechanical brake would deliver
+    only ``brake_val · µ_k/µ_s`` once the pads start sliding — the regen
+    aims higher because it can.
 
-    Args:
-        result: dict from simulate(), already cropped to speed band.
+    Metric:
+        a_ours = -Δspeed_ours / Δt        (m/s²)
+        a_base = -Δspeed_base / Δt
+        score  = clamp01(1 - mean(|a_ours - a_base|) / mean(|a_base|)) * 100
 
-    Returns:
-        float in [0, 100].
+    Symmetric in under/over-delivery: both braking too weakly and too
+    hard ding the score.  When the baseline barely decelerates (e.g.
+    constant_speed hill-hold scenario), tracking is defined to be 100
+    (neither bike is moving relative to the other).
     """
-    mask = result['speed'] >= TRACKING_CUTOFF_KMH
-    demand_sum = float(np.sum(result['brake_demand'][mask]))
-    if demand_sum <= 0.0:
-        return 0.0
-    delivered_sum = float(np.sum(result['eff_brake'][mask]))
-    return _clamp01(delivered_sum / demand_sum) * 100.0
+    dt = _dt_from_result(result)
+    speed = np.asarray(result['speed'], dtype=float) / 3.6
+    speed_base = np.asarray(result['speed_baseline'], dtype=float) / 3.6
+    if len(speed) < 2 or dt <= 0.0:
+        return 100.0
+    a_ours = -np.diff(speed) / dt
+    a_base = -np.diff(speed_base) / dt
+    mean_base = float(np.mean(np.abs(a_base)))
+    if mean_base < 0.05:   # < 0.05 m/s² baseline decel → no real braking
+        return 100.0
+    err = float(np.mean(np.abs(a_ours - a_base)))
+    return _clamp01(1.0 - err / mean_base) * 100.0
 
 
 def smoothness_score(result):
-    """Ride smoothness via RMS jerk.  0 when J_RMS >= 6.0 m/s³.
+    """Ride smoothness via RMS wheel jerk (m/s³).
 
-    Args:
-        result: dict from simulate(), already cropped to speed band.
-
-    Returns:
-        float in [0, 100].
+    Returns 100 at zero jerk and 0 once RMS jerk reaches J_REF.
     """
     speed_ms = result['speed'] / 3.6
     if len(speed_ms) < 3:
         return 100.0
 
     dt = _dt_from_result(result)
-    accel = np.diff(speed_ms) / dt
-    jerk  = np.diff(accel)    / dt
+    jerk = np.diff(np.diff(speed_ms) / dt) / dt
     j_rms = float(np.sqrt(np.mean(jerk ** 2)))
     return _clamp01(1.0 - j_rms / J_REF) * 100.0
 
@@ -275,9 +342,12 @@ def step_score_series(result, *, emergency=False, eps=1e-9):
             demand_power_w, valid_tracking
     """
     speed_ms = np.asarray(result['speed'], dtype=float) / 3.6
+    speed_base_ms = np.asarray(result['speed_baseline'], dtype=float) / 3.6
     brake_demand = np.asarray(result['brake_demand'], dtype=float)
-    eff_brake = np.asarray(result['eff_brake'], dtype=float)
     p_elec = np.asarray(result['p_elec'], dtype=float)
+    p_copper = np.asarray(result['p_copper'], dtype=float)
+    p_brake_arr = np.asarray(result['p_brake'], dtype=float)
+    eta_arr = np.asarray(result['eta'], dtype=float)
 
     n = len(speed_ms)
     if n == 0:
@@ -290,26 +360,35 @@ def step_score_series(result, *, emergency=False, eps=1e-9):
             valid_tracking=np.array([], dtype=bool),
         )
 
-    # Instantaneous demanded braking power (W)
+    # Instantaneous demanded braking power (W) — for interface compat.
     demand_power_w = brake_demand * speed_ms / R_WHEEL
 
-    # Energy component: local capture fraction, weighted by demanded power.
+    # Energy component: local device efficiency.
     energy_step = np.zeros(n, dtype=float)
-    mask_power = demand_power_w > eps
+    # Reconstruct device-power denominator from eta (same trick as energy_score).
+    device_power = np.zeros(n, dtype=float)
+    valid_eta = eta_arr > 0.0
+    device_power[valid_eta] = p_elec[valid_eta] / eta_arr[valid_eta]
+    device_power[~valid_eta] = p_copper[~valid_eta] + p_brake_arr[~valid_eta]
+    mask_power = device_power > eps
     energy_step[mask_power] = np.clip(
-        p_elec[mask_power] / (demand_power_w[mask_power] + eps),
+        p_elec[mask_power] / (device_power[mask_power] + eps),
         0.0,
         1.0,
     ) * 100.0
 
-    # Tracking component: local delivered-vs-demanded torque ratio.
-    tracking_step = np.zeros(n, dtype=float)
-    valid_tracking = (np.asarray(result['speed'], dtype=float) >= TRACKING_CUTOFF_KMH) & (brake_demand > eps)
-    tracking_step[valid_tracking] = np.clip(
-        eff_brake[valid_tracking] / (brake_demand[valid_tracking] + eps),
-        0.0,
-        1.0,
-    ) * 100.0
+    # Tracking component: per-tick decel error vs baseline bike.
+    tracking_step = np.full(n, 100.0, dtype=float)
+    dt = _dt_from_result(result)
+    if n >= 2 and dt > 0.0:
+        a_ours = -np.diff(speed_ms) / dt
+        a_base = -np.diff(speed_base_ms) / dt
+        mean_base = float(np.mean(np.abs(a_base)))
+        if mean_base >= 0.05:
+            ratio = np.clip(1.0 - np.abs(a_ours - a_base) / (mean_base + eps), 0.0, 1.0)
+            tracking_step[1:] = ratio * 100.0
+            tracking_step[0] = tracking_step[1]
+    valid_tracking = np.asarray(result['speed'], dtype=float) >= TRACKING_CUTOFF_KMH
 
     # Smoothness component from local jerk estimate.
     smoothness_step = np.full(n, 100.0, dtype=float)
@@ -386,6 +465,64 @@ def score_from_step_series(result, *, emergency=False, eps=1e-9):
 #  Full strategy scoring across all scenarios
 # =====================================================================
 
+def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
+    """Build simulate() args + crop config for one scenario kind.
+
+    Returns (brake, sim_kwargs, crop_v_end).
+
+        brake        — float (ramp/hold) or callable(t)→Nm (step).
+        sim_kwargs   — dict[str, Any] passed to simulate() (v0_kmh,
+                       mass_kg, t_end, and kind-specific flags like
+                       constant_speed).  Typed loosely because values
+                       mix float/bool across kinds.
+        crop_v_end   — km/h below which scoring samples are dropped.
+                       None means "no speed cropping" (hold scenarios).
+    """
+    from typing import Any
+    brake_nm = decel_to_brake(decel_ms2, mass_kg)
+    sim_kw: dict[str, Any] = dict(
+        v0_kmh=float(v_start), mass_kg=float(mass_kg),
+    )
+
+    if kind == "ramp":
+        dv = (v_start - v_end) / 3.6
+        sim_kw["t_end"] = max(4.0, min(30.0, dv / decel_ms2 * 2.0))
+        sim_kw["v_min_kmh"] = float(v_end)
+        return brake_nm, sim_kw, v_end
+
+    if kind == "step":
+        dv = (v_start - v_end) / 3.6
+        sim_kw["t_end"] = max(4.0, min(30.0, dv / decel_ms2 * 2.0 + STEP_DELAY))
+        sim_kw["v_min_kmh"] = float(v_end)
+        delay = STEP_DELAY
+        def brake_fn(t, _b=brake_nm, _d=delay):
+            return _b if t >= _d else 0.0
+        return brake_fn, sim_kw, v_end
+
+    if kind == "hold":
+        # Real descent physics: gravity supplies forward accel of
+        # decel_ms2 m/s², controller + brake demand cancels it to hold
+        # speed.  Rolling resistance (in physics) provides a small bias
+        # that the controller must absorb.  We use free_decel=True so
+        # speed is an actual state, not pinned.
+        import math as _math
+        from .physics import G_ACCEL as _G
+        sin_theta = max(-1.0, min(1.0, decel_ms2 / _G))
+        sim_kw["t_end"] = HOLD_T_END
+        sim_kw["grade_rad"] = _math.asin(sin_theta)
+        return brake_nm, sim_kw, None
+
+    raise ValueError(f"Unknown scenario kind: {kind!r}")
+
+
+def _unpack_scenario(tup):
+    """Accept legacy 6-tuples as well as 7-tuples with explicit kind."""
+    if len(tup) == 7:
+        return tup
+    name, v_start, v_end, decel_ms2, weight, emerg = tup
+    return name, v_start, v_end, decel_ms2, weight, emerg, "ramp"
+
+
 def score_strategy(strategy_factory, scenarios=None, masses=None):
     """Run all scenarios for a strategy and return the weighted composite.
 
@@ -416,22 +553,19 @@ def score_strategy(strategy_factory, scenarios=None, masses=None):
     per_scenario = []
     weighted_sum = 0.0
 
-    for name, v_start, v_end, decel_ms2, weight, emerg in scenarios:
-        # Sim needs enough time to decelerate through the speed band.
-        # t = Δv / a with 2× margin, clamped to [4, 30] s.
-        dv = (v_start - v_end) / 3.6           # m/s
-        t_end = max(4.0, min(30.0, dv / decel_ms2 * 2.0))
+    for tup in scenarios:
+        name, v_start, v_end, decel_ms2, weight, emerg, kind = _unpack_scenario(tup)
 
         # Accumulate mass-weighted dimension scores
         e_acc = t_acc = s_acc = 0.0
 
         for mass_kg, m_weight in masses:
-            brake_nm = decel_to_brake(decel_ms2, mass_kg)
+            brake, sim_kw, crop_v = _scenario_sim_config(
+                kind, v_start, v_end, decel_ms2, mass_kg,
+            )
             controller = strategy_factory()
-            result = simulate(controller, brake_nm,
-                              v0_kmh=float(v_start), mass_kg=float(mass_kg),
-                              t_end=t_end, v_min_kmh=float(v_end))
-            cropped = _crop_to_speed_band(result, v_end)
+            result = simulate(controller, brake, **sim_kw)
+            cropped = result if crop_v is None else _crop_to_speed_band(result, crop_v)
             sc = score(cropped, mass_kg, emergency=emerg)
             e_acc += m_weight * sc['energy']
             t_acc += m_weight * sc['tracking']
@@ -479,14 +613,39 @@ UNCERTAIN_PARAMS = [
 
 
 def _sample_perturbations(rng, n):
-    """Sample n sets of perturbed physical constants."""
+    """Sample n sets of perturbed physical constants.
+
+    Motor-thermal parameters (r_phase, flux_linkage, t_drag_coeff) are
+    sampled with a shared latent "thermal" factor so they co-vary the
+    way they do in reality:
+      - Hot copper  → higher r_phase
+      - Hot magnets → lower flux_linkage
+      - Hot iron    → higher t_drag_coeff (eddy/hysteresis loss)
+    The shared factor accounts for ~60% of each parameter's variance;
+    the remaining 40% is independent (manufacturing spread, measurement
+    error, bearing friction drift).  Other parameters are sampled
+    independently.
+    """
+    # Correlation weights for thermal latent (fraction of 1σ driven by u_th).
+    # Signs encode the physical relationship above.
+    THERMAL_COEFF = {
+        "r_phase":       +0.60,
+        "flux_linkage":  -0.60,
+        "t_drag_coeff":  +0.60,
+    }
     samples = []
     for _ in range(n):
+        u_th = rng.normal(0.0, 1.0)
         p = {}
         for name, nominal, sigma_rel, _desc in UNCERTAIN_PARAMS:
             sigma_abs = nominal * sigma_rel
+            tc = THERMAL_COEFF.get(name, 0.0)
+            # Draw correlated component + independent residual so the
+            # marginal stays N(0, sigma_abs) regardless of tc.
             while True:
-                val = rng.normal(nominal, sigma_abs)
+                z_indep = rng.normal(0.0, 1.0)
+                z = tc * u_th + math.sqrt(max(0.0, 1.0 - tc * tc)) * z_indep
+                val = nominal + z * sigma_abs
                 if abs(val - nominal) <= 2.0 * sigma_abs:
                     break
             if name in ("mu_s", "mu_k", "eta_gear"):
@@ -592,20 +751,18 @@ class _RobustWorker:
         weighted_sum = 0.0
         e_total = t_total = s_total = 0.0
 
-        for name, v_start, v_end, decel_ms2, weight, emerg in self.scenarios:
-            dv = (v_start - v_end) / 3.6
-            t_end = max(4.0, min(30.0, dv / decel_ms2 * 2.0))
+        for tup in self.scenarios:
+            name, v_start, v_end, decel_ms2, weight, emerg, kind = _unpack_scenario(tup)
 
             e_acc = t_acc = s_acc = 0.0
 
             for mass_kg, m_weight in self.masses:
-                brake_nm = _scenario_brake_torque(decel_ms2, mass_kg)
+                brake, scn_kw, crop_v = _scenario_sim_config(
+                    kind, v_start, v_end, decel_ms2, mass_kg,
+                )
                 controller = self.strat_cls(**self.strat_params)
-                result = simulate(
-                    controller, brake_nm,
-                    v0_kmh=float(v_start), mass_kg=float(mass_kg),
-                    t_end=t_end, **sim_kw)
-                cropped = _crop_to_speed_band(result, v_end)
+                result = simulate(controller, brake, **scn_kw, **sim_kw)
+                cropped = result if crop_v is None else _crop_to_speed_band(result, crop_v)
                 sc = score(cropped, mass_kg, emergency=emerg)
                 e_acc += m_weight * sc['energy']
                 t_acc += m_weight * sc['tracking']
@@ -688,20 +845,18 @@ def score_strategy_robust(strategy_factory, n_samples=20, seed=42,
             weighted_sum = 0.0
             e_total = t_total = s_total = 0.0
 
-            for name, v_start, v_end, decel_ms2, weight, emerg in scenarios:
-                dv = (v_start - v_end) / 3.6
-                t_end = max(4.0, min(30.0, dv / decel_ms2 * 2.0))
+            for tup in scenarios:
+                name, v_start, v_end, decel_ms2, weight, emerg, kind = _unpack_scenario(tup)
 
                 e_acc = t_acc = s_acc = 0.0
 
                 for mass_kg, m_weight in masses:
-                    brake_nm = _scenario_brake_torque(decel_ms2, mass_kg)
+                    brake, scn_kw, crop_v = _scenario_sim_config(
+                        kind, v_start, v_end, decel_ms2, mass_kg,
+                    )
                     controller = strategy_factory()
-                    result = simulate(
-                        controller, brake_nm,
-                        v0_kmh=float(v_start), mass_kg=float(mass_kg),
-                        t_end=t_end, **sim_kw)
-                    cropped = _crop_to_speed_band(result, v_end)
+                    result = simulate(controller, brake, **scn_kw, **sim_kw)
+                    cropped = result if crop_v is None else _crop_to_speed_band(result, crop_v)
                     sc = score(cropped, mass_kg, emergency=emerg)
                     e_acc += m_weight * sc['energy']
                     t_acc += m_weight * sc['tracking']
@@ -732,12 +887,21 @@ def score_strategy_robust(strategy_factory, n_samples=20, seed=42,
     tracking_arr = np.array(all_tracking[1:])
     smooth_arr = np.array(all_smoothness[1:])
 
+    # CVaR (Conditional Value at Risk, a.k.a. Expected Shortfall):
+    # mean of the worst alpha fraction of samples.  Uses at least 1
+    # sample to stay well-defined for small n_samples.
+    def _cvar(arr, alpha):
+        n = max(1, int(np.ceil(alpha * len(arr))))
+        return float(np.mean(np.sort(arr)[:n]))
+
     return dict(
         nominal=nominal_score,
         mean=float(np.mean(perturbed)),
         std=float(np.std(perturbed)),
         p5=float(np.percentile(perturbed, 5)),
         p95=float(np.percentile(perturbed, 95)),
+        cvar10=_cvar(perturbed, 0.10),
+        cvar20=_cvar(perturbed, 0.20),
         scores=perturbed,
         energy_mean=float(np.mean(energy_arr)),
         tracking_mean=float(np.mean(tracking_arr)),

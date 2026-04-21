@@ -548,33 +548,37 @@ def test_mcconf_temp_frame_valid():
 
 # ---- COMM_CUSTOM_APP_DATA (push-iq from LispBM) ----
 
-def _make_push_iq_payload(iq=5.0, erpm=3300.0):
-    """Build a COMM_CUSTOM_APP_DATA payload with iq + erpm floats."""
-    return bytes([COMM_CUSTOM_APP_DATA]) + struct.pack(">ff", iq, erpm)
+def _make_push_iq_payload(iq=5.0, erpm=3300.0, drpm_mean=0.0, drpm_peak_neg=0.0):
+    """Build a COMM_CUSTOM_APP_DATA 16-byte aggregate payload."""
+    return bytes([COMM_CUSTOM_APP_DATA]) + struct.pack(
+        ">ffff", erpm, drpm_mean, drpm_peak_neg, iq)
 
 
 def test_parse_push_iq_happy():
-    payload = _make_push_iq_payload(iq=-3.5, erpm=2200.0)
+    payload = _make_push_iq_payload(
+        iq=-3.5, erpm=2200.0, drpm_mean=-400.0, drpm_peak_neg=-2500.0)
     result = _parse_push_iq(payload)
     assert result is not None
-    iq, erpm = result
+    erpm, drpm_mean, drpm_peak_neg, iq = result
     assert abs(iq - (-3.5)) < 1e-5
     assert abs(erpm - 2200.0) < 1e-2
+    assert abs(drpm_mean - (-400.0)) < 1e-2
+    assert abs(drpm_peak_neg - (-2500.0)) < 1e-2
 
 
 def test_parse_push_iq_zero():
     result = _parse_push_iq(_make_push_iq_payload(iq=0.0, erpm=0.0))
     assert result is not None
-    assert result == (0.0, 0.0)
+    assert result == (0.0, 0.0, 0.0, 0.0)
 
 
 def test_parse_push_iq_wrong_opcode():
-    payload = bytes([0x99]) + struct.pack(">ff", 1.0, 2.0)
+    payload = bytes([0x99]) + struct.pack(">ffff", 1.0, 2.0, 3.0, 4.0)
     assert _parse_push_iq(payload) is None
 
 
 def test_parse_push_iq_too_short():
-    payload = bytes([COMM_CUSTOM_APP_DATA]) + struct.pack(">f", 1.0)  # only 4 bytes
+    payload = bytes([COMM_CUSTOM_APP_DATA]) + struct.pack(">ff", 1.0, 2.0)  # only 8 bytes
     assert _parse_push_iq(payload) is None
 
 
@@ -585,13 +589,16 @@ def test_parse_push_iq_empty():
 
 def test_push_iq_frame_roundtrip():
     """Wrapping and extracting push-iq payload preserves values."""
-    inner = _make_push_iq_payload(iq=-12.5, erpm=5500.0)
+    inner = _make_push_iq_payload(
+        iq=-12.5, erpm=5500.0, drpm_mean=-80.0, drpm_peak_neg=-4000.0)
     frame = _wrap_frame(inner)
     extracted, remaining = _extract_payload(bytearray(frame))
     assert extracted is not None
     assert len(remaining) == 0
     result = _parse_push_iq(extracted)
     assert result is not None
-    iq, erpm = result
+    erpm, drpm_mean, drpm_peak_neg, iq = result
     assert abs(iq - (-12.5)) < 1e-4
     assert abs(erpm - 5500.0) < 1e-2
+    assert abs(drpm_mean - (-80.0)) < 1e-2
+    assert abs(drpm_peak_neg - (-4000.0)) < 1e-2

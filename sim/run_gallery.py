@@ -61,11 +61,11 @@ def _w_trajectory_batch(strat_cls, params, brk, mass, speeds, t_end):
         sc = score(r, float(mass), emergency=False)
         results.append({
             'speed': r['speed'].copy(),
+            'speed_baseline': r['speed_baseline'].copy(),
             'motor_rpm': r['motor_rpm'].copy(),
             'current': r['current'].copy(),
             'eta': r['eta'].copy(),
             'brake_demand': r['brake_demand'].copy(),
-            'eff_brake': r['eff_brake'].copy(),
             'p_elec': r['p_elec'].copy(),
             'locked': r['locked'].copy(),
             'score': sc,
@@ -110,11 +110,11 @@ def collect_trajectory(pool, strat_classes, best):
             data[strategy_name] = {}
         d = {
             'spd':   np.zeros((n_spd, n_time)),
+            'spd_base': np.zeros((n_spd, n_time)),
             'rpm':   np.zeros((n_spd, n_time)),
             'cur':   np.zeros((n_spd, n_time)),
             'eta':   np.zeros((n_spd, n_time)),
             'brake_demand': np.zeros((n_spd, n_time)),
-            'eff_brake': np.zeros((n_spd, n_time)),
             'p_elec': np.zeros((n_spd, n_time)),
             'lock': np.zeros((n_spd, n_time), dtype=bool),
             'scores': [None] * n_spd,
@@ -122,11 +122,11 @@ def collect_trajectory(pool, strat_classes, best):
         for si, result_dict in enumerate(results):
             n = min(len(result_dict['speed']), n_time)
             d['spd'][si, :n] = result_dict['speed'][:n]
+            d['spd_base'][si, :n] = result_dict['speed_baseline'][:n]
             d['rpm'][si, :n] = result_dict['motor_rpm'][:n]
             d['cur'][si, :n] = result_dict['current'][:n]
             d['eta'][si, :n] = result_dict['eta'][:n]
             d['brake_demand'][si, :n] = result_dict['brake_demand'][:n]
-            d['eff_brake'][si, :n] = result_dict['eff_brake'][:n]
             d['p_elec'][si, :n] = result_dict['p_elec'][:n]
             d['lock'][si, :n] = result_dict['locked'][:n]
             d['scores'][si] = result_dict['score']

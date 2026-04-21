@@ -1,101 +1,72 @@
-"""sim.strategy_context — Hardware-enforced signal contract for strategies.
+"""Hardware-enforced signal contract for regen strategies.
 
-StrategyContext is the ONLY data bundle passed to strategy .update(ctx).
+``StrategyContext`` is the only data bundle passed to ``strategy.update(ctx)``.
 All fields correspond to signals measurable on the physical Pico + VESC
-hardware. __slots__ prevents adding arbitrary attributes — any attempt
-to sneak sim-only data (like the ``locked`` boolean from physics.py)
-raises AttributeError at runtime.
+hardware. ``__slots__`` prevents adding arbitrary attributes — any attempt
+to sneak sim-only data (e.g. ``locked`` from physics.py) raises
+AttributeError at runtime.
 
-Signal sources on real hardware
-================================
+Signal sources
+==============
+VESC selective telemetry (100 Hz):  rpm, vcap, iq_actual, duty_cycle, input_current
+VESC LispBM push (100 Hz, aggregated over a 10 ms / 1 kHz-sampled window):
+    rpm_fast, iq_mean, drpm_mean, drpm_peak_neg
+Pico local:  dt_ctrl
 
-VESC standard telemetry (COMM_GET_VALUES / SELECTIVE, 100 Hz):
-    rpm, vcap, iq_actual, duty_cycle, input_current,
-    temp_fet, temp_motor, vd, vq
+The LispBM script (scripts/vesc_lisp_push_iq.lisp) samples at 1 kHz and
+emits, every 10 ms, the mean d(rpm)/dt (telescoping sum / window) and the
+most-negative per-sample d(rpm)/dt in the window.  These let the Pico
+strategies see both trend deceleration (drpm_mean) and sub-poll slip
+spikes (drpm_peak_neg) without aliasing the ~2-5 ms unlock transients
+that 100 Hz Pico sampling would miss.
 
-VESC LispBM push (COMM_CUSTOM_APP_DATA, 100 Hz, lower latency):
-    rpm_fast, iq_instantaneous
+Strategies should read ``preferred_rpm`` / ``preferred_iq`` which return the
+low-latency push value when fresh and fall back to averaged telemetry
+otherwise — keeps the fallback policy in one place.  ``drpm_mean`` /
+``drpm_peak_neg`` are 0.0 when the push path is stale; callers that treat
+those as slip signals must therefore ignore them in that case.
 
-The naming here reflects the existing public API in the project, but the
-important distinction is latency, not raw-ADC immediacy:
-    rpm               Averaged / normal telemetry path
-    rpm_fast          Less-filtered RPM estimate from LispBM push
-    iq_actual         Averaged telemetry iq
-    iq_instantaneous  Lower-latency filtered iq from LispBM push
-
-When the lower-latency LispBM push is unavailable or stale, strategies
-should use preferred_rpm / preferred_iq instead of deciding ad hoc which
-field to read. That keeps the fallback policy in one place.
-
-Pico-local:
-    dt_ctrl
-
-Motor / system constants accessible via config/settings.py:
-    FLUX_LINKAGE_WB, MOTOR_PHASE_RESISTANCE_OHM, VESC_MOTOR_POLE_PAIRS,
-    REGEN_CURRENT_MAX_A, VCAP_REGEN_TAPER_START_V, VCAP_REGEN_TAPER_END_V,
-    WHEEL_RADIUS_M, CAPACITANCE_F
+Fields removed in 2026-04 cleanup: temp_fet, temp_motor, vd, vq.  None of
+the shipped strategies read them and selective telemetry does not refresh
+vd/vq, so they were a source of stale/zero reads.
 """
 
 
 class StrategyContext:
-    """Bundle of signals available to regen strategies on real hardware.
-
-    Every field corresponds to a signal the Pico can actually read from
-    the VESC via UART telemetry, LispBM push, or local measurement.
-    __slots__ prevents adding arbitrary attributes — any attempt to sneak
-    sim-only data (like the ``locked`` boolean from physics.py) will
-    raise AttributeError at runtime.
-    """
     __slots__ = (
-        'rpm',               # Mechanical RPM (averaged, ERPM / pole_pairs)
+        'rpm',               # Mechanical RPM, averaged (ERPM / pole_pairs)
         'vcap',              # Bus / supercap voltage (V)
         'iq_actual',         # Averaged FOC q-axis current (A)
-        'duty_cycle',        # Duty cycle (−1 to 1)
+        'duty_cycle',        # Duty cycle (−1..1)
         'input_current',     # Input / bus current (A)
-        'temp_fet',          # MOSFET temperature (°C)
-        'temp_motor',        # Motor temperature (°C)
-        'vd',                # FOC d-axis voltage (V)
-        'vq',                # FOC q-axis voltage (V)
-        'rpm_fast',          # Optional less-filtered RPM from LispBM push
-        'iq_instantaneous',  # Optional lower-latency filtered iq from LispBM push
+        'rpm_fast',          # Less-filtered mechanical RPM from LispBM push (or None)
+        'iq_mean',           # Mean iq over LispBM push window, A (or None)
+        'drpm_mean',         # Mean d(rpm)/dt over push window, rpm/s
+        'drpm_peak_neg',     # Most-negative per-sample d(rpm)/dt, rpm/s
         'dt_ctrl',           # Control loop period (s)
     )
 
     def __init__(self, rpm=0.0, vcap=0.0, dt_ctrl=0.01,
                  iq_actual=0.0, duty_cycle=0.0, input_current=0.0,
-                 temp_fet=25.0, temp_motor=25.0, vd=0.0, vq=0.0,
-                 rpm_fast=None, iq_instantaneous=None):
+                 rpm_fast=None, iq_mean=None,
+                 drpm_mean=0.0, drpm_peak_neg=0.0):
         self.rpm = rpm
         self.vcap = vcap
         self.dt_ctrl = dt_ctrl
         self.iq_actual = iq_actual
         self.duty_cycle = duty_cycle
         self.input_current = input_current
-        self.temp_fet = temp_fet
-        self.temp_motor = temp_motor
-        self.vd = vd
-        self.vq = vq
         self.rpm_fast = rpm_fast
-        self.iq_instantaneous = iq_instantaneous
+        self.iq_mean = iq_mean
+        self.drpm_mean = drpm_mean
+        self.drpm_peak_neg = drpm_peak_neg
 
     @property
     def preferred_rpm(self):
-        """Preferred RPM signal for control decisions.
-
-        Uses the lower-latency LispBM RPM when available, otherwise falls
-        back to the averaged telemetry RPM.
-        """
-        if self.rpm_fast is not None:
-            return self.rpm_fast
-        return self.rpm
+        """Lower-latency LispBM RPM when available, else averaged telemetry."""
+        return self.rpm if self.rpm_fast is None else self.rpm_fast
 
     @property
     def preferred_iq(self):
-        """Preferred iq signal for control decisions.
-
-        Uses the lower-latency LispBM iq when available, otherwise falls
-        back to the averaged telemetry iq.
-        """
-        if self.iq_instantaneous is not None:
-            return self.iq_instantaneous
-        return self.iq_actual
+        """Lower-latency LispBM iq (window mean) when available, else averaged."""
+        return self.iq_actual if self.iq_mean is None else self.iq_mean

@@ -152,7 +152,9 @@ def test_regen_context_uses_fresh_lispbm_signals_when_available():
     _ready_regen(s, cap_v=25.0, rpm=200.0)
     s.vesc_iq_current_a = -3.0
     s.vesc_mech_rpm_fast = 260.0
-    s.vesc_iq_instantaneous_a = -5.5
+    s.vesc_iq_mean_a = -5.5
+    s.vesc_drpm_mean_mech = -111.0
+    s.vesc_drpm_peak_neg_mech = -2222.0
     set_clock_ms(1000)
     s.last_push_iq_rx_ms = 990
 
@@ -160,7 +162,9 @@ def test_regen_context_uses_fresh_lispbm_signals_when_available():
 
     assert capture.last_ctx is not None
     assert capture.last_ctx.rpm_fast == 260.0
-    assert capture.last_ctx.iq_instantaneous == -5.5
+    assert capture.last_ctx.iq_mean == -5.5
+    assert capture.last_ctx.drpm_mean == -111.0
+    assert capture.last_ctx.drpm_peak_neg == -2222.0
     assert capture.last_ctx.preferred_rpm == 260.0
     assert capture.last_ctx.preferred_iq == -5.5
 
@@ -172,7 +176,9 @@ def test_regen_context_falls_back_when_lispbm_signals_are_stale():
     _ready_regen(s, cap_v=25.0, rpm=200.0)
     s.vesc_iq_current_a = -3.0
     s.vesc_mech_rpm_fast = 260.0
-    s.vesc_iq_instantaneous_a = -5.5
+    s.vesc_iq_mean_a = -5.5
+    s.vesc_drpm_mean_mech = -111.0
+    s.vesc_drpm_peak_neg_mech = -2222.0
     set_clock_ms(1000)
     s.last_push_iq_rx_ms = 900
 
@@ -180,7 +186,9 @@ def test_regen_context_falls_back_when_lispbm_signals_are_stale():
 
     assert capture.last_ctx is not None
     assert capture.last_ctx.rpm_fast is None
-    assert capture.last_ctx.iq_instantaneous is None
+    assert capture.last_ctx.iq_mean is None
+    assert capture.last_ctx.drpm_mean == 0.0
+    assert capture.last_ctx.drpm_peak_neg == 0.0
     assert capture.last_ctx.preferred_rpm == s.vesc_mech_rpm
     assert capture.last_ctx.preferred_iq == s.vesc_iq_current_a
 
@@ -188,36 +196,45 @@ def test_regen_context_falls_back_when_lispbm_signals_are_stale():
 # ---- Power limiter ----
 
 def test_regen_power_limit_scales_down():
-    """When bus power exceeds VESC_WATT_MAX, command is scaled down."""
+    """Commanded power above VESC_WATT_MAX is scaled down."""
     s, cl = _make()
-    _ready_regen(s, cap_v=25.0, rpm=800.0)
-    # Simulate a high bus current that pushes power over the limit
-    s.vesc_input_current_a = -80.0  # 80 A × 25 V = 2000 W > 1500 W limit
-    s.vesc_iq_current_a = -10.0     # some iq tracking
+    _ready_regen(s, cap_v=40.0, rpm=800.0)
+    # Fake strategy commanding the full current ceiling at 40 V cap.
+    # Commanded power = 40 * 40 = 1600 W > 1500 W ⇒ scale by 1500/1600.
+    big = _CaptureStrategy(return_current=REGEN_CURRENT_MAX_A)
+    cl._strategy = big
     cl.update()
-    # With power limit, command should be less than unconstrained
-    unconstrained_s, unconstrained_cl = _make()
-    _ready_regen(unconstrained_s, cap_v=25.0, rpm=800.0)
-    unconstrained_s.vesc_input_current_a = 0.0  # no power limit trigger
-    unconstrained_s.vesc_iq_current_a = -10.0
-    unconstrained_cl.update()
-    assert s.regen_command_request < unconstrained_s.regen_command_request
+    expected = REGEN_CURRENT_MAX_A * (VESC_WATT_MAX / (REGEN_CURRENT_MAX_A * 40.0))
+    assert abs(s.regen_command_request - expected) < 0.01
 
 
 def test_regen_power_below_limit_no_effect():
-    """Power below limit doesn't affect command."""
+    """Commanded power below the limit passes through unchanged."""
     s, cl = _make()
     _ready_regen(s, cap_v=25.0, rpm=200.0)
-    # 5 A × 25 V = 125 W, well below 1500 W limit
-    s.vesc_input_current_a = -5.0
-    s.vesc_iq_current_a = 0.0
+    small = _CaptureStrategy(return_current=5.0)  # 5 A × 25 V = 125 W ≪ 1500 W
+    cl._strategy = small
     cl.update()
-    s2, cl2 = _make()
-    _ready_regen(s2, cap_v=25.0, rpm=200.0)
-    s2.vesc_input_current_a = 0.0
-    s2.vesc_iq_current_a = 0.0
-    cl2.update()
-    assert abs(s.regen_command_request - s2.regen_command_request) < 0.01
+    assert abs(s.regen_command_request - 5.0) < 0.01
+
+
+def test_regen_power_limit_clamps_aimd_ff_at_high_rpm():
+    """End-to-end: with the production AIMD-FF strategy at high RPM and high
+    cap voltage, the commanded-power limiter keeps the request at or below
+    VESC_WATT_MAX / cap_voltage_v.  This locks in M1 against accidental
+    regressions in either the strategy or the limiter.
+    """
+    s, cl = _make()
+    cl._strategy = AimdFfRegenStrategy()
+    _ready_regen(s, cap_v=40.0, rpm=1500.0)
+    # High iq tracking so AIMD-FF probes toward its ceiling
+    s.vesc_iq_current_a = -REGEN_CURRENT_MAX_A
+    for _ in range(50):
+        cl.update()
+    cap_v = s.cap_voltage_v
+    max_allowed = VESC_WATT_MAX / cap_v
+    assert s.regen_command_request <= max_allowed + 0.05
+    assert s.regen_command_request <= REGEN_CURRENT_MAX_A + 0.05
 
 
 # ---- Duty saturation ----

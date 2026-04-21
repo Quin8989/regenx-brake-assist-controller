@@ -30,6 +30,13 @@ from collections import defaultdict
 import numpy as np
 from scipy.optimize import differential_evolution, minimize
 
+try:
+    import cma as _cma  # type: ignore
+    _HAS_CMA = True
+except ImportError:
+    _cma = None
+    _HAS_CMA = False
+
 from .scoring import (
     SCENARIOS,
     SCREEN_MASSES,
@@ -47,21 +54,14 @@ DEFAULT_STRATEGIES = list(DEFAULT_STRATEGY_NAMES)
 # =====================================================================
 
 def _pool_worker_init():
-    """Silence stdout/stderr in pool workers.
+    """Silence stdout/stderr in pool workers to keep VS Code's pty clean.
 
-    On Windows, multiprocessing 'spawn' workers can inherit the VS Code
-    terminal pty as their console.  Redirecting at both Python and OS
-    levels ensures nothing leaks back — preventing pty buffer overflows
-    that crash the VS Code extension host.
+    Python-level redirect is sufficient; do NOT touch OS-level file
+    descriptors (os.dup2 on fd 1/2 crashes VS Code's ConPTY host).
     """
     devnull = open(os.devnull, "w")         # noqa: SIM115
     sys.stdout = devnull
     sys.stderr = devnull
-    try:
-        os.dup2(devnull.fileno(), 1)
-        os.dup2(devnull.fileno(), 2)
-    except OSError:
-        pass  # some sandboxed envs block dup2
 
 
 # =====================================================================
@@ -69,7 +69,20 @@ def _pool_worker_init():
 # =====================================================================
 
 class _Objective:
-    """Pickle-safe objective callable for scipy parallel workers."""
+    """Pickle-safe objective callable for scipy parallel workers.
+
+    When *sample_schedule* is provided and the objective mode is robust,
+    the objective tracks a *per-worker* local evaluation count and uses
+    it to pick how many Monte-Carlo samples to run per call.  This lets
+    early generations use a cheap estimate and late generations use the
+    full robust sample count, roughly halving DE wall-clock for the same
+    final quality.
+
+    Each worker process has its own ``_local_evals`` counter (no shared
+    state — ``mp.Value`` is incompatible with Windows spawn-pool
+    pickling).  Schedule thresholds are therefore expressed in
+    *per-worker* evaluations: divide the global threshold by n_workers.
+    """
 
     def __init__(
         self,
@@ -82,6 +95,7 @@ class _Objective:
         robust_samples=8,
         robust_seed=42,
         robust_lambda=0.5,
+        sample_schedule=None,
     ):
         self.strat_cls = strat_cls
         self.names = names
@@ -92,6 +106,20 @@ class _Objective:
         self.robust_samples = robust_samples
         self.robust_seed = robust_seed
         self.robust_lambda = robust_lambda
+        self.sample_schedule = sample_schedule  # list[(per_worker_threshold, n)]
+        self._local_evals = 0
+
+    def _samples_for_this_eval(self):
+        if not self.sample_schedule:
+            return self.robust_samples
+        idx = self._local_evals
+        self._local_evals += 1
+        n = self.robust_samples
+        for thr, val in self.sample_schedule:
+            if idx < thr:
+                n = val
+                break
+        return max(1, int(n))
 
     def __call__(self, x):
         params = _vec_to_params(x, self.names, self.int_flags)
@@ -103,9 +131,10 @@ class _Objective:
             )
             return -result["weighted"]
 
+        n_samples = self._samples_for_this_eval()
         robust = score_strategy_robust(
             strategy_factory=None,
-            n_samples=self.robust_samples,
+            n_samples=n_samples,
             seed=self.robust_seed,
             scenarios=self.scenarios,
             masses=self.masses,
@@ -120,6 +149,10 @@ class _Objective:
             score = robust["p5"]
         elif self.mode == "robust_mean_std":
             score = robust["mean"] - self.robust_lambda * robust["std"]
+        elif self.mode == "robust_cvar10":
+            score = robust["cvar10"]
+        elif self.mode == "robust_cvar20":
+            score = robust["cvar20"]
         else:
             raise ValueError(f"Unsupported objective mode: {self.mode}")
         return -score
@@ -168,10 +201,145 @@ def _avg_dims(score_result):
 # =====================================================================
 
 def _full_nominal_objective(x, strat_cls, names, int_flags):
-    """Full-evaluation nominal objective for optional local polish."""
+    """Full-evaluation nominal objective (used only when objective=nominal)."""
     params = _vec_to_params(x, names, int_flags)
     result = score_strategy(lambda: strat_cls(**params))
     return -result["weighted"]
+
+
+def _make_polish_objective(strat_cls, names, int_flags, *,
+                           objective_mode, robust_samples,
+                           robust_seed, robust_lambda):
+    """Build a polish objective that matches the DE objective mode.
+
+    Previously the polish phase always compared against the nominal
+    full-eval score.  That silently replaced a robustly-tuned set of
+    params with a set polished against the nominal objective, which
+    could score lower on the robust metric.  This factory returns a
+    full-scenario objective using the *same* mode as the DE phase so
+    pre/post comparison is apples-to-apples.
+    """
+    from .scoring import MASS_DISTRIBUTION
+    obj = _Objective(
+        strat_cls, names, int_flags,
+        scenarios=SCENARIOS,            # full set, not screen
+        masses=MASS_DISTRIBUTION,        # full mass distribution
+        mode=objective_mode,
+        robust_samples=robust_samples,
+        robust_seed=robust_seed,
+        robust_lambda=robust_lambda,
+    )
+    return obj
+
+
+def _grid_warm_start_init(strat_cls, names, bounds, popsize, pool, log_fn):
+    """Screen param_grid() nominally on SCREEN scenarios; return top-N as init.
+
+    Cheap one-shot: evaluates every row in ``param_grid()`` on the screen
+    scenarios without robust sampling.  Sorts by score and takes the top
+    ``popsize*D`` rows as scipy's DE initial population.  Points are
+    clipped to the search bounds and perturbed by tiny noise to ensure
+    distinctness.  If the grid is smaller than the required population,
+    the remainder is backfilled with Latin-hypercube samples.
+    """
+    grid = strat_cls.param_grid()
+    if not grid:
+        return None
+
+    needed = popsize * len(names)
+    int_flags = [False] * len(names)  # not used during warm screen
+
+    # Score every grid point on the cheap screen objective.
+    screen_obj = _Objective(
+        strat_cls, names, int_flags,
+        scenarios=SCREEN_SCENARIOS, masses=SCREEN_MASSES,
+        mode="nominal",
+    )
+    vecs = np.array([[row[k] for k in names] for row in grid], dtype=float)
+    t0 = time.time()
+    try:
+        scores = list(pool.map(screen_obj, vecs))
+    except Exception:
+        scores = [screen_obj(v) for v in vecs]
+    scores_arr = np.asarray(scores, dtype=float)
+    order = np.argsort(scores_arr)  # ascending = best first (objective is negated)
+    best = vecs[order[:needed]]
+
+    # Clip to bounds + add tiny jitter to avoid DE deduplication rejects.
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
+    rng = np.random.default_rng(0)
+    best = np.clip(best, lo, hi)
+    jitter = 1e-4 * (hi - lo)
+    best = np.clip(best + jitter * rng.standard_normal(best.shape), lo, hi)
+
+    # Backfill if grid had too few distinct points.
+    if best.shape[0] < needed:
+        n_extra = needed - best.shape[0]
+        u = rng.random((n_extra, len(names)))
+        extra = lo + u * (hi - lo)
+        best = np.vstack([best, extra])
+
+    log_fn(f"  warm-start: evaluated {len(grid)} grid points in "
+           f"{time.time() - t0:.1f}s, best nominal={-float(min(scores_arr)):.2f}")
+    return best
+
+
+def _run_cma(strat_cls, names, bounds, int_flags, objective,
+             maxiter, popsize, seed, log_fn, x0=None, pool=None):
+    """Run CMA-ES as the DE replacement; returns a DE-like result dict.
+
+    CMA-ES typically needs 2-4x fewer evaluations than DE on smooth,
+    continuous 4D landscapes with correlated parameters.  It respects
+    bounds via clipping; integer params are rounded by _vec_to_params.
+    """
+    if not _HAS_CMA:
+        raise RuntimeError("CMA-ES requested but 'cma' package not installed. "
+                           "Run: pip install cma")
+    lo = np.array([b[0] for b in bounds])
+    hi = np.array([b[1] for b in bounds])
+    if x0 is None:
+        x0 = 0.5 * (lo + hi)
+    x0 = np.clip(np.asarray(x0, dtype=float), lo, hi)
+    sigma0 = float(np.mean((hi - lo) / 6.0))
+
+    opts = {
+        "bounds": [lo.tolist(), hi.tolist()],
+        "popsize": int(popsize),
+        "maxiter": int(maxiter),
+        "seed": int(seed),
+        "verbose": -9,
+        "verb_log": 0,
+        "verb_disp": 0,
+        "tolfun": 1e-3,
+    }
+    es = _cma.CMAEvolutionStrategy(x0.tolist(), sigma0, opts)  # type: ignore[union-attr]
+    nit = 0
+    nfev = 0
+    while not es.stop():
+        xs = es.ask()
+        xs_np = [np.asarray(x, dtype=float) for x in xs]
+        if pool is not None:
+            fs = list(pool.map(objective, xs_np))
+        else:
+            fs = [objective(x) for x in xs_np]
+        es.tell(xs, fs)
+        nit += 1
+        nfev += len(xs)
+        params = _vec_to_params(es.result.xbest, names, int_flags)
+        pstr = ", ".join(f"{k}={v}" for k, v in params.items())
+        log_fn(f"[{strat_cls.key}] cma gen {nit:3d}/{maxiter}  "
+               f"best={-es.result.fbest:.4f}  {pstr}")
+
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        x=np.asarray(es.result.xbest, dtype=float),
+        fun=float(es.result.fbest),
+        nit=int(nit),
+        nfev=int(nfev),
+        success=bool(es.result.xbest is not None),
+        message="CMA-ES finished",
+    )
 
 
 def _tune_one(
@@ -187,8 +355,12 @@ def _tune_one(
     objective_robust_lambda,
     polish,
     polish_maxiter,
+    optimizer="de",
+    warm_start=True,
+    adaptive_samples=True,
+    n_workers=1,
 ):
-    """Screen-DE → full-eval for one strategy class.
+    """Screen-DE/CMA → full-eval for one strategy class.
 
     *pool* must be a multiprocessing.Pool whose .map is passed to scipy
     so no internal pools are created or destroyed between strategies.
@@ -196,7 +368,24 @@ def _tune_one(
     strategy_name = strat_cls.key
     names, bounds, int_flags = _build_bounds(strat_cls)
 
-    # Phase 1: DE with screen config
+    # Adaptive robust-sample schedule.  Use a *per-worker* counter so
+    # it survives pool.map pickling on Windows.  We halve samples for
+    # the first 40% of the expected evaluation budget, then ramp to
+    # full.  Global threshold is divided by n_workers because each
+    # worker only sees 1/n of the evals.
+    sample_schedule = None
+    if adaptive_samples and objective_mode != "nominal" and objective_robust_samples >= 4:
+        total_evals = popsize * len(names) * max(1, maxiter)
+        per_worker_threshold = max(1, int(0.4 * total_evals / max(1, n_workers)))
+        half = max(1, objective_robust_samples // 2)
+        sample_schedule = [
+            (per_worker_threshold, half),
+            (10**12,               objective_robust_samples),
+        ]
+        log_fn(f"  adaptive robust samples: {half} for first "
+               f"~{int(0.4 * total_evals)} evals (aggregate), then {objective_robust_samples}")
+
+    # Phase 1: DE/CMA with screen config
     objective = _Objective(
         strat_cls, names, int_flags,
         scenarios=SCREEN_SCENARIOS,
@@ -205,6 +394,7 @@ def _tune_one(
         robust_samples=objective_robust_samples,
         robust_seed=seed,
         robust_lambda=objective_robust_lambda,
+        sample_schedule=sample_schedule,
     )
 
     gen_counter = [0]
@@ -219,22 +409,40 @@ def _tune_one(
             f"conv={convergence:.4f}  {pstr}",
         )
 
+    # Warm-start: evaluate param_grid() on cheap nominal screen and seed
+    # DE/CMA with the top-(popsize*D) points.
+    init = None
+    if warm_start:
+        init = _grid_warm_start_init(
+            strat_cls, names, bounds, popsize, pool, log_fn,
+        )
+
     t0 = time.time()
-    rng = np.random.default_rng(seed)
-    result = differential_evolution(
-        objective,
-        bounds=bounds,
-        rng=rng,
-        maxiter=maxiter,
-        popsize=popsize,
-        tol=1e-3,
-        mutation=(0.5, 1.5),
-        recombination=0.8,
-        workers=pool.map,
-        updating="deferred",
-        callback=callback,
-        polish=False,
-    )
+
+    if optimizer == "cma":
+        x0 = None if init is None else init[0]  # CMA uses single mean
+        result = _run_cma(
+            strat_cls, names, bounds, int_flags, objective,
+            maxiter=maxiter, popsize=popsize, seed=seed,
+            log_fn=log_fn, x0=x0, pool=pool,
+        )
+    else:
+        de_kwargs: dict = dict(
+            bounds=bounds,
+            rng=np.random.default_rng(seed),
+            maxiter=maxiter,
+            popsize=popsize,
+            tol=1e-3,
+            mutation=(0.5, 1.5),
+            recombination=0.8,
+            workers=pool.map,
+            updating="deferred",
+            callback=callback,
+            polish=False,
+        )
+        if init is not None:
+            de_kwargs["init"] = init
+        result = differential_evolution(objective, **de_kwargs)
     screen_elapsed = time.time() - t0
 
     best_params = _vec_to_params(result.x, names, int_flags)
@@ -246,14 +454,54 @@ def _tune_one(
     polish_score = None
 
     if polish:
-        # Optional local search on the full nominal objective.
-        # Powell handles mixed/discontinuous landscapes better than gradient methods
-        # when integer-like parameters are rounded in _vec_to_params.
+        # Local search on the FULL objective matching DE's mode (nominal
+        # or robust).  Powell handles mixed/discontinuous landscapes
+        # better than gradient methods when integer-like parameters are
+        # rounded in _vec_to_params.
+        #
+        # Powell is strictly serial (each iter depends on the previous),
+        # but each iter evaluates the full robust objective.  We route
+        # the MC samples through the shared pool so polish actually uses
+        # all cores instead of starving at 1.  DE's workers cannot do
+        # this because they are themselves inside the pool.
+        from .scoring import MASS_DISTRIBUTION, score_strategy_robust as _ssr
+
+        def polish_obj(x):
+            params = _vec_to_params(x, names, int_flags)
+            if objective_mode == "nominal":
+                res = score_strategy(
+                    lambda: strat_cls(**params),
+                    scenarios=SCENARIOS, masses=MASS_DISTRIBUTION,
+                )
+                return -res["weighted"]
+            robust = _ssr(
+                strategy_factory=None,
+                n_samples=objective_robust_samples,
+                seed=seed,
+                scenarios=SCENARIOS,
+                masses=MASS_DISTRIBUTION,
+                pool=pool,               # parallel MC samples
+                strat_cls=strat_cls,
+                strat_params=params,
+            )
+            if objective_mode == "robust_mean":
+                val = robust["mean"]
+            elif objective_mode == "robust_p5":
+                val = robust["p5"]
+            elif objective_mode == "robust_mean_std":
+                val = robust["mean"] - objective_robust_lambda * robust["std"]
+            elif objective_mode == "robust_cvar10":
+                val = robust["cvar10"]
+            elif objective_mode == "robust_cvar20":
+                val = robust["cvar20"]
+            else:
+                raise ValueError(f"Unsupported objective mode: {objective_mode}")
+            return -val
+
         p0 = np.array(result.x, dtype=float)
         pol = minimize(
-            _full_nominal_objective,
+            polish_obj,
             x0=p0,
-            args=(strat_cls, names, int_flags),
             method="Powell",
             bounds=bounds,
             options={"maxiter": int(polish_maxiter), "disp": False},
@@ -262,12 +510,11 @@ def _tune_one(
         polish_nit = int(getattr(pol, "nit", 0) or 0)
         polish_score = float(-pol.fun)
 
-        # Compare on full nominal objective to decide whether to keep polished params.
-        pre_full = score_strategy(lambda: strat_cls(**best_params))["weighted"]
-        post_params = _vec_to_params(pol.x, names, int_flags)
-        post_full = score_strategy(lambda: strat_cls(**post_params))["weighted"]
-        if post_full > pre_full:
-            best_params = post_params
+        # Compare pre/post on the SAME objective the polish optimised for.
+        pre_val  = float(-polish_obj(np.array(result.x, dtype=float)))
+        post_val = float(-pol.fun)
+        if post_val > pre_val:
+            best_params = _vec_to_params(pol.x, names, int_flags)
             polish_improved = True
 
     # Phase 2: full scoring on best params
@@ -460,15 +707,23 @@ def _parse_args():
     p.add_argument(
         "--objective",
         type=str,
-        default="nominal",
-        choices=["nominal", "robust_mean", "robust_p5", "robust_mean_std"],
-        help="Optimization objective used during DE screen phase.",
+        default="robust_cvar20",
+        choices=[
+            "nominal", "robust_mean", "robust_p5",
+            "robust_mean_std", "robust_cvar10", "robust_cvar20",
+        ],
+        help="Optimization objective used during DE screen phase. "
+             "Default 'robust_cvar20' optimizes the mean of the worst 20%% "
+             "of MC samples (Expected Shortfall), giving a tune that holds "
+             "up in the tail of parameter uncertainty.  Use 'nominal' for "
+             "fast iteration.",
     )
     p.add_argument(
         "--robust-objective-samples",
         type=int,
-        default=8,
-        help="MC samples per objective eval for robust objectives.",
+        default=6,
+        help="MC samples per objective eval for robust objectives. "
+             "6 samples × 10 scenarios × 6 masses ≈ 6× slower than nominal.",
     )
     p.add_argument(
         "--robust-objective-lambda",
@@ -491,6 +746,24 @@ def _parse_args():
         "--no-robust",
         action="store_true",
         help="Skip Monte-Carlo robustness check (faster, for quick iteration).",
+    )
+    p.add_argument(
+        "--optimizer",
+        choices=["de", "cma"],
+        default="de",
+        help="Global optimizer: 'de' (scipy differential_evolution, default) "
+             "or 'cma' (CMA-ES from cma package). CMA typically needs 2-4x "
+             "fewer evaluations on smooth continuous problems.",
+    )
+    p.add_argument(
+        "--no-warm-start",
+        action="store_true",
+        help="Disable param_grid() warm-start of the initial population.",
+    )
+    p.add_argument(
+        "--no-adaptive-samples",
+        action="store_true",
+        help="Disable adaptive ramp of robust_samples across generations.",
     )
     return p.parse_args()
 
@@ -601,6 +874,10 @@ if __name__ == "__main__":
                         objective_robust_lambda=args.robust_objective_lambda,
                         polish=not args.no_polish,
                         polish_maxiter=args.polish_maxiter,
+                        optimizer=args.optimizer,
+                        warm_start=not args.no_warm_start,
+                        adaptive_samples=not args.no_adaptive_samples,
+                        n_workers=args.workers,
                     )
                     results.append(row)
 
@@ -627,10 +904,13 @@ if __name__ == "__main__":
                     strategy_name = row["strategy"]
                     strat_cls = STRATEGY_BY_NAME[strategy_name]
                     params = row["params"]
+                    # Use the existing pool so all cores stay busy —
+                    # previously this ran with workers=1 which left the
+                    # machine at ~1 active core for minutes per strategy.
                     rob = score_strategy_robust(
                         strategy_factory=None,
                         n_samples=args.robust_samples,
-                        workers=1,
+                        pool=pool,
                         seed=int(row.get("seed", args.seed)),
                         strat_cls=strat_cls,
                         strat_params=params,

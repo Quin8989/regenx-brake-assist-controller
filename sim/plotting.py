@@ -123,37 +123,32 @@ def _serialize_traj_payload(strategy_names, traj_data, speeds, sample_idx):
             key = f"{bi}_{mi}"
             traces = []
             for si, v0 in enumerate(speeds):
+                # Only serialize what the JS actually draws:
+                #   spd, spd_base -> Speed Decay
+                #   rpm, cur      -> Operating-Point map
+                # brake_demand / p_elec / eta per-sample arrays were dead
+                # weight (never read in JS); scores carry aggregate metrics.
                 spd_sample = data["spd"][si][sample_idx]
+                spd_base_sample = data["spd_base"][si][sample_idx]
                 rpm_sample = data["rpm"][si][sample_idx]
                 cur_sample = data["cur"][si][sample_idx]
-                brake_sample = data["brake_demand"][si][sample_idx]
-                eff_brake_sample = data["eff_brake"][si][sample_idx]
-                p_elec_sample = data["p_elec"][si][sample_idx]
-                
-                # Quantize all arrays to int16 for size reduction
+
                 spd_min, spd_max = float(np.min(spd_sample)), float(np.max(spd_sample))
+                sbs_min, sbs_max = float(np.min(spd_base_sample)), float(np.max(spd_base_sample))
                 rpm_min, rpm_max = float(np.min(rpm_sample)), float(np.max(rpm_sample))
                 cur_min, cur_max = float(np.min(cur_sample)), float(np.max(cur_sample))
-                brk_min, brk_max = float(np.min(brake_sample)), float(np.max(brake_sample))
-                efb_min, efb_max = float(np.min(eff_brake_sample)), float(np.max(eff_brake_sample))
-                pel_min, pel_max = float(np.min(p_elec_sample)), float(np.max(p_elec_sample))
-                
+
                 spd_b64, spd_scale, spd_off = _quantize_to_int16(spd_sample, spd_min, spd_max)
+                sbs_b64, sbs_scale, sbs_off = _quantize_to_int16(spd_base_sample, sbs_min, sbs_max)
                 rpm_b64, rpm_scale, rpm_off = _quantize_to_int16(rpm_sample, rpm_min, rpm_max)
                 cur_b64, cur_scale, cur_off = _quantize_to_int16(cur_sample, cur_min, cur_max)
-                brk_b64, brk_scale, brk_off = _quantize_to_int16(brake_sample, brk_min, brk_max)
-                efb_b64, efb_scale, efb_off = _quantize_to_int16(eff_brake_sample, efb_min, efb_max)
-                pel_b64, pel_scale, pel_off = _quantize_to_int16(p_elec_sample, pel_min, pel_max)
-                
+
                 trace = {
                     "v0": float(v0),
                     "spd_q": spd_b64, "spd_s": spd_scale, "spd_o": spd_off,
+                    "sbs_q": sbs_b64, "sbs_s": sbs_scale, "sbs_o": sbs_off,
                     "rpm_q": rpm_b64, "rpm_s": rpm_scale, "rpm_o": rpm_off,
                     "cur_q": cur_b64, "cur_s": cur_scale, "cur_o": cur_off,
-                    "brk_q": brk_b64, "brk_s": brk_scale, "brk_o": brk_off,
-                    "efb_q": efb_b64, "efb_s": efb_scale, "efb_o": efb_off,
-                    "pel_q": pel_b64, "pel_s": pel_scale, "pel_o": pel_off,
-                    "eta": _round_list(data["eta"][si][sample_idx], digits=3),
                     "score": _serialize_scores(data["scores"][si]),
                 }
                 traces.append(trace)
@@ -382,12 +377,15 @@ def generate_efficiency_gallery_html(
 <h1>RegenX - Strategy Gallery (Scoring-Aligned)</h1>
 <p class="subtitle">
   Shared overlays for direct comparison. The lower operating-point map auto-zooms to the active traces.
+  <br>
+  Per-trace scores are single-scenario (free decel at the selected brake, mass, and initial speed).
+  The tune's composite is a weighted average over 12 scenarios; numbers here will not match the tune summary.
 </p>
 
 <h2>Motor / Generator Efficiency Reference Map</h2>
 <div class="note">
   Instantaneous regen efficiency of the BLDC generator through the planetary gear. This is a reference map, not the scoring energy metric.
-  The scoring energy dimension is harvested electrical energy divided by demanded braking energy over time.
+  The scoring energy dimension is harvested electrical energy divided by the total power the device is processing (copper + rotor drag + band heat + electrical capture).
   <br><br>
   <b>X-axis:</b> motor RPM. The top axis shows equivalent wheel speed with the carrier locked.
   <br>
@@ -405,19 +403,19 @@ def generate_efficiency_gallery_html(
     <tr>
       <td><b>Energy</b></td>
       <td>40&thinsp;% &thinsp;/&thinsp; 0&thinsp;%</td>
-      <td>S<sub>E</sub> = 100 &sdot; <span class="mfrac"><span>&int; P<sub>elec</sub> dt</span><span>&int; F<sub>brake</sub> &sdot; v&thinsp;dt</span></span></td>
-      <td>Harvested electrical energy &divide; demanded braking energy</td>
+      <td>S<sub>E</sub> = 100 &sdot; <span class="mfrac"><span>&int; P<sub>elec</sub> dt</span><span>&int; (P<sub>elec</sub>+P<sub>cu</sub>+P<sub>drag</sub>+P<sub>band</sub>) dt</span></span></td>
+      <td>Device conversion efficiency (harvested &divide; total device-side power)</td>
     </tr>
     <tr>
       <td><b>Tracking</b></td>
       <td>40&thinsp;% &thinsp;/&thinsp; 80&thinsp;%</td>
-      <td>S<sub>T</sub> = 100 &sdot; clamp<span style="font-size:0.9em">&thinsp;(1 &minus; <span class="mfrac"><span>&Vert;&tau;<sub>motor</sub> &minus; &tau;<sub>demand</sub>&Vert;<sub>RMS</sub></span><span>&Vert;&tau;<sub>demand</sub>&Vert;<sub>RMS</sub></span></span>,&thinsp;0,&thinsp;1)</span></td>
-      <td>Timesteps with v &le; 5&thinsp;km/h are excluded</td>
+      <td>S<sub>T</sub> = 100 &sdot; clamp<span style="font-size:0.9em">&thinsp;(1 &minus; <span class="mfrac"><span>mean|a<sub>ours</sub> &minus; a<sub>base</sub>|</span><span>mean|a<sub>base</sub>|</span></span>,&thinsp;0,&thinsp;1)</span></td>
+      <td>Wheel-decel error vs. a traditional wheel brake (pads sliding, torque = brake&sdot;&mu;<sub>k</sub>/&mu;<sub>s</sub>)</td>
     </tr>
     <tr>
       <td><b>Smoothness</b></td>
       <td>20&thinsp;% &thinsp;/&thinsp; 20&thinsp;%</td>
-      <td>S<sub>J</sub> = 100 &sdot; max<span style="font-size:0.9em">&thinsp;(0,&thinsp;1 &minus; <span class="mfrac"><span>J<sub>RMS</sub></span><span>J<sub>ref</sub></span></span>)&emsp;J<sub>ref</sub> = 20&thinsp;m/s&sup3;</span></td>
+      <td>S<sub>J</sub> = 100 &sdot; max<span style="font-size:0.9em">&thinsp;(0,&thinsp;1 &minus; <span class="mfrac"><span>J<sub>RMS</sub></span><span>J<sub>ref</sub></span></span>)&emsp;J<sub>ref</sub> = 10&thinsp;m/s&sup3;</span></td>
       <td>RMS jerk; J = d&sup2;v/dt&sup2;</td>
     </tr>
     <tr>
@@ -836,10 +834,13 @@ function buildTrajectory() {
   const MG_T = {top: 46, right: 28, bottom: 62, left: 82};
   const MG_M = {top: 52, right: 150, bottom: 80, left: 94};
 
-  function baselineSpeed(v0Kmh, brakeNm, massKg, t) {
-    const v0 = v0Kmh / 3.6;
-    const a = brakeNm / (massKg * TRAJ_R_WHEEL);
-    return Math.max(0, v0 - a * t) * 3.6;
+  function baselineSpeedFromTrace(selected, j) {
+    // Per-trace baseline wheel speed from the sim's parallel-integrated
+    // traditional-brake bike (same mass, C_rr, grade; wheel torque is
+    // kinetic-level brake_val·µ_k/µ_s).  All selected strategies run
+    // against the same baseline for given (mass, brake, v0).
+    if (!selected.length) return 0;
+    return selected[0].tr.spd_base[j];
   }
 
   function getSelected() {
@@ -855,11 +856,9 @@ function buildTrajectory() {
       const npts = T_TRAJ.length;
       // Dequantize all quantized arrays on load
       tr.spd = dequantize(decodeU16(tr.spd_q, npts), tr.spd_s, tr.spd_o);
+      tr.spd_base = dequantize(decodeU16(tr.sbs_q, npts), tr.sbs_s, tr.sbs_o);
       tr.rpm = dequantize(decodeU16(tr.rpm_q, npts), tr.rpm_s, tr.rpm_o);
       tr.cur = dequantize(decodeU16(tr.cur_q, npts), tr.cur_s, tr.cur_o);
-      tr.brake_demand = dequantize(decodeU16(tr.brk_q, npts), tr.brk_s, tr.brk_o);
-      tr.eff_brake = dequantize(decodeU16(tr.efb_q, npts), tr.efb_s, tr.efb_o);
-      tr.p_elec = dequantize(decodeU16(tr.pel_q, npts), tr.pel_s, tr.pel_o);
       selected.push({lab: lab, tr: tr, color: COLORS[lab] || '#607D8B'});
     }
     return {
@@ -916,7 +915,7 @@ function buildTrajectory() {
     ctx.beginPath();
     for (let j = 0; j < T_TRAJ.length; j++) {
       const x = mg.left + plotW * T_TRAJ[j] / tMax;
-      const y = mg.top + plotH * (1 - baselineSpeed(state.spdKmh, state.brakeNm, state.massKg, T_TRAJ[j]) / maxSpd);
+      const y = mg.top + plotH * (1 - baselineSpeedFromTrace(state.selected, j) / maxSpd);
       if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
@@ -989,8 +988,20 @@ function buildTrajectory() {
     const plotW = W - mg.left - mg.right;
     const plotH = H - mg.top - mg.bottom;
     const tMax = T_TRAJ[T_TRAJ.length - 1];
-    const baseAccel = -(state.brakeNm / (state.massKg * TRAJ_R_WHEEL));
-    let minAcc = baseAccel;
+    // Traditional-brake decel is the per-timestep derivative of the
+    // sim's parallel-integrated baseline wheel speed (spd_base), which
+    // already includes rolling resistance + grade + kinetic brake
+    // torque.  Same source as the Speed Decay "Direct brake" line.
+    const baseAcc = [];
+    if (state.selected.length) {
+      const sb = state.selected[0].tr.spd_base;
+      for (let j = 1; j < sb.length; j++) {
+        const dt = T_TRAJ[j] - T_TRAJ[j - 1];
+        baseAcc.push(dt > 0 ? (sb[j] - sb[j - 1]) / 3.6 / dt : 0);
+      }
+    }
+    let minAcc = 0;
+    for (const a of baseAcc) if (a < minAcc) minAcc = a;
     for (const item of state.selected) {
       for (let j = 1; j < item.tr.spd.length; j++) {
         const dt = T_TRAJ[j] - T_TRAJ[j - 1];
@@ -1012,8 +1023,16 @@ function buildTrajectory() {
     ctx.setLineDash([7, 5]);
     ctx.strokeStyle = BASE_COLOR;
     ctx.lineWidth = 2.5;
-    const yBase = mg.top + plotH * (1 - (baseAccel - yMin) / yRange);
-    ctx.beginPath(); ctx.moveTo(mg.left, yBase); ctx.lineTo(mg.left + plotW, yBase); ctx.stroke();
+    ctx.beginPath();
+    let baseStarted = false;
+    for (let j = 0; j < baseAcc.length; j++) {
+      const t = T_TRAJ[j + 1];
+      const a = Math.max(yMin, Math.min(yMax, baseAcc[j]));
+      const x = mg.left + plotW * t / tMax;
+      const y = mg.top + plotH * (1 - (a - yMin) / yRange);
+      if (!baseStarted) { ctx.moveTo(x, y); baseStarted = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
     ctx.restore();
 
     // Inline legend: direct wheel brake (top-right inside plot area)

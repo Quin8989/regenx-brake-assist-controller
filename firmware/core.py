@@ -8,7 +8,6 @@
 
 
 class SystemState:
-    OFF = "OFF"
     PRECHARGE = "PRECHARGE"
     ASSIST = "ASSIST"
     REGEN = "REGEN"
@@ -122,9 +121,13 @@ class SharedState:
         self.vesc_hw_name = ""
 
         # --- VESC LispBM push telemetry (COMM_CUSTOM_APP_DATA) ---
-        self.vesc_iq_instantaneous_a = 0.0   # lower-latency filtered iq from get-iq()
-        self.vesc_erpm_fast = 0.0            # less-filtered electrical RPM from get-rpm-fast()
+        # Aggregated over a 10 ms / 1 kHz-sampled window on the VESC.  See
+        # scripts/vesc_lisp_push_iq.lisp for packet layout.
+        self.vesc_erpm_fast = 0.0            # less-filtered electrical RPM at packet instant
         self.vesc_mech_rpm_fast = 0.0        # vesc_erpm_fast / pole_pairs
+        self.vesc_iq_mean_a = 0.0            # mean q-axis current over the 10 ms window, A
+        self.vesc_drpm_mean_mech = 0.0       # mean d(mech_rpm)/dt over window, rpm/s
+        self.vesc_drpm_peak_neg_mech = 0.0   # most-negative per-sample d(mech_rpm)/dt, rpm/s
         self.last_push_iq_rx_ms = 0
 
         # --- Motor command requests (written by ControlLoop) ---

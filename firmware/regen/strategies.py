@@ -1,11 +1,30 @@
-"""sim.strategies - production regen controllers.
+"""sim.strategies - regen controllers.
 
-The strategy layer is intentionally small:
-    pi_controller  PI feedback on a carrier-slip proxy.
-    aimd_ff        Feedforward + AIMD gain state.
+Two strategies:
+    pi_controller   PI feedback on a wheel-decel-rate proxy.  Classical
+                    reference baseline.
+    aimd_ff         Feedforward + AIMD adaptation of the FF gain.
+                    Converges to the µ_s boundary by slip-cycling.
+                    Default runtime strategy.
+
+The tracking score is computed against an idealized non-slipping brake
+that delivers the rider's full static-friction demand (``brake_val``)
+at the wheel.  The device's ideal steady state is to park the carrier
+just at the µ_s boundary — carrier locked, no band heat, full rider-
+demanded torque transferred to regen.  Both strategies share this
+target; they differ in how they find it.  ``aimd_ff`` orbits the
+boundary via AI/MD cycles; ``pi_controller`` is a non-AIMD reference
+comparator.
 
 Every strategy receives only a StrategyContext built from signals that
-exist on the physical Pico + VESC system.
+exist on the physical Pico + VESC system.  ``k`` in ``aimd_ff`` is the
+fraction of short-circuit feedforward current
+(``i_ff = k · λ · ωe / R``); it stays in a bounded physical scale
+rather than an arbitrary tuning knob so the DE search is well
+conditioned.  A direct ``target current`` reparameterisation was
+considered and rejected: the back-EMF form is the correct first-order
+physics and auto-scales with speed, whereas a flat target current
+would saturate duty at low RPM.
 """
 
 from config.settings import (
@@ -17,7 +36,6 @@ from config.settings import (
     VESC_MOTOR_POLE_PAIRS as POLE_PAIRS,
 )
 from .regen_control import ff_current_from_rpm, voltage_taper
-from .strategy_context import StrategyContext  # noqa: F401 - re-export
 
 
 def _ff_current(rpm, gain):
@@ -34,6 +52,9 @@ def _ff_current(rpm, gain):
 class _BaseStrategy:
     """Shared scaffold for regen strategies."""
 
+    def _reset(self):
+        raise NotImplementedError
+
     def _begin_update(self, ctx):
         rpm = ctx.preferred_rpm
         iq = ctx.preferred_iq
@@ -45,88 +66,6 @@ class _BaseStrategy:
     def _ff(self, rpm, gain):
         return _ff_current(rpm, gain)
 
-
-class PiSlipRegenStrategy(_BaseStrategy):
-    """PI feedback on a carrier-slip proxy."""
-
-    key = "pi_controller"
-
-    def __init__(self, k_ff=0.15, kp=0.5, ki=0.1,
-                 slip_target=0.3, alpha=0.3):
-        self.k_ff = k_ff
-        self.kp = kp
-        self.ki = ki
-        self.slip_target = slip_target
-        self.alpha = alpha
-        self.name = (
-            f"PI Controller (kff={k_ff}, Kp={kp}, Ki={ki}, tgt={slip_target})"
-        )
-        self.rpm_prev = 0.0
-        self.slip_metric = 0.0
-        self.integral = 0.0
-
-    def _reset(self):
-        self.rpm_prev = 0.0
-        self.slip_metric = 0.0
-        self.integral = 0.0
-
-    def update(self, ctx):
-        rpm, _iq, taper = self._begin_update(ctx)
-        if taper == 0.0:
-            return 0.0
-
-        d_rpm = abs(rpm - self.rpm_prev) / ctx.dt_ctrl if ctx.dt_ctrl > 0 else 0.0
-        self.rpm_prev = rpm
-        raw_slip = d_rpm / (rpm + 10.0)
-        self.slip_metric += self.alpha * (raw_slip - self.slip_metric)
-
-        error = self.slip_metric - self.slip_target
-        self.integral += error * ctx.dt_ctrl
-        self.integral = max(-5.0, min(5.0, self.integral))
-
-        correction = self.kp * error + self.ki * self.integral
-        gain_mult = max(0.05, min(1.0, 1.0 - correction))
-        return self._ff(rpm, self.k_ff * gain_mult) * taper
-
-    @staticmethod
-    def param_grid():
-        return [
-            dict(k_ff=kf, kp=kp, ki=ki, slip_target=st, alpha=al)
-            for kf in [0.10, 0.15, 0.20, 0.25, 0.30]
-            for kp in [0.1, 0.2, 0.3, 0.5]
-            for ki in [0.1, 0.2, 0.3, 0.5]
-            for st in [0.2, 0.3, 0.4, 0.6, 0.8]
-            for al in [0.05, 0.1, 0.2, 0.4]
-        ]
-
-
-class AimdFfRegenStrategy(_BaseStrategy):
-    """Feedforward current with AIMD (additive-increase / multiplicative-decrease) gain state."""
-
-    key = "aimd_ff"
-
-    def __init__(self,
-                 k_init=0.0655283, k_ai=0.00122916, beta_md=0.0660271,
-                 unlock_thresh=145.144,
-                 rpm_scale=2500.0, drpm_scale=6000.0, iq_scale=60.0,
-                 drpm_alpha=0.526797):
-
-        self.k_init = float(k_init)
-        self.k_ai = float(k_ai)
-        self.beta_md = float(beta_md)
-        self.unlock_thresh = float(unlock_thresh)
-
-        self.rpm_scale = float(rpm_scale)
-        self.drpm_scale = float(drpm_scale)
-        self.iq_scale = float(iq_scale)
-        self.drpm_alpha = float(drpm_alpha)
-
-        self.name = "AIMD-FF Regen Controller"
-
-        self._rpm_prev = 0.0
-        self._drpm_ema = 0.0
-        self._k_state = self.k_init
-
     @staticmethod
     def _clip(x, lo, hi):
         if x < lo:
@@ -135,43 +74,195 @@ class AimdFfRegenStrategy(_BaseStrategy):
             return hi
         return x
 
+
+class PiSlipRegenStrategy(_BaseStrategy):
+    """Classical PI feedback on a wheel-decel-rate proxy — reference baseline.
+
+    Not the production controller.  Kept to show how much structural
+    value the AIMD / lock-hold schemes add over plain feedback.
+
+    Note on naming: the proxy is called ``raw_slip`` historically, but
+    under the corrected mechanical model the carrier is locked almost
+    always and ``d(rpm)/dt = -N · d(ω_ring)/dt``.  The proxy is really
+    ``|a_wheel| / v`` — a speed-normalised wheel-decel magnitude — so
+    ``decel_target`` is the knob's semantic name.
+
+    Decel input comes from ``ctx.drpm_mean`` (mean d(rpm)/dt over the
+    VESC's 10 ms / 1 kHz-sampled window).  Preferred over an in-strategy
+    numerical derivative of ``rpm_fast`` because the VESC's tighter
+    sampling window averages out single-tick telemetry jitter that would
+    otherwise contaminate the decel proxy at low speeds.
+
+    Control law::
+
+        decel_proxy = |drpm_mean| / (rpm + 10)
+        integral   += (decel_proxy - decel_target) * dt
+        gain_mult   = clip(1 - ki * integral, 0.05, 3.0)
+        i_ff        = k_ff * gain_mult * λ*ωe/R
+        i_cmd       = i_ff + kp_iq * (i_ff - iq_mean)
+
+    Parameters (3 tunable): k_ff, ki, decel_target.
+    Fixed: kp_iq = 0.05 (inner loop gain — removed from tuning after
+    2026-04 analysis showed < 2% contribution).
+    """
+
+    key = "pi_controller"
+
+    def __init__(self, k_ff=0.29, ki=0.38, decel_target=0.50, kp_iq=0.05):
+        self.k_ff = k_ff
+        self.ki = ki
+        self.decel_target = decel_target
+        self.kp_iq = kp_iq  # inner additive iq-error correction gain (fixed)
+        self.name = f"PI Controller (kff={k_ff}, Ki={ki}, tgt={decel_target})"
+        self.integral = 0.0
+
     def _reset(self):
-        self._rpm_prev = 0.0
-        self._drpm_ema = 0.0
-        self._k_state = self.k_init
+        self.integral = 0.0
 
     def update(self, ctx):
-        rpm, _iq, taper = self._begin_update(ctx)
+        rpm, iq_actual, taper = self._begin_update(ctx)
+        if taper == 0.0:
+            return 0.0
+
+        d_rpm = abs(ctx.drpm_mean)
+        decel_proxy = d_rpm / (rpm + 10.0)
+
+        error = decel_proxy - self.decel_target
+        self.integral += error * ctx.dt_ctrl
+        self.integral = self._clip(self.integral, -5.0, 5.0)
+
+        correction = self.ki * self.integral
+        gain_mult = self._clip(1.0 - correction, 0.05, 3.0)
+        i_ff = self._ff(rpm, self.k_ff * gain_mult)
+
+        iq_err = i_ff - iq_actual
+        i_cmd = i_ff + self.kp_iq * iq_err
+
+        return self._clip(i_cmd * taper, 0.0, I_MAX)
+
+    @staticmethod
+    def param_grid():
+        # 3^3 = 27 seeds for DE.  ``decel_target`` range widened to
+        # accommodate the static-friction baseline, which produces
+        # ~1.5× higher wheel decel than the old kinetic baseline.
+        return [
+            dict(k_ff=kf, ki=ki, decel_target=dt)
+            for kf in [0.15, 0.30, 0.50]
+            for ki in [0.2, 0.4, 0.6]
+            for dt in [0.4, 0.8, 1.2]
+        ]
+
+
+class AimdFfRegenStrategy(_BaseStrategy):
+    """AIMD adaptation of the FF gain — orbits the µ_s boundary.
+
+    AIMD by construction converges to the static-friction ceiling: it
+    probes up with AI until a slip event, cuts with MD, probes up
+    again.  The steady-state orbit is a band just above and just below
+    the µ_s threshold.
+
+    Under the static-friction scoring baseline (scoring target =
+    ``brake_val`` at the wheel), AIMD is *aligned* with the target: its
+    time-average command tracks µ_s, which is exactly what the rider
+    demanded.  Residual costs:
+      * Each slip excursion dumps ``P_band = t_brake·ω_c`` into the
+        band — hurts Energy slightly.
+      * Decel oscillates around the target — hurts Smoothness.
+    This is the canonical AIMD solution to "max utilization of an
+    unknown catastrophic boundary" (Chiu & Jain 1989).
+
+    Control law::
+
+        i_ff   = k_eff * λ*ωe/R                         # plant-aware FF
+        i_cmd  = clip(i_ff * taper, 0, I_MAX)
+
+    k_eff is the state.  Every tick:
+
+        if -ctx.drpm_peak_neg > unlock_thresh:           # carrier slipped
+            # MD: multiplicative decrease (graduated over 25% band to
+            # avoid chatter at the detection boundary)
+            level = clip((-drpm_peak_neg - unlock_thresh) / (0.25*unlock_thresh), 0, 1)
+            k_eff *= 1 - beta_md * (0.35 + 0.65*level)
+        else:
+            # AI: additive increase — probe up until the next slip
+            k_eff += k_ai * dt
+
+    Uses ``ctx.drpm_peak_neg`` directly (most-negative per-sample
+    d(rpm)/dt, sampled at 1 kHz on the VESC, peak-held between the Pico's
+    10 ms polls).  This replaces the old in-strategy EMA of a 100 Hz-
+    sampled numerical derivative, which aliased real 2-5 ms unlock
+    transients.  No filter constant needed.
+
+    Parameters (4 tunable):
+      * ``k``              starting / post-taper recovery value of k_eff.
+      * ``k_ai``           AI rate (1/s) — how fast we probe up when safe.
+      * ``beta_md``        MD magnitude — how hard we cut on slip.
+      * ``unlock_thresh``  slip detector threshold on -drpm_peak_neg (rpm/s).
+                           Scale: a single-tick mech-RPM jump of 1 rpm at
+                           1 ms sampling reads as 1000 rpm/s, so thresholds
+                           of a few hundred to a few thousand rpm/s cover
+                           the realistic noise-to-event range.
+    """
+
+    key = "aimd_ff"
+
+    # Fixed internal constants — not tuned.
+    _K_FLOOR = 0.02
+    _K_CEIL = 1.0
+
+    def __init__(self, k=0.131, beta_md=0.05, unlock_thresh=1500.0, k_ai=0.05):
+        self.k = float(k)
+        self.beta_md = float(beta_md)
+        self.unlock_thresh = float(unlock_thresh)
+        self.k_ai = float(k_ai)
+
+        self.name = "AIMD-FF Regen Controller"
+
+        self._k_eff = self.k
+
+    def _reset(self):
+        self._k_eff = self.k
+
+    def update(self, ctx):
+        rpm, _iq_actual, taper = self._begin_update(ctx)
         if taper == 0.0:
             self._reset()
             return 0.0
 
         dt = ctx.dt_ctrl if ctx.dt_ctrl > 0.0 else 0.01
-        drpm = (rpm - self._rpm_prev) / dt
-        self._rpm_prev = rpm
-        self._drpm_ema += self.drpm_alpha * (drpm - self._drpm_ema)
+
         unlock_band = max(10.0, 0.25 * self.unlock_thresh)
-        unlock_excess = (-self._drpm_ema) - self.unlock_thresh
+        unlock_excess = (-ctx.drpm_peak_neg) - self.unlock_thresh
         unlock_level = self._clip(unlock_excess / unlock_band, 0.0, 1.0)
 
         if unlock_level > 0.0:
             md = self.beta_md * (0.35 + 0.65 * unlock_level)
-            self._k_state *= (1.0 - md)
-            if self._k_state < 0.0:
-                self._k_state = 0.0
+            self._k_eff *= (1.0 - md)
         else:
-            self._k_state = min(1.0, self._k_state + self.k_ai)
-        base = self._ff(rpm, self._k_state)
-        return self._clip(base * taper, 0.0, I_MAX)
+            # AI: grow k toward the ceiling until the next slip event.
+            self._k_eff += self.k_ai * dt
+
+        self._k_eff = self._clip(self._k_eff, self._K_FLOOR, self._K_CEIL)
+
+        i_cmd = self._ff(rpm, self._k_eff)
+        return self._clip(i_cmd * taper, 0.0, I_MAX)
 
     @staticmethod
     def param_grid():
+        # 3^4 = 81 seeds for DE init.  unlock_thresh now in rpm/s on the
+        # per-sample peak (1 kHz sampling → realistic noise ~200-600 rpm/s,
+        # real unlock spikes ~2000-10000+ rpm/s).
         return [
-            dict(k_ai=k_ai, beta_md=beta_md)
-            for k_ai in [0.0006, 0.0010, 0.0014]
-            for beta_md in [0.06, 0.10, 0.14]
+            dict(k=k, beta_md=bmd, unlock_thresh=ut, k_ai=ka)
+            for k   in [0.08, 0.15, 0.28]
+            for bmd in [0.04, 0.08, 0.14]
+            for ut  in [800.0, 1500.0, 3000.0]
+            for ka  in [0.005, 0.05, 0.20]
         ]
 
 
-ALL_STRATEGIES = [PiSlipRegenStrategy, AimdFfRegenStrategy]
+ALL_STRATEGIES = [
+    PiSlipRegenStrategy,
+    AimdFfRegenStrategy,
+]
 STRATEGY_BY_NAME = {cls.key: cls for cls in ALL_STRATEGIES}

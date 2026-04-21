@@ -56,6 +56,17 @@ class LCDDriver:
         self._rows = LCD_ROWS
         self._init_display()
 
+    def reinit(self):
+        """Re-run the HD44780 init sequence to recover from EMI/brownout corruption.
+
+        The HD44780 in 4-bit mode tracks a nibble-counter internally; a single
+        missed E pulse (from motor-bus EMI or a regen current-spike brownout)
+        permanently desyncs framing until the controller is reinitialised.
+        With RW tied to GND we cannot read the busy flag to detect this, so
+        DisplayManager calls reinit() periodically and on fault edges.
+        """
+        self._init_display()
+
     def _init_display(self):
         # HD44780 4-bit init sequence (direct GPIO).
         sleep_ms(50)

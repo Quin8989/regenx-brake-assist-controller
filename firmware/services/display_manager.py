@@ -42,6 +42,12 @@ _CAP_RANGE_SQ = _CAP_V_MAX_SQ - _CAP_V_MIN_SQ
 _FAULT_FLASH_MS = 800  # Toggle period for fault page header
 _VESC_FAULT_SHOW_MS = 3000  # Duration to show VESC fault overlay after detection
 
+# Periodic LCD re-init — HD44780 in 4-bit mode has no readback (RW grounded),
+# so we cannot detect controller-state corruption caused by motor-bus EMI or
+# regen-spike brownouts.  A blind re-init every N ms restores framing without
+# the rider ever seeing it.  Re-init also runs on every fault-state edge.
+_LCD_REINIT_PERIOD_MS = 5000
+
 _VESC_FAULT_NAMES = {
     1:  "OVER VOLTAGE",
     2:  "UNDER VOLTAGE",
@@ -72,6 +78,8 @@ class DisplayManager:
         self._fault_index = 0
         self._vesc_fault_until_ms = 0
         self._last_vesc_fault_code = 0
+        self._last_reinit_ms = ticks_ms()
+        self._last_sys_state = shared_state.system_state
 
     def update(self):
         """Refresh LCD based on current system state."""
@@ -79,9 +87,34 @@ class DisplayManager:
         if self._lcd is None:
             return
         try:
+            self._maybe_reinit_lcd()
             self._update_page()
         except OSError:
             pass
+
+    def _maybe_reinit_lcd(self):
+        """Re-init the LCD controller periodically and on fault-state edges.
+
+        Covers the only LCD failure mode we cannot detect in software: the
+        HD44780 4-bit nibble counter drifting out of sync after an EMI glitch
+        or brownout.  Cheap (~70 ms of blocking GPIO writes) and silent.
+        """
+        reinit = getattr(self._lcd, "reinit", None)
+        if reinit is None:
+            return
+        now = ticks_ms()
+        sys_state = self._state.system_state
+        fault_edge = (sys_state == SystemState.FAULT) != (
+            self._last_sys_state == SystemState.FAULT
+        )
+        due = ticks_diff(now, self._last_reinit_ms) >= _LCD_REINIT_PERIOD_MS
+        if fault_edge or due:
+            try:
+                reinit()
+            except OSError:
+                pass
+            self._last_reinit_ms = now
+        self._last_sys_state = sys_state
 
     def _update_energy_percent(self):
         """Compute cap_energy_percent from cap_voltage_v (capacitive: E ∝ V²)."""
@@ -118,13 +151,9 @@ class DisplayManager:
             self._show_precharge_page()
             return
 
-        if s.system_state == SystemState.OFF:
-            self._show_off_page()
-            return
-
         self._show_run_page()
 
-    # ----- VESC hardware fault overlay -----
+    # ----- VESC fault overlay -----
 
     def _show_vesc_fault_overlay(self):
         code = self._last_vesc_fault_code
@@ -202,8 +231,4 @@ class DisplayManager:
         self._lcd.write_line(0, "!! FAULT !!")
         self._lcd.write_line(1, label[:16])
 
-    # ----- OFF page -----
 
-    def _show_off_page(self):
-        self._lcd.write_line(0, "ReGenX  v1.0")
-        self._lcd.write_line(1, "    Standby")

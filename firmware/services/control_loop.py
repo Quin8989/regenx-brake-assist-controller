@@ -84,9 +84,13 @@ def _build_strategy_context(state):
     """
     rpm_fast = None
     iq_fast = None
+    drpm_mean = 0.0
+    drpm_peak_neg = 0.0
     if state.last_push_iq_rx_ms and ticks_diff(ticks_ms(), state.last_push_iq_rx_ms) <= _FAST_SIGNAL_STALE_MS:
         rpm_fast = state.vesc_mech_rpm_fast
-        iq_fast = state.vesc_iq_instantaneous_a
+        iq_fast = state.vesc_iq_mean_a
+        drpm_mean = state.vesc_drpm_mean_mech
+        drpm_peak_neg = state.vesc_drpm_peak_neg_mech
 
     return StrategyContext(
         rpm=state.vesc_mech_rpm,
@@ -95,12 +99,10 @@ def _build_strategy_context(state):
         iq_actual=state.vesc_iq_current_a,
         duty_cycle=state.vesc_duty_cycle,
         input_current=state.vesc_input_current_a,
-        temp_fet=state.vesc_temp_fet_c,
-        temp_motor=state.vesc_temp_motor_c,
-        vd=state.vesc_vd,
-        vq=state.vesc_vq,
         rpm_fast=rpm_fast,
-        iq_instantaneous=iq_fast,
+        iq_mean=iq_fast,
+        drpm_mean=drpm_mean,
+        drpm_peak_neg=drpm_peak_neg,
     )
 
 
@@ -160,16 +162,17 @@ class ControlLoop:
         ctx = _build_strategy_context(s)
         i_cmd = self._strategy.update(ctx)
 
-        p_bus = None
-        if s.cap_voltage_v > 0.0 and abs(s.vesc_input_current_a) > 0.0:
-            p_bus = abs(s.vesc_input_current_a) * s.cap_voltage_v
+        # Bus power estimate uses *commanded* current × cap voltage. Using
+        # measured input_current here creates a one-tick feedback lag that
+        # oscillates around the limit; commanded power matches what the sim
+        # models and what MCCONF watt_max ultimately enforces on the VESC.
+        p_bus = i_cmd * s.cap_voltage_v if i_cmd > 0.0 and s.cap_voltage_v > 0.0 else None
 
-        duty_mag = abs(s.vesc_duty_cycle)
         s.regen_command_request = apply_regen_limits(
             i_cmd,
             current_limit=REGEN_CURRENT_MAX_A,
             power_w=p_bus,
             power_limit_w=_REGEN_POWER_LIMIT_W,
-            duty_cycle=duty_mag,
+            duty_cycle=abs(s.vesc_duty_cycle),
             duty_limit=_DUTY_SATURATION_THRESHOLD,
         )

@@ -15,6 +15,7 @@ from config.settings import (
 from services.vesc_protocol import (
     COMM_CUSTOM_APP_DATA,
     COMM_FW_VERSION,
+    COMM_GET_VALUES,
     COMM_GET_VALUES_SELECTIVE,
     _build_alive,
     _build_app_disable_output,
@@ -101,7 +102,11 @@ class VESCComm:
             self._handle_push_iq(payload)
             return
 
-        # Full telemetry (COMM_GET_VALUES)
+        # Any other opcode: only accept full telemetry. Rejecting unknown
+        # opcodes prevents a spurious/corrupt frame from being silently
+        # unpacked into SharedState via _parse_telemetry.
+        if opcode != COMM_GET_VALUES:
+            return
         vals = _parse_telemetry(payload)
         if vals is None:
             return
@@ -140,18 +145,23 @@ class VESCComm:
     def _handle_push_iq(self, payload):
         """Handle COMM_CUSTOM_APP_DATA from VESC LispBM push-iq script.
 
-        Updates lower-latency iq and fast RPM fields from the LispBM push.
-        The iq value comes from get-iq() on the VESC, which is filtered but
-        not the long-window averaged telemetry value.
+        The VESC samples rpm/iq at 1 kHz and aggregates over the 10 ms
+        window between packets: rpm_now is the instantaneous erpm at
+        send time, drpm_mean is the telescoping sum / window, and
+        drpm_peak_neg is the most-negative per-sample delta scaled to
+        rpm/s (captures sub-poll unlock spikes the Pico's 100 Hz read
+        would alias).  iq is the window mean.
         """
         vals = _parse_push_iq(payload)
         if vals is None:
             return
         s = self._state
-        iq, erpm = vals
-        s.vesc_iq_instantaneous_a = iq
+        erpm, drpm_mean_erps, drpm_peak_neg_erps, iq_mean = vals
         s.vesc_erpm_fast = erpm
         s.vesc_mech_rpm_fast = erpm * VESC_ERPM_TO_MECH_RPM
+        s.vesc_iq_mean_a = iq_mean
+        s.vesc_drpm_mean_mech = drpm_mean_erps * VESC_ERPM_TO_MECH_RPM
+        s.vesc_drpm_peak_neg_mech = drpm_peak_neg_erps * VESC_ERPM_TO_MECH_RPM
         s.last_push_iq_rx_ms = ticks_ms()
 
     # --- Commands ---

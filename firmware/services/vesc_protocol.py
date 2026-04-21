@@ -349,27 +349,31 @@ def _parse_selective_telemetry(payload):
 # LISP push telemetry (COMM_CUSTOM_APP_DATA)
 # =============================================================================
 
-# Packet layout from vesc_lisp_push_iq.lisp:
-#   [0]     opcode  (COMM_CUSTOM_APP_DATA = 36)
-#   [1..4]  float32 iq_actual  (A, big-endian)
-#   [5..8]  float32 erpm_fast  (electrical RPM, big-endian)
-_PUSH_IQ_SIZE = 8  # payload bytes after opcode
+# Packet layout from vesc_lisp_push_iq.lisp (16 bytes, big-endian float32,
+# aggregated over a 10 ms / 1 kHz-sampled window on the VESC):
+#   [0]        opcode  (COMM_CUSTOM_APP_DATA = 36)
+#   [1..4]     float32 rpm_now         (electrical RPM at send instant)
+#   [5..8]     float32 drpm_mean       (mean d(erpm)/dt over window, erpm/s)
+#   [9..12]    float32 drpm_peak_neg   (most-negative per-sample d(erpm)/dt, erpm/s)
+#   [13..16]   float32 iq_mean         (mean q-axis current over window, A)
+_PUSH_IQ_SIZE = 16  # payload bytes after opcode
 
 
 def _parse_push_iq(payload):
-    """Parse a COMM_CUSTOM_APP_DATA push-iq packet from VESC LispBM.
+    """Parse a COMM_CUSTOM_APP_DATA aggregated-regen packet from VESC LispBM.
 
-    Returns (iq_actual_a, erpm_fast) on success, or None.
+    Returns (erpm_fast, drpm_mean_erps, drpm_peak_neg_erps, iq_mean_a) on
+    success, or None.
     """
     if not payload or payload[0] != COMM_CUSTOM_APP_DATA:
         return None
     if len(payload) < 1 + _PUSH_IQ_SIZE:
         return None
     try:
-        iq, erpm = struct.unpack_from(">ff", payload, 1)
+        erpm, drpm_mean, drpm_peak_neg, iq_mean = struct.unpack_from(">ffff", payload, 1)
     except Exception:
         return None
-    return (iq, erpm)
+    return (erpm, drpm_mean, drpm_peak_neg, iq_mean)
 
 
 # =============================================================================

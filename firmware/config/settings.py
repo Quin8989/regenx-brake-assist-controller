@@ -168,24 +168,25 @@ REGEN_CURRENT_MAX_A = 40.0      # Ceiling: thermal / component limit
 # controllers: the PI reference controller and the AIMD-FF model.
 REGEN_STRATEGY = "aimd_ff"
 REGEN_STRATEGY_PARAMS = {
+    # Tuned 2026-04-21 (run 20260421_054733, scipy DE, maxiter=200
+    # popsize=36 polish=80 seeds=[7, 42, 123], robust_cvar20).
+    # First tune under the static-friction scoring baseline (baseline
+    # integrator removed the µ_k ratio — see sim/physics.py).
+    #   aimd_ff         78.30  (seed=42)  ← runtime default
+    #   pi_controller   68.79  (seed=42)  ← reference baseline
     "pi_controller": dict(
-        k_ff=0.2983663602904498,
-        kp=0.10346639382658865,
-        ki=0.24536574569948869,
-        slip_target=0.50705934014701,
-        alpha=0.25204223069920534,
+        # Composite 68.79 | E=65.9 T=61.5 S=91.9 | robust P5=64.1.
+        k_ff=0.4914219881500656,
+        ki=0.20315699098530135,
+        decel_target=0.7820535082009775,
     ),
     # AIMD_FF_AUTOGEN_START
-    # AIMD-FF model retained as the default production controller.
+    # Composite 78.30 | E=67.8 T=83.7 S=86.3 | robust P5=72.7.
     "aimd_ff": dict(
-        k_init=0.0655283,
-        k_ai=0.0011282397426644183,
-        beta_md=0.07298667082585253,
-        unlock_thresh=145.144,
-        rpm_scale=2500,
-        drpm_scale=6000,
-        iq_scale=60,
-        drpm_alpha=0.526797,
+        k=0.08326140868410246,
+        beta_md=0.05467909462877643,
+        unlock_thresh=842.0,
+        k_ai=0.12576438848635152,
     ),
     # AIMD_FF_AUTOGEN_END
 }

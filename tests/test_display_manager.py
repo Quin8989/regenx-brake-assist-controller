@@ -121,6 +121,68 @@ def test_oserror_caught_silently(sys_state):
     dm.update()
 
 
+# ---- LCD re-init watchdog ----
+
+class _ReinitLCD(_FakeLCD):
+    def __init__(self):
+        super().__init__()
+        self.reinit_calls = 0
+
+    def reinit(self):
+        self.reinit_calls += 1
+
+
+def test_reinit_on_fault_edge():
+    s, f, lcd, dm = _make(lcd=_ReinitLCD())
+    s.cap_voltage_v = 25.0
+    s.system_state = SystemState.REGEN
+    dm.update()
+    base = lcd.reinit_calls
+    # Enter fault
+    s.system_state = SystemState.FAULT
+    f.set_fault(FaultCode.INTERNAL)
+    dm.update()
+    assert lcd.reinit_calls == base + 1
+    # Exit fault
+    f.reset_all()
+    s.system_state = SystemState.REGEN
+    dm.update()
+    assert lcd.reinit_calls == base + 2
+
+
+def test_reinit_periodic(monkeypatch):
+    from services import display_manager as dm_mod
+
+    t = [0]
+    monkeypatch.setattr(dm_mod, "ticks_ms", lambda: t[0])
+    monkeypatch.setattr(dm_mod, "ticks_diff", lambda a, b: a - b)
+
+    s, f, lcd, dm = _make(lcd=_ReinitLCD())
+    s.cap_voltage_v = 25.0
+    s.system_state = SystemState.REGEN
+    dm.update()
+    start = lcd.reinit_calls
+
+    # Advance less than period — no re-init
+    t[0] += dm_mod._LCD_REINIT_PERIOD_MS - 1
+    dm.update()
+    assert lcd.reinit_calls == start
+
+    # Advance past period — re-init fires
+    t[0] += 2
+    dm.update()
+    assert lcd.reinit_calls == start + 1
+
+
+def test_reinit_absent_method_is_noop():
+    # _FakeLCD has no reinit() — must not crash
+    s, f, lcd, dm = _make()
+    s.system_state = SystemState.REGEN
+    s.cap_voltage_v = 25.0
+    for _ in range(3):
+        dm.update()
+
+
 # ---- Energy estimation (absorbed from test_energy_estimator) ----
 
 @pytest.mark.parametrize("voltage,expected", [
