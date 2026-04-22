@@ -129,6 +129,13 @@ STEP_DELAY   = 0.3
 # Duration of "hold" kind scenarios (s) — long enough for controller
 # transients to settle and steady-state regen to dominate the score.
 HOLD_T_END   = 3.0
+
+# Brake lever engagement ramp duration (s).
+# Real lever engagement rises from 0 to full clamping force over
+# ~80–200 ms (cable compliance, band lead-in, rider dynamics).
+# Modelled as a linear ramp applied to all non-hold engagement edges.
+# 0.0 disables the ramp (legacy step-function behaviour).
+BRAKE_ENGAGE_RAMP_S = 0.10
 CYCLE_T_END = 9.0
 CYCLE_INITIAL_COAST_S = 0.6
 CYCLE_PERIOD_S = 2.0
@@ -518,6 +525,19 @@ def score_from_step_series(result, *, emergency=False, eps=1e-9):
 #  Full strategy scoring across all scenarios
 # =====================================================================
 
+def _lerp_ramp(t_engage, t_ramp, full_nm):
+    """Return a brake value linearly ramping from 0 to full_nm over t_ramp seconds.
+
+    t_engage: time elapsed since engagement started (s).
+    Returns full_nm if t_ramp <= 0 (no ramp).
+    """
+    if t_ramp <= 0.0 or t_engage >= t_ramp:
+        return full_nm
+    if t_engage <= 0.0:
+        return 0.0
+    return full_nm * (t_engage / t_ramp)
+
+
 def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
     """Build simulate() args + crop config for one scenario kind.
 
@@ -541,15 +561,19 @@ def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
         dv = (v_start - v_end) / 3.6
         sim_kw["t_end"] = max(4.0, min(30.0, dv / decel_ms2 * 2.0))
         sim_kw["v_min_kmh"] = float(v_end)
-        return brake_nm, sim_kw, v_end
+        ramp = BRAKE_ENGAGE_RAMP_S
+        def brake_fn(t, _b=brake_nm, _r=ramp):
+            return _lerp_ramp(t, _r, _b)
+        return brake_fn, sim_kw, v_end
 
     if kind == "step":
         dv = (v_start - v_end) / 3.6
         sim_kw["t_end"] = max(4.0, min(30.0, dv / decel_ms2 * 2.0 + STEP_DELAY))
         sim_kw["v_min_kmh"] = float(v_end)
         delay = STEP_DELAY
-        def brake_fn(t, _b=brake_nm, _d=delay):
-            return _b if t >= _d else 0.0
+        ramp = BRAKE_ENGAGE_RAMP_S
+        def brake_fn(t, _b=brake_nm, _d=delay, _r=ramp):
+            return _lerp_ramp(t - _d, _r, _b) if t >= _d else 0.0
         return brake_fn, sim_kw, v_end
 
     if kind == "cycle":
@@ -562,11 +586,18 @@ def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
             _coast=CYCLE_INITIAL_COAST_S,
             _period=CYCLE_PERIOD_S,
             _on=CYCLE_BRAKE_ON_S,
+            _ramp=BRAKE_ENGAGE_RAMP_S,
         ):
             if t < _coast:
                 return 0.0
             phase = (t - _coast) % _period
-            return _b if phase < _on else 0.0
+            if phase >= _on:
+                return 0.0
+            if phase < _ramp:
+                return _lerp_ramp(phase, _ramp, _b)           # engage ramp
+            if phase >= _on - _ramp:
+                return _lerp_ramp(_on - phase, _ramp, _b)    # release ramp
+            return _b
 
         return brake_fn, sim_kw, v_end
 
@@ -590,9 +621,10 @@ def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
         sim_kw["v_min_kmh"] = float(v_end)
         sim_kw["grade_rad"] = _math.asin(max(-1.0, min(1.0, HILL_ACCEL_MS2 / _G)))
         delay = STEP_DELAY
+        ramp = BRAKE_ENGAGE_RAMP_S
 
-        def brake_fn(t, _b=brake_nm, _d=delay):
-            return _b if t >= _d else 0.0
+        def brake_fn(t, _b=brake_nm, _d=delay, _r=ramp):
+            return _lerp_ramp(t - _d, _r, _b) if t >= _d else 0.0
 
         return brake_fn, sim_kw, v_end
 
@@ -609,11 +641,18 @@ def _scenario_sim_config(kind, v_start, v_end, decel_ms2, mass_kg):
             _coast=HILL_CYCLE_INITIAL_COAST_S,
             _period=HILL_CYCLE_PERIOD_S,
             _on=HILL_CYCLE_BRAKE_ON_S,
+            _ramp=BRAKE_ENGAGE_RAMP_S,
         ):
             if t < _coast:
                 return 0.0
             phase = (t - _coast) % _period
-            return _b if phase < _on else 0.0
+            if phase >= _on:
+                return 0.0
+            if phase < _ramp:
+                return _lerp_ramp(phase, _ramp, _b)           # engage ramp
+            if phase >= _on - _ramp:
+                return _lerp_ramp(_on - phase, _ramp, _b)    # release ramp
+            return _b
 
         return brake_fn, sim_kw, v_end
 

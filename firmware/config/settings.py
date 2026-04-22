@@ -133,8 +133,10 @@ EXCEPTION_LOG_MAX = 10                 # Max exception snapshots kept in RAM rin
 # EXIT:  motor must drop below this RPM to exit regen (hysteresis gap).
 # Set above the sensorless FOC instability floor (~200 ERPM / pp) so that
 # regen only runs where the VESC can track rotor angle cleanly.
-REGEN_ENTRY_RPM = 25.0
-REGEN_EXIT_RPM = 18.0
+# Calibrated to ~3 km/h entry (115.7 motor RPM) and ~2 km/h exit (77.2 motor RPM).
+# Wheel radius 0.33 m, gear ratio 4.8:1: rpm_motor = (v_kmh/3.6) / (0.33·2π/60) × 4.8
+REGEN_ENTRY_RPM = 116.0
+REGEN_EXIT_RPM = 77.0
 
 # Motor physics constants for regen current computation.
 # Flux linkage measured via VESC Tool → FOC → Detect and Calculate.
@@ -145,29 +147,34 @@ FLUX_LINKAGE_WB = 0.0111        # Puyan H01 flux linkage (weber)
 # VERIFY in VESC Tool → Motor Settings → FOC → General → R.
 MOTOR_PHASE_RESISTANCE_OHM = 0.082
 
-# Efficiency-optimal regen current model
-# ======================================
-# Net power to caps:  P_net = λ·ωe·I − R_phase·I²
-# Max net power at:   I* = λ·ωe / (2·R_phase)  → 50% efficient
-# Target efficiency:  I  = (1−η) · λ·ωe / R_phase
+# Rotor drag coefficient — iron losses + bearing friction, applied to
+# |ω_motor|.  Identified from a bench spin-down (2026-04-20, band brake
+# disengaged): rotor coasts from 30 km/h equivalent to rest in ~0.48 s
+# → first-order fit gives b = J_rotor / τ ≈ 3.7e-3 Nm·s/rad.
+# See sim/physics.py (T_DRAG_COEFF) for derivation details.
+MOTOR_ROTOR_DRAG_NM_S = 0.0037
+
+# Efficiency-optimal regen current model (3-phase BLDC, FOC Id=0)
+# ===============================================================
+# Net power to caps:  P_net = E·I − 1.5·R·I² − D·ω_m
+#   where  E = λ·ωe  (back-EMF),  D = MOTOR_ROTOR_DRAG_NM_S
+#          copper loss includes the 3-phase factor of 1.5
+# Target efficiency η: solve 1.5·R·I² − (1−η)·E·I + D·ω_m = 0
+#   → I = [(1−η)·E + √(((1−η)·E)² − 6·R·D·ω_m)] / (3·R)
+# At η=70%, D=0: I ≈ (0.30/1.5) · λ·ωe / R = 0.20 · λ·ωe / R
 #
-# At 200 mech RPM with R=82 mΩ:
-#   25 A (old cap)  →  19 W net, 20% efficient — most energy wasted as heat
-#   15.6 A (I*)     →  30 W net, 50% efficient — max power recovery
-#    7.8 A (η=75%)  →  22 W net, 75% efficient — good braking + good recovery
-#
-# The current is clamped to REGEN_CURRENT_MAX_A (thermal / component
-# limit).  No floor needed — the model naturally gives non-zero current
-# at any non-zero RPM, and regen entry requires RPM ≥ 25.
-REGEN_COPPER_LOSS_FRACTION = 0.25  # 25% of mechanical input wasted as I²R heat
+# At 200 mech RPM with R=82 mΩ, η=70%:
+#    I ≈ 5.2 A  →  P_net ≈ 8.2 W,  P_copper ≈ 3.3 W
+REGEN_COPPER_LOSS_FRACTION = 0.25  # legacy — used by old comments only
 REGEN_CURRENT_MAX_A = 40.0      # Ceiling: thermal / component limit
 
 # Regen control strategy selection
 # =================================
 # Keep the runtime choice explicit but limited to the only two supported
 # controllers: the PI reference controller and the AIMD-FF model.
-REGEN_STRATEGY = "aimd_ff"
+REGEN_STRATEGY = "motor_eff_ff"
 REGEN_STRATEGY_PARAMS = {
+    "motor_eff_ff": dict(target_eta=0.70),
     # Tuned 2026-04-21 (run 20260421_054733, scipy DE, maxiter=200
     # popsize=36 polish=80 seeds=[7, 42, 123], robust_cvar20).
     # First tune under the static-friction scoring baseline (baseline
@@ -180,6 +187,28 @@ REGEN_STRATEGY_PARAMS = {
         ki=0.20315699098530135,
         decel_target=0.7820535082009775,
     ),
+    "fixed_ff": dict(
+        k=0.10413268626528605,
+    ),
+    # JERK_BOUNDARY_FF_AUTOGEN_START
+    # composite=60.37 | robust mean=59.6 ±3.4 | DE seed=42 gen30 | run=20260422_002026
+    # Note: unlock_thresh_jerk fixed at 80000 (not tuned — sim uses instantaneous unlock).
+    "jerk_boundary_ff": dict(
+        k=0.08000765817046386,
+        beta_md=0.13249021187667062,
+        unlock_thresh_jerk=80000.0,
+        k_ai=0.008837379693296482,
+    ),
+    # JERK_BOUNDARY_FF_AUTOGEN_END
+    # AIMD_MEAN_FF_AUTOGEN_START
+    # Composite 69.20 | E=66.4 T=71.2 S=73.7 | robust mean=68.0 ±2.4 | seed=42 run=20260421_215024
+    "aimd_mean_ff": dict(
+        k=0.10348902475263133,
+        beta_md=0.13600017774532458,
+        unlock_thresh_mean=198.0,
+        k_ai=0.02919838087036067,
+    ),
+    # AIMD_MEAN_FF_AUTOGEN_END
     # AIMD_FF_AUTOGEN_START
     # Composite 78.30 | E=67.8 T=83.7 S=86.3 | robust P5=72.7.
     "aimd_ff": dict(
