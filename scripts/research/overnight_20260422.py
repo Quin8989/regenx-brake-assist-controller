@@ -104,7 +104,7 @@ run_stage(
     log_name="stage3_tune.log",
     argv=[
         PY, "-m", "sim.run_tune",
-        "--strategies", "fixed_ff,pi_controller,aimd_ff,aimd_mean_ff",
+        "--strategies", "fixed_ff,pi_controller,aimd_ff",
         "--seeds", "7,42,123",
         "--maxiter", "200",
         "--popsize", "36",

@@ -1,9 +1,9 @@
-"""sim.run_gallery - Generate interactive HTML gallery for selected strategies.
+﻿"""sim.run_gallery - Generate interactive HTML gallery for selected strategies.
 
 Charts:
-  0. Motor Efficiency Map: RPM × carrier torque → η(%) — static reference.
+  0. Motor Capture Map: RPM Ã— carrier torque â†’ Î·(%) â€” static reference.
   1. Trajectory: free-decel speed decay, deceleration & operating-point traces
-     — brake, mass & speed sliders.
+     â€” brake, mass & speed sliders.
 
 Usage:
     python -m sim.run_gallery --strategies pi_controller,aimd_ff
@@ -19,13 +19,12 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import numpy as np
 
 from .physics import simulate
-from .scoring import score
 from .strategies import STRATEGY_BY_NAME, parse_strategy_names, strategy_classes_from_names
 from .plotting import generate_efficiency_gallery_html
 from config.settings import REGEN_STRATEGY_PARAMS
 
 # =====================================================================
-#  Best-known parameters — read from config/settings.py so they stay
+#  Best-known parameters â€” read from config/settings.py so they stay
 #  in sync with run_tune results.  Strategies not in the settings dict
 #  fall back to their class defaults.
 # =====================================================================
@@ -52,13 +51,27 @@ TAG = "eff_"
 #  Batch worker (top-level for pickling)
 # =====================================================================
 
+# Shared scorer: sim/scoring.score_log is the single source of truth for
+# the capture/fidelity/composite formulas across numpy, the gallery, and
+# (via sim/jax/scoring.py) the JAX-accelerated tuner.  Keep it that way.
+from .scoring import score_log
+
+_SPEED_CUTOFF_KMH = 2.0
+
+
+def _free_decel_score(r):
+    """Single-case score for a free-decel trajectory.  Thin wrapper
+    around :func:`sim.scoring.score_log` with no brake mask (the whole
+    trajectory is a braking scenario)."""
+    return score_log(r, brake_mask=None)
+
+
 def _w_trajectory_batch(strat_cls, params, brk, mass, speeds, t_end):
     results = []
     for v0 in speeds:
         s = strat_cls(**params)
         r = simulate(s, float(brk), v0_kmh=float(v0), mass_kg=float(mass),
                      t_end=t_end, constant_speed=False)
-        sc = score(r, float(mass), emergency=False)
         results.append({
             'speed': r['speed'].copy(),
             'speed_baseline': r['speed_baseline'].copy(),
@@ -68,7 +81,7 @@ def _w_trajectory_batch(strat_cls, params, brk, mass, speeds, t_end):
             'brake_demand': r['brake_demand'].copy(),
             'p_elec': r['p_elec'].copy(),
             'locked': r['locked'].copy(),
-            'score': sc,
+            'score': _free_decel_score(r),
         })
     return results
 
@@ -149,7 +162,7 @@ def collect_trajectory(pool, strat_classes, best):
 
 def _parse_args():
     p = argparse.ArgumentParser(
-        description="Generate interactive efficiency gallery for selected strategies.",
+        description="Generate interactive capture gallery for selected strategies.",
     )
     p.add_argument(
         "--strategies",
@@ -179,7 +192,7 @@ if __name__ == "__main__":
     n_traj = len(strat_classes) * len(TRAJ_BRAKES) * len(TRAJ_MASSES) * len(CHART_SPEEDS)
 
     print("=" * 70)
-    print("  RegenX \u2014 Efficiency Gallery")
+    print("  RegenX \u2014 capture Gallery")
     print(f"  Strategies: {', '.join(strategy_names)}")
     print(f"  Workers: {MAX_WORKERS}")
     print(f"  Trajectory sims: {n_traj}")

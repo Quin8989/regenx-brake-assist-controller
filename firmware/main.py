@@ -10,9 +10,8 @@
 import sys
 
 from app.controller import AppController
-from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX, VCAP_MIN_OPERATING
+from config.settings import CONTINUE_ON_MAIN_LOOP_EXCEPTION, EXCEPTION_LOG_MAX, LCD_TYPE, VCAP_MIN_OPERATING
 from core import FaultCode, FaultManager, SharedState, SystemState
-from drivers.lcd_driver import LCDDriver
 from drivers.gpio_io import ResetButton
 from drivers.throttle import Throttle
 from services.control_loop import ControlLoop
@@ -29,6 +28,22 @@ runtime_refs = {
     "bench_logger": None,
     "state": None,
 }
+
+
+def _make_lcd():
+    """Instantiate the LCD driver selected in settings.LCD_TYPE.
+
+    Importing is lazy so we only pull in the `machine.I2C` bindings when
+    the I2C backpack is actually configured, and vice-versa — keeps the
+    parallel-LCD build size unchanged.
+    """
+    if LCD_TYPE == "i2c":
+        from drivers.lcd_driver_i2c import LCDDriver as _LCD
+    elif LCD_TYPE == "parallel":
+        from drivers.lcd_driver import LCDDriver as _LCD
+    else:
+        raise ValueError("settings.LCD_TYPE must be 'parallel' or 'i2c'")
+    return _LCD()
 
 
 def dump_bench_log(clear=False):
@@ -104,7 +119,7 @@ def main():
     # --- Drivers (LCD init has ~60 ms of blocking sleeps) ---
     throttle = Throttle()
     reset_button = ResetButton()
-    lcd = LCDDriver()
+    lcd = _make_lcd()
     wdt.feed()  # buy another 8 s after driver init
 
     # --- Services ---

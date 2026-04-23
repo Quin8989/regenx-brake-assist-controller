@@ -202,19 +202,21 @@ class CandidateEvaluator:
         t_sim = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        energy_B, linearity_B, composite_B = score_rides_jax(
+        efficiency_B, feel_B, composite_B = score_rides_jax(
             t=on_logs["t"], speed_on=on_logs["speed"],
-            p_elec=on_logs["p_elec"], p_copper=on_logs["p_copper"],
-            p_brake=on_logs["p_brake"], eta=on_logs["eta"],
-            speed_off=self._speed_off,
+            speed_base=on_logs["speed_baseline"],
+            p_elec=on_logs["p_elec"],
+            p_copper=on_logs["p_copper"],
+            p_brake=on_logs["p_brake"],
+            brake_demand=on_logs["brake_demand"],
             brake_mask=self._brake_mask,
             n_valid=self._n_valid,
         )
         composite_B.block_until_ready()
         t_score = time.perf_counter() - t0
 
-        e_np = np.asarray(energy_B)
-        l_np = np.asarray(linearity_B)
+        e_np = np.asarray(efficiency_B)
+        f_np = np.asarray(feel_B)
 
         # Group by perturbation index (outer = ride, inner = pert).
         n_pert = len(self.perturbations)
@@ -223,11 +225,11 @@ class CandidateEvaluator:
         for pi in range(n_pert):
             idxs = [ri * n_pert + pi for ri in range(n_rides)]
             e_ride = e_np[idxs]
-            l_ride = l_np[idxs]
+            f_ride = f_np[idxs]
             prof_names = [self.rides[ri].profile for ri in range(n_rides)]
             weights = {n: PROFILES[n].weight for n in PROFILES}
             _, _, c_w = profile_weighted_composite(
-                e_ride, l_ride, prof_names, weights)
+                e_ride, f_ride, prof_names, weights)
             composites_per_pert[pi] = c_w
 
         nominal = float(composites_per_pert[0])

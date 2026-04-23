@@ -25,7 +25,7 @@ args = parser.parse_args()
 
 os.environ["JAX_ENABLE_X64"] = "1" if args.mode == "fp64" else "0"
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 cache_dir = _REPO_ROOT / ".jax_cache"
 if args.clear and cache_dir.exists():
     shutil.rmtree(cache_dir)

@@ -2,6 +2,10 @@
 
 The firmware-owned implementation lives in ``firmware/regen`` and is the
 single source of truth. Sim imports from here for backward compatibility.
+
+The ``neural_teacher`` strategy is registered here (not in firmware) —
+the MLP is too large to run on the Pico, so firmware ships a PySR-
+distilled symbolic form instead.
 """
 
 from regen.strategies import (  # noqa: F401
@@ -10,6 +14,16 @@ from regen.strategies import (  # noqa: F401
     AimdFfRegenStrategy,
     PiSlipRegenStrategy,
 )
+
+from .neural_teacher_strategy import NeuralTeacherStrategy  # noqa: F401
+from .neural_teacher_gru_strategy import NeuralTeacherGRUStrategy  # noqa: F401
+
+
+# Register sim-only strategies into the shared lookup so the gallery
+# and tuner can dispatch them by name.
+STRATEGY_BY_NAME = dict(STRATEGY_BY_NAME)
+STRATEGY_BY_NAME[NeuralTeacherStrategy.key] = NeuralTeacherStrategy
+STRATEGY_BY_NAME[NeuralTeacherGRUStrategy.key] = NeuralTeacherGRUStrategy
 
 
 DEFAULT_STRATEGY_NAMES = tuple(STRATEGY_BY_NAME.keys())

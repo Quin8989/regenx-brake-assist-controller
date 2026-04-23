@@ -16,6 +16,13 @@ htmlcov/
 # Sim output (large generated HTML / logs)
 sim/output/
 
+# Root-level diagnostic logs
+/*.log
+
+# Regeneratable PySR imitation dataset (rebuilt by
+# scripts/pysr/collect_imitation_dataset.py)
+/data/pysr_aimd_imitation.csv
+
 # JAX persistent XLA compile cache
 .jax_cache/
 

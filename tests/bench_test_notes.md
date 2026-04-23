@@ -118,24 +118,24 @@ there is no I²C involved.
 
 ## Stage 9 — Rotor spin-down (verifies `T_DRAG_COEFF`)
 
-**Why.**  `T_DRAG_COEFF = 0.0037 Nm·s/rad` in `sim/physics.py` was
-derived from a bench observation: with the front wheel in the air on
-the bench, LCD showing ~30 km/h (w_rotor ≈ 121 rad/s through the
-4.8:1 planetary), release throttle + band brake — the motor rotor
-visibly comes to rest in ~0.5 s while the wheel freewheels on for
-tens of seconds.  This stage confirms the decay constant with
-timed data.
+**Why.**  `T_DRAG_COEFF = 0.0012 Nm·s/rad` in `sim/physics.py` was
+derived from a bench observation (2026-04-22): with the front wheel
+in the air on the bench, LCD showing ~35 km/h (w_rotor ≈ 141 rad/s
+through the 4.8:1 planetary), release throttle + band brake — the
+motor rotor visibly comes to rest in ~1.5 s while the wheel
+freewheels on for tens of seconds.  This stage confirms the decay
+constant with timed data.
 
 - [ ] Warm the motor under assist for ~30 s so bearings are at
       temperature.
-- [ ] Bring up to ~30 km/h (wheel-in-air), then release throttle *and*
+- [ ] Bring up to ~35 km/h (wheel-in-air), then release throttle *and*
       the band brake simultaneously.  Start logging `vesc_mech_rpm`
       via the bench logger (2 Hz) or slow-mo video of a reference
       mark on the rotor if telemetry is too slow.
 - [ ] Fit `ω(t) = ω₀·exp(-t/τ)` to the decay.  Record `τ`.
-- [ ] Expected: `τ ≈ 0.10 – 0.15 s`.  If τ is much longer,
-      `T_DRAG_COEFF` should be reduced (`b = J_rotor / τ`, with
-      `J_rotor ≈ 4.4e-4 kg·m²` from rotor dimensions/mass).
+- [ ] Expected: `τ ≈ 0.35 – 0.40 s` (visible-rest time ≈ 4τ ≈ 1.4–1.6 s).
+      If τ differs, update `T_DRAG_COEFF` via `b = J_rotor / τ` with
+      `J_rotor ≈ 4.4e-4 kg·m²` from rotor dimensions/mass.
 - [ ] The wheel will keep spinning for tens of seconds on its bearing
       drag alone — that is expected (freewheel disengaged, wheel
       decoupled from rotor).
@@ -150,7 +150,7 @@ timed data.
       in `sim/physics.py` valid.  Save as `data/phase3_trace.csv`.
 - [ ] Run `python -m sim.identify data/phase3_trace.csv`.
 - [ ] Target: `iq_rms < 5 A` with the updated `J_CARRIER = 0.015` and
-      `T_DRAG_COEFF = 0.0037`.
+      `T_DRAG_COEFF = 0.0012`.
 - [ ] Existing traces (`drill`, `ride`, `phase2`) give very large
       residuals (76 / 128 / 521 A RMS) because the brake force was not
       held constant and/or the freewheel was disengaged — the current

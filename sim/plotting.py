@@ -18,17 +18,22 @@ from config.settings import (
 from .physics import ETA_GEAR, GEAR_N, KT, MU_K, MU_S, T_DRAG_COEFF
 
 
+# High-contrast, color-blind-friendlier palette.  Each strategy gets a
+# unique hue so overlays stay readable when 3+ strategies are plotted.
 STRATEGY_COLORS = {
-    "pi_controller": "#d1495b",
-    "aimd_ff": "#00798c",
+    "fixed_ff":     "#e76f51",  # warm coral
+    "pi_controller": "#d1495b",  # crimson
+    "aimd_ff":      "#00798c",  # teal
 }
 
 _DEFAULT_COLORS = [
+    "#e76f51",
     "#d1495b",
     "#00798c",
+    "#6a4c93",
     "#edae49",
     "#30638e",
-    "#6a4c93",
+    "#2a9d8f",
 ]
 
 
@@ -44,11 +49,12 @@ def _to_u8_b64(values):
     return base64.b64encode(clipped.tobytes()).decode("ascii")
 
 
-def _build_motor_map(cols=200, rows=120):
+def _build_motor_map(cols=200, rows=60):
     rpm = np.linspace(0.0, 2000.0, cols)
     tq_scale = (1.0 + GEAR_N) * KT * ETA_GEAR
     tq_abs_max = tq_scale * I_MAX
-    tq = np.linspace(-tq_abs_max, tq_abs_max, rows)
+    # Generator-only: regen-braking region (negative carrier torque).
+    tq = np.linspace(-tq_abs_max, 0.0, rows)
 
     rpm_grid, tq_grid = np.meshgrid(rpm, tq)
     current = np.abs(tq_grid) / max(tq_scale, 1e-9)
@@ -58,8 +64,13 @@ def _build_motor_map(cols=200, rows=120):
     p_copper = 1.5 * R_PHASE * current * current
     p_drag = T_DRAG_COEFF * omega_m
     p_cap = np.maximum(0.0, np.minimum(VESC_WATT_MAX, p_emf - p_copper - p_drag))
-    denom = p_cap + p_copper + p_drag
-    eta = np.divide(p_cap, denom, out=np.zeros_like(p_cap), where=denom > 1e-9)
+    # Device-level efficiency: include planetary-gear loss so the peak
+    # is honest (a ~95% motor through a ~97% gear still caps near 92%).
+    # p_mech_carrier = p_motor_shaft / ETA_GEAR, so divide the captured
+    # energy by the carrier-side mechanical input.
+    p_mech_motor = p_cap + p_copper + p_drag
+    p_mech_carrier = p_mech_motor / max(ETA_GEAR, 1e-6)
+    eta = np.divide(p_cap, p_mech_carrier, out=np.zeros_like(p_cap), where=p_mech_carrier > 1e-9)
 
     mmap_max = float(np.max(eta)) if eta.size else 1.0
     mmap_u8 = 255.0 * eta / max(mmap_max, 1e-9)
@@ -100,11 +111,35 @@ def _serialize_scores(score_dict):
     if not score_dict:
         return None
     return {
-        "energy": float(score_dict["energy"]),
-        "tracking": float(score_dict["tracking"]),
-        "smoothness": float(score_dict["smoothness"]),
+        "capture": float(score_dict["capture"]),
+        "fidelity": float(score_dict["fidelity"]),
         "composite": float(score_dict["composite"]),
+        "energy_J":   float(score_dict.get("energy_J", 0.0)),
+        "peak_decel": float(score_dict.get("peak_decel", 0.0)),
+        "peak_jerk":  float(score_dict.get("peak_jerk", 0.0)),
     }
+
+
+def _basket_summary(strategy_names, traj_data):
+    """Mean aggregate across the full (brake x mass x speed) basket.
+
+    Powers the ranked summary + energy bar chart.  Keeping it Python-side
+    avoids reconstructing arrays in JS and keeps the payload small.
+    """
+    summary = {}
+    for label in strategy_names:
+        vals = {"capture": [], "fidelity": [], "composite": [],
+                "energy_J": [], "peak_decel": [], "peak_jerk": []}
+        for _, data in traj_data[label].items():
+            for sc in data["scores"]:
+                if sc is None:
+                    continue
+                for k in vals:
+                    vals[k].append(float(sc.get(k, 0.0)))
+        summary[label] = {
+            k: (float(np.mean(v)) if v else 0.0) for k, v in vals.items()
+        }
+    return summary
 
 
 def _sample_indices(n_points, target=240):
@@ -175,6 +210,7 @@ def generate_efficiency_gallery_html(
     sample_idx = _sample_indices(len(t_traj), target=120)
     t_traj_sampled = np.asarray(t_traj)[sample_idx]
     traj_payload = _serialize_traj_payload(strategy_names, traj_data, speeds, sample_idx)
+    basket_summary = _basket_summary(strategy_names, traj_data)
 
     html = Template(
         r'''<!DOCTYPE html>
@@ -202,7 +238,7 @@ def generate_efficiency_gallery_html(
     text-align: center;
     color: #52606d;
     margin-bottom: 20px;
-    font-size: 1rem;
+    font-size: 1.05rem;
     line-height: 1.6;
   }
   h2 {
@@ -217,7 +253,7 @@ def generate_efficiency_gallery_html(
     padding: 14px 18px;
     border-left: 5px solid #3e7cb1;
     margin: 12px 0;
-    font-size: 0.97rem;
+    font-size: 1.02rem;
     line-height: 1.65;
     box-shadow: 0 1px 4px rgba(16, 42, 67, 0.08);
   }
@@ -285,7 +321,7 @@ def generate_efficiency_gallery_html(
     gap: 10px;
     flex-wrap: wrap;
     padding: 8px 16px 14px;
-    font-size: 0.9rem;
+    font-size: 0.98rem;
     color: #52606d;
   }
   .score-strip {
@@ -305,7 +341,7 @@ def generate_efficiency_gallery_html(
   }
   .score-chip .k {
     display: block;
-    font-size: 0.76rem;
+    font-size: 0.92rem;
     color: #52606d;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -313,37 +349,50 @@ def generate_efficiency_gallery_html(
   }
   .score-chip .v {
     display: block;
-    font-size: 1rem;
+    font-size: 1.02rem;
     font-weight: 800;
     color: #102a43;
     margin-top: 4px;
     line-height: 1.4;
   }
+  .score-chip .v .chip-line {
+    display: block;
+  }
+  .score-chip .v .chip-sub {
+    display: block;
+    font-size: 0.94rem;
+    font-weight: 600;
+    color: #52606d;
+    margin-top: 4px;
+    letter-spacing: 0.1px;
+  }
   .score-note {
     padding: 0 16px 12px;
-    font-size: 0.85rem;
+    font-size: 0.95rem;
     color: #616e7c;
   }
   .mfrac {
     display: inline-block;
     text-align: center;
     vertical-align: middle;
-    line-height: 1.2;
-    font-size: 0.88em;
-    margin: 0 2px;
+    line-height: 1.25;
+    font-size: 1em;
+    margin: 0 4px;
+    min-width: 160px;
   }
-  .mfrac > span { display: block; }
-  .mfrac > span:first-child { border-bottom: 1px solid #243b53; padding: 0 3px 2px; }
-  .mfrac > span:last-child  { padding: 2px 3px 0; }
+  .mfrac > span { display: block; white-space: nowrap; }
+  .mfrac > span:first-child { border-bottom: 1px solid #243b53; padding: 0 6px 3px; }
+  .mfrac > span:last-child  { padding: 3px 6px 0; }
   .score-formula-table {
     width: 100%;
     border-collapse: collapse;
     margin: 10px 0 4px;
-    font-size: 0.88rem;
+    font-size: 0.99rem;
+    table-layout: auto;
   }
   .score-formula-table th {
     text-align: left;
-    font-size: 0.76rem;
+    font-size: 0.9rem;
     color: #52606d;
     border-bottom: 2px solid #d9e2ec;
     padding: 3px 10px;
@@ -351,12 +400,42 @@ def generate_efficiency_gallery_html(
     letter-spacing: 0.5px;
   }
   .score-formula-table td {
-    padding: 6px 10px;
+    padding: 10px 12px;
     vertical-align: middle;
     border-bottom: 1px solid #e5e7eb;
+    line-height: 1.6;
   }
-  .score-formula-table td:first-child { white-space: nowrap; }
-  .score-formula-table td:nth-child(2) { white-space: nowrap; color: #1f5f8b; font-weight: 700; }
+  .score-formula-table td:first-child { white-space: nowrap; width: 110px; }
+  .score-formula-table td:nth-child(2) { white-space: nowrap; color: #1f5f8b; font-weight: 700; width: 70px; }
+  .score-formula-table td:nth-child(3) { min-width: 320px; white-space: nowrap; }
+  .strategy-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 10px 0 4px;
+    font-size: 0.97rem;
+    table-layout: auto;
+  }
+  .strategy-table th {
+    text-align: left;
+    font-size: 0.9rem;
+    color: #52606d;
+    border-bottom: 2px solid #d9e2ec;
+    padding: 3px 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .strategy-table td {
+    padding: 12px;
+    vertical-align: top;
+    border-bottom: 1px solid #e5e7eb;
+    line-height: 1.55;
+  }
+  .strategy-table td:first-child { white-space: nowrap; width: 150px; font-weight: 700; color: #1f5f8b; }
+  .strategy-table td:first-child small { display: block; font-weight: 400; color: #829ab1; font-size: 0.82rem; margin-top: 2px; }
+  .strategy-table td:nth-child(2) { min-width: 260px; font-family: "Cambria Math", Cambria, serif; font-size: 1.0rem; color: #243b53; }
+  .strategy-table td:nth-child(2) small { color: #627d98; font-size: 0.82rem; display: block; margin-top: 3px; font-family: inherit; }
+  .strategy-table ul.term-list { margin: 6px 0 0; padding-left: 18px; }
+  .strategy-table ul.term-list li { margin: 2px 0; }
   .lock-swatch {
     width: 18px;
     height: 18px;
@@ -376,64 +455,122 @@ def generate_efficiency_gallery_html(
 <body>
 <h1>RegenX - Strategy Gallery (Scoring-Aligned)</h1>
 <p class="subtitle">
-  Shared overlays for direct comparison. The lower operating-point map auto-zooms to the active traces.
-  <br>
+  Shared overlays for direct comparison.
   Per-trace scores are single-scenario (free decel at the selected brake, mass, and initial speed).
-  The tune's composite is a weighted average over 12 scenarios; numbers here will not match the tune summary.
+  The tune's composite is a weighted average over the full ride basket; numbers here will not match the tune summary.
 </p>
 
-<h2>Motor / Generator Efficiency Reference Map</h2>
+<h2>Generator Efficiency Reference Map</h2>
 <div class="note">
-  Instantaneous regen efficiency of the BLDC generator through the planetary gear. This is a reference map, not the scoring energy metric.
-  The scoring energy dimension is harvested electrical energy divided by the total power the device is processing (copper + rotor drag + band heat + electrical capture).
-  <br><br>
-  <b>X-axis:</b> motor RPM. The top axis shows equivalent wheel speed with the carrier locked.
-  <br>
-  <b>Y-axis:</b> carrier torque from the motor. Negative torque is regen braking support.
+  <b>X-axis:</b> motor RPM (top axis shows equivalent wheel speed).<br>
+  <b>Y-axis:</b> carrier-side regen torque commanded by the motor (negative = generator).<br>
+  <b>Colour:</b> instantaneous device efficiency &eta; &mdash; fraction of mechanical power at the carrier that becomes battery current, at steady-state for this one operating point. Includes copper, rotor drag, and planetary-gear loss; excludes band-slip heat, wire / connector, and VESC switching losses.
 </div>
 <div id="sec-motor-map"></div>
 
 <h2>How Scores Are Calculated</h2>
 <div class="note">
-  Each strategy is evaluated on <b>10 scenarios</b> (everyday city &amp; road braking, 10&ndash;40 km/h, 0.15&ndash;1.1 m/s²), scored on three independent dimensions (0&ndash;100).
-  Emergency scenarios (decel &ge; 1 m/s²) drop the energy weight to 0 and raise tracking to 80&thinsp;%.
   <table class="score-formula-table">
-    <thead><tr><th>Dimension</th><th>Normal&thinsp;/&thinsp;Emergency weight</th><th>Formula</th><th>Notes</th></tr></thead>
+    <thead><tr><th>Dimension</th><th>Weight</th><th>Formula</th><th>Symbols</th></tr></thead>
     <tbody>
     <tr>
-      <td><b>Energy</b></td>
-      <td>40&thinsp;% &thinsp;/&thinsp; 0&thinsp;%</td>
-      <td>S<sub>E</sub> = 100 &sdot; <span class="mfrac"><span>&int; P<sub>elec</sub> dt</span><span>&int; (P<sub>elec</sub>+P<sub>cu</sub>+P<sub>drag</sub>+P<sub>band</sub>) dt</span></span></td>
-      <td>Device conversion efficiency (harvested &divide; total device-side power)</td>
+      <td><b>Capture</b> S<sub>C</sub></td>
+      <td>40&thinsp;%</td>
+      <td>S<sub>C</sub> = 100 &sdot; clamp<span class="mfrac"><span>&int; P<sub>elec</sub> dt</span><span>&int; (&tau;<sub>brake</sub> &sdot; &omega;<sub>ours</sub>) dt</span></span></td>
+      <td>
+        <ul class="term-list">
+          <li><b>P<sub>elec</sub></b> &mdash; net electrical power into the cap (post-copper, post-ESR).</li>
+          <li><b>&tau;<sub>brake</sub></b> &mdash; rider's commanded brake torque.</li>
+          <li><b>&omega;<sub>ours</sub></b> &mdash; wheel speed <em>under this strategy</em>.</li>
+          <li><b>Denominator</b> &mdash; brake energy an ideal friction brake would remove right now.</li>
+        </ul>
+      </td>
     </tr>
     <tr>
-      <td><b>Tracking</b></td>
-      <td>40&thinsp;% &thinsp;/&thinsp; 80&thinsp;%</td>
-      <td>S<sub>T</sub> = 100 &sdot; clamp<span style="font-size:0.9em">&thinsp;(1 &minus; <span class="mfrac"><span>mean|a<sub>ours</sub> &minus; a<sub>base</sub>|</span><span>mean|a<sub>base</sub>|</span></span>,&thinsp;0,&thinsp;1)</span></td>
-      <td>Wheel-decel error vs. a traditional wheel brake (pads sliding, torque = brake&sdot;&mu;<sub>k</sub>/&mu;<sub>s</sub>)</td>
-    </tr>
-    <tr>
-      <td><b>Smoothness</b></td>
-      <td>20&thinsp;% &thinsp;/&thinsp; 20&thinsp;%</td>
-      <td>S<sub>J</sub> = 100 &sdot; max<span style="font-size:0.9em">&thinsp;(0,&thinsp;1 &minus; <span class="mfrac"><span>J<sub>RMS</sub></span><span>J<sub>ref</sub></span></span>)&emsp;J<sub>ref</sub> = 10&thinsp;m/s&sup3;</span></td>
-      <td>RMS jerk; J = d&sup2;v/dt&sup2;</td>
+      <td><b>Fidelity</b> S<sub>F</sub></td>
+      <td>60&thinsp;%</td>
+      <td>S<sub>F</sub> = 100 &sdot; clamp(1 &minus; <span class="mfrac"><span>&int; |P<sub>regen</sub> &minus; P<sub>base</sub>| dt</span><span>&int; P<sub>base</sub> dt</span></span>,&thinsp;0,&thinsp;1)</td>
+      <td>
+        <ul class="term-list">
+          <li><b>P<sub>regen</sub></b> = P<sub>elec</sub> + P<sub>copper</sub> + P<sub>band</sub> &mdash; total power pulled from the wheel.</li>
+          <li><b>P<sub>base</sub></b> = &tau;<sub>brake</sub> &sdot; &omega;<sub>ours</sub> &mdash; ideal-friction-brake target.</li>
+          <li>L1 tracking error, symmetric: over- and under-engagement cost the same.</li>
+        </ul>
+      </td>
     </tr>
     <tr>
       <td><b>Composite</b></td>
       <td>&mdash;</td>
-      <td>S<sub>C</sub> = w<sub>E</sub>&sdot;S<sub>E</sub> + w<sub>T</sub>&sdot;S<sub>T</sub> + w<sub>J</sub>&sdot;S<sub>J</sub></td>
-      <td>Displayed score is the <em>single-case</em> result for the current slider selection</td>
+      <td>0.40&sdot;S<sub>C</sub> + 0.60&sdot;S<sub>F</sub></td>
+      <td>Fidelity-weighted fitness: chasing joules can&rsquo;t beat tracking the rider.</td>
     </tr>
     </tbody>
   </table>
 </div>
 
-<h2>Trajectory: Speed Decay &amp; Operating-Point Overlays</h2>
+<h2>Strategies in This Gallery</h2>
 <div class="note">
-  The two active strategies are drawn on the same charts so you can compare decay shape, braking aggressiveness, and operating-point path directly.
-  The lower map uses the same reference efficiency background but zooms to the displayed trajectories.
-  Hover the operating-point map to read off RPM, torque and instantaneous efficiency.
+  <table class="strategy-table">
+    <thead><tr><th>Strategy</th><th>Controller law</th><th>What each term does</th></tr></thead>
+    <tbody>
+    <tr>
+      <td><b>fixed_ff</b><br/><small>feed-forward only</small></td>
+      <td>i<sub>q</sub> = k &sdot; &tau;<sub>brake</sub></td>
+      <td>
+        Pure proportional feed-forward: commanded regen current scales linearly with rider brake demand. Single tuned parameter.
+        <ul class="term-list">
+          <li><b>k</b> &mdash; feed-forward gain (A per N&middot;m of brake demand). Higher k = more aggressive capture but easier to overshoot P<sub>base</sub> and lose fidelity.</li>
+        </ul>
+        <em>No feedback, no state.</em> Can't adapt to wheel speed, slip, or motor loading &mdash; the baseline.
+      </td>
+    </tr>
+    <tr>
+      <td><b>pi_controller</b><br/><small>decel PI</small></td>
+      <td>i<sub>q</sub> = k<sub>ff</sub>&sdot;(1 + k<sub>i</sub> &sdot; &int;&thinsp;e dt) &sdot; &lambda;&omega;<sub>e</sub>/R,&emsp;e = (|&Delta;rpm|/rpm) &minus; &alpha;&sdot;(i<sub>q</sub>/rpm)</td>
+      <td>
+        PI on the rider's <i>external</i> decel proxy: observed speed-normalised decel minus the portion attributable to motor regen. When the rider pulls harder than motor torque alone can explain, the integrator grows and gain climbs. Observation-only &mdash; uses signals the firmware's StrategyContext already carries.
+        <ul class="term-list">
+          <li><b>k<sub>ff</sub></b> &mdash; feed-forward gain (same role as fixed_ff's k).</li>
+          <li><b>k<sub>i</sub></b> &mdash; integral gain on the external-decel residual. Positive polarity: more residual &rarr; more regen.</li>
+          <li><b>&alpha;</b> &mdash; couples q-axis current to expected motor-induced decel. Large &alpha; makes the PI attribute more observed decel to the motor (conservative); small &alpha; attributes more to the rider (aggressive).</li>
+        </ul>
+      </td>
+    </tr>
+    <tr>
+      <td><b>aimd_ff</b><br/><small>additive-increase / multiplicative-decrease w/ feed-forward</small></td>
+      <td>i<sub>q</sub> = k &sdot; &tau;<sub>brake</sub> &sdot; g(slip)<br/><small>g ramps up by k<sub>ai</sub>, collapses by &beta;<sub>md</sub> on slip</small></td>
+      <td>
+        Feed-forward with a TCP-style slip-avoidance multiplier. When the motor isn't slipping, gain slowly grows (additive increase) to capture more energy; when slip is detected, gain collapses (multiplicative decrease) to hand control back to the band brake. Ships as the runtime default.
+        <ul class="term-list">
+          <li><b>k</b> &mdash; base feed-forward gain (A per N&middot;m).</li>
+          <li><b>k<sub>ai</sub></b> &mdash; additive-increase rate: how fast the gain multiplier climbs when the motor is well-behaved.</li>
+          <li><b>&beta;<sub>md</sub></b> &mdash; multiplicative-decrease fraction: how hard the gain collapses when slip is detected (e.g. 0.13 = cut gain to 87% per slip event).</li>
+          <li><b>unlock_thresh</b> &mdash; slip detection threshold (RPM units). Below this, no slip penalty; above, MD fires.</li>
+        </ul>
+        <em>Stateful and adaptive.</em> Wins the composite because it can push capture hard when safe and back off cleanly when the band brake needs to dominate.
+      </td>
+    </tr>
+    <tr>
+      <td><b>neural_teacher_gru</b><br/><small>learned policy (research)</small></td>
+      <td>i<sub>q</sub> = i<sub>q</sub><sup>prev</sup> + &Delta;<sub>max</sub> &sdot; tanh(GRU(features))</td>
+      <td>
+        A 32-unit GRU consuming 13 hand-crafted features (RPM, &Delta;RPM, jerk, slip, duty cycle, etc.) and emitting a bounded per-tick delta on the previous current command. Trained offline with evolutionary strategies on the same simulator, selected by held-out capture+fidelity.
+        <ul class="term-list">
+          <li><b>&Delta;<sub>max</sub></b> &mdash; per-tick current slew cap. Prevents the GRU from issuing a step change bigger than the motor can physically follow.</li>
+          <li><b>features</b> &mdash; RPM, drpm, iq, duty, vcap, prev-k, jerk, slip, decel fraction, d_iq, mechanical power.</li>
+          <li><b>hidden state</b> &mdash; 32-dim GRU memory; lets the policy integrate history (braking-onset spike detection, warm-up, etc.) without hand-coded state machines.</li>
+        </ul>
+        Research-only &mdash; not shipped to firmware. Used as a symbolic-regression teacher for analytic distillation.
+      </td>
+    </tr>
+    </tbody>
+  </table>
 </div>
+
+<h2>Energy Recovered This Scenario</h2>
+<div id="sec-energy-bar"></div>
+
+<h2>Trajectory: Speed Decay &amp; Operating-Point Overlays</h2>
 <div id="sec-trajectory"></div>
 
 
@@ -442,6 +579,7 @@ const LABELS = $labels;
 const NAMES = $names;
 const COLORS = $colors;
 const DATA = $traj_payload;
+const BASKET = $basket_summary;
 const T_TRAJ = $t_traj;
 const TRAJ_BRAKES = $traj_brakes;
 const TRAJ_MASSES = $traj_masses;
@@ -536,7 +674,7 @@ function interpLinear(xArr, yArr, xi) {
   return yArr[lo] * (1 - a) + yArr[hi] * a;
 }
 
-const MG = {top: 44, right: 124, bottom: 72, left: 88};
+const MG = {top: 44, right: 150, bottom: 72, left: 88};
 const CBAR_W = 16, CBAR_GAP = 10;
 
 function buildMotorMap() {
@@ -546,7 +684,7 @@ function buildMotorMap() {
   const hdr = document.createElement('div');
   hdr.className = 'strat-header';
   hdr.style.color = '#37474F';
-  hdr.textContent = 'BLDC Generator - Instantaneous Efficiency (Reference)';
+  hdr.textContent = 'Generator Efficiency (Reference)';
   card.appendChild(hdr);
 
   const wrap = document.createElement('div');
@@ -666,11 +804,6 @@ function buildMotorMap() {
     ctx.fillText('Regen Efficiency', 0, 0);
     ctx.restore();
 
-    ctx.font = 'bold 17px sans-serif';
-    ctx.fillStyle = '#102a43';
-    ctx.textAlign = 'center';
-    ctx.fillText('Motor Efficiency Reference - η(RPM, Torque)', W / 2, 24);
-
     cvs._plotGeom = {left: MG.left, top: MG.top, cellW, cellH, rows: MMAP_ROWS, cols: MMAP_COLS};
   }
 
@@ -746,7 +879,59 @@ function buildTrajectory() {
   const brk = addSlider('Band Brake Torque', 0, TRAJ_BRAKES.length - 1, defBrk);
   const mass = addSlider('Rider Mass', 0, TRAJ_MASSES.length - 1, defMass);
   const spd = addSlider('Initial Speed', 0, TRAJ_SPEEDS.length - 1, defSpd);
-  cont.appendChild(sliderWrap);
+
+  // ── Strategy toggles ─────────────────────────────────────────────
+  const enabled = {};
+  for (const lab of LABELS) enabled[lab] = true;
+  const toggleBox = document.createElement('div');
+  toggleBox.className = 'slider-box';
+  toggleBox.style.flexWrap = 'wrap';
+  const toggleLbl = document.createElement('label');
+  toggleLbl.textContent = 'Active Strategies';
+  toggleBox.appendChild(toggleLbl);
+  const toggleWrap = document.createElement('div');
+  toggleWrap.style.display = 'flex';
+  toggleWrap.style.flexWrap = 'wrap';
+  toggleWrap.style.gap = '8px';
+  toggleWrap.style.flex = '1';
+  const toggleBtns = {};
+  for (const lab of LABELS) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    const col = COLORS[lab] || '#607D8B';
+    btn.dataset.lab = lab;
+    btn.style.cursor = 'pointer';
+    btn.style.padding = '6px 12px';
+    btn.style.borderRadius = '16px';
+    btn.style.fontSize = '0.88rem';
+    btn.style.fontWeight = '700';
+    btn.style.border = '2px solid ' + col;
+    btn.textContent = shortName(NAMES[lab]);
+    function paint() {
+      if (enabled[lab]) {
+        btn.style.background = col;
+        btn.style.color = '#fff';
+        btn.style.opacity = '1';
+      } else {
+        btn.style.background = '#fff';
+        btn.style.color = col;
+        btn.style.opacity = '0.55';
+      }
+    }
+    btn.addEventListener('click', function() {
+      // Always keep at least one active.
+      const activeCount = LABELS.filter(function(l) { return enabled[l]; }).length;
+      if (enabled[lab] && activeCount === 1) return;
+      enabled[lab] = !enabled[lab];
+      paint();
+      updateAll();
+    });
+    paint();
+    toggleBtns[lab] = btn;
+    toggleWrap.appendChild(btn);
+  }
+  toggleBox.appendChild(toggleWrap);
+  sliderWrap.appendChild(toggleBox);
 
   const card = document.createElement('div');
   card.className = 'strat-card';
@@ -769,17 +954,12 @@ function buildTrajectory() {
     row.appendChild(title);
     const value = document.createElement('div');
     value.className = 'v';
-    value.textContent = 'Energy --  Tracking --  Smooth --  Composite --';
+    value.textContent = 'Capture --  Fidelity --  Composite --';
     row.appendChild(value);
     scoreStrip.appendChild(row);
     scoreRows[lab] = value;
   }
   card.appendChild(scoreStrip);
-
-  const scoreNote = document.createElement('div');
-  scoreNote.className = 'score-note';
-  scoreNote.textContent = 'Selected-case nominal score for the current brake, mass, and initial-speed setting.';
-  card.appendChild(scoreNote);
 
   function makeWrap() {
     const wrap = document.createElement('div');
@@ -802,6 +982,7 @@ function buildTrajectory() {
   row2.className = 'plot-row';
   const pMap = makeWrap();
   row2.appendChild(pMap.wrap);
+  card.appendChild(sliderWrap);
   card.appendChild(row2);
   card.appendChild(row1);
 
@@ -823,8 +1004,8 @@ function buildTrajectory() {
   }
   for (const lab of LABELS) addLegendLine(shortName(NAMES[lab]), COLORS[lab] || '#607D8B', false);
   addLegendLine('Direct wheel brake', BASE_COLOR, true);
-  addLegendLine('Static brake threshold', 'rgba(255,60,60,0.85)', true);
-  addLegendLine('Kinetic brake threshold', 'rgba(255,140,0,0.85)', true);
+  addLegendLine('Static brake threshold', '#c81e1e', true);
+  addLegendLine('Dynamic brake threshold', '#1565c0', true);
   card.appendChild(legend);
   cont.appendChild(card);
 
@@ -832,7 +1013,7 @@ function buildTrajectory() {
   const regenRows = [];
   for (let r = 0; r < MMAP_ROWS; r++) if (MMAP_TQ[r] <= 0) regenRows.push(r);
   const MG_T = {top: 46, right: 28, bottom: 62, left: 82};
-  const MG_M = {top: 52, right: 150, bottom: 80, left: 94};
+  const MG_M = {top: 62, right: 150, bottom: 80, left: 94};
 
   function baselineSpeedFromTrace(selected, j) {
     // Per-trace baseline wheel speed from the sim's parallel-integrated
@@ -850,6 +1031,7 @@ function buildTrajectory() {
     const key = bi + '_' + mi;
     const selected = [];
     for (const lab of LABELS) {
+      if (!enabled[lab]) continue;
       const traces = DATA[lab].traj[key];
       if (!traces || !traces[si]) continue;
       const tr = traces[si];
@@ -1202,7 +1384,7 @@ function buildTrajectory() {
     const cvs = pMap.cvs;
     const dpr = window.devicePixelRatio || 1;
     const W = cvs.parentElement.clientWidth;
-    const H = Math.round(W * 0.34);
+    const H = Math.round(W * 0.55);
     cvs.style.width = W + 'px';
     cvs.style.height = H + 'px';
     cvs.width = W * dpr;
@@ -1282,22 +1464,22 @@ function buildTrajectory() {
     const yKinetic = tqToY(tqKinetic);
     ctx.save();
     ctx.setLineDash([8, 4]);
-    ctx.strokeStyle = 'rgba(255,60,60,0.85)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#c81e1e';
+    ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.moveTo(mg.left, yStatic); ctx.lineTo(mg.left + plotW, yStatic); ctx.stroke();
     ctx.restore();
-    ctx.font = '12px sans-serif';
-    ctx.fillStyle = 'rgba(255,60,60,0.92)';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillStyle = '#b71c1c';
     ctx.textAlign = 'left';
     ctx.fillText('Static brake ' + state.brakeNm.toFixed(0) + ' Nm', mg.left + 8, Math.max(mg.top + 14, yStatic - 8));
     ctx.save();
     ctx.setLineDash([5, 5]);
-    ctx.strokeStyle = 'rgba(255,140,0,0.85)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#1565c0';
+    ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.moveTo(mg.left, yKinetic); ctx.lineTo(mg.left + plotW, yKinetic); ctx.stroke();
     ctx.restore();
-    ctx.fillStyle = 'rgba(255,140,0,0.95)';
-    ctx.fillText('Kinetic brake ' + (state.brakeNm * MU_K_OVER_MU_S).toFixed(0) + ' Nm', mg.left + 8, Math.max(mg.top + 30, yKinetic - 8));
+    ctx.fillStyle = '#0d47a1';
+    ctx.fillText('Dynamic brake ' + (state.brakeNm * MU_K_OVER_MU_S).toFixed(0) + ' Nm', mg.left + 8, Math.max(mg.top + 30, yKinetic - 8));
 
     for (const item of traces) {
       if (item.pts.length < 2) continue;
@@ -1358,13 +1540,13 @@ function buildTrajectory() {
     }
     ctx.font = '15px sans-serif';
     ctx.fillText('Motor RPM', mg.left + plotW / 2, mg.top + plotH + 60);
-    ctx.font = '12px sans-serif';
-    ctx.fillStyle = '#6b7780';
+    ctx.font = '14px sans-serif';
+    ctx.fillStyle = '#243b53';
     const rpmTicksTop = niceTicks(rpmMin, rpmMax, 6);
     for (const rpm of rpmTicksTop) {
       const x = mg.left + ((rpm - rpmMin) / rpmSpan) * plotW;
       const kmh = rpm / TRAJ_GEAR_N * 2 * Math.PI / 60 * TRAJ_R_WHEEL * 3.6;
-      ctx.fillText(kmh.toFixed(0) + ' km/h', x, mg.top - 12);
+      ctx.fillText(kmh.toFixed(0) + ' km/h', x, mg.top - 14);
     }
     ctx.textAlign = 'right';
     ctx.fillStyle = '#243b53';
@@ -1379,7 +1561,7 @@ function buildTrajectory() {
     ctx.translate(32, mg.top + plotH / 2);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
-    ctx.fillText('Carrier Torque (Nm)', 0, 0);
+    ctx.fillText('Motor-Commanded Carrier Torque (Nm)', 0, 0);
     ctx.restore();
 
     const cbX = mg.left + plotW + CBAR_GAP;
@@ -1411,7 +1593,7 @@ function buildTrajectory() {
     ctx.font = 'bold 16px sans-serif';
     ctx.fillStyle = '#102a43';
     ctx.textAlign = 'center';
-    ctx.fillText('Operating-Point Overlay (Auto-Zoomed)', mg.left + plotW / 2, 26);
+    ctx.fillText('Operating-Point Overlay', mg.left + plotW / 2, 26);
 
     cvs._mapGeom = {left: mg.left, top: mg.top, plotW, plotH, rpmMin: state._rpmMin, rpmSpan: state._rpmSpan, tqMin: state._tqMin, tqSpan: state._tqSpan};
   }
@@ -1422,18 +1604,31 @@ function buildTrajectory() {
     mass.val.textContent = state.massKg + ' kg';
     spd.val.textContent = state.spdKmh + ' km/h';
     for (const lab of LABELS) {
+      const row = scoreRows[lab];
+      const chip = row.parentElement;
+      chip.style.display = enabled[lab] ? '' : 'none';
       const item = state.selected.find(function(x) { return x.lab === lab; });
       if (!item || !item.tr.score) {
-        scoreRows[lab].textContent = 'Energy --  Tracking --  Smooth --  Composite --';
+        row.innerHTML = '<span class="chip-line">Capture --  Fidelity --  Composite --</span>';
         continue;
       }
       const sc = item.tr.score;
-      scoreRows[lab].textContent = 'Energy ' + sc.energy.toFixed(1) + '  Tracking ' + sc.tracking.toFixed(1) + '  Smooth ' + sc.smoothness.toFixed(1) + '  Composite ' + sc.composite.toFixed(1);
+      const e  = sc.energy_J || 0;
+      const pd = sc.peak_decel || 0;
+      const pj = sc.peak_jerk || 0;
+      row.innerHTML =
+        '<span class="chip-line">Capture ' + sc.capture.toFixed(1) +
+          '  Fidelity ' + sc.fidelity.toFixed(1) +
+          '  Composite ' + sc.composite.toFixed(1) + '</span>' +
+        '<span class="chip-sub">Energy ' + e.toFixed(0) + ' J' +
+          '    Peak decel ' + pd.toFixed(2) + ' m/s\u00b2' +
+          '    Peak jerk ' + pj.toFixed(1) + ' m/s\u00b3</span>';
     }
     drawSpeed(state);
     drawAccel(state);
     drawJerk(state);
     drawMap(state);
+    if (window.__updateEnergyBar) window.__updateEnergyBar(state);
   }
 
   brk.inp.addEventListener('input', updateAll);
@@ -1479,6 +1674,134 @@ function buildTrajectory() {
   });
 }
 
+function buildEnergyBar() {
+  const cont = document.getElementById('sec-energy-bar');
+  if (!cont) return;
+  const card = document.createElement('div');
+  card.className = 'strat-card';
+  const hdr = document.createElement('div');
+  hdr.className = 'strat-header';
+  hdr.style.color = '#37474F';
+  hdr.textContent = 'Energy Recovered -- Selected Scenario';
+  card.appendChild(hdr);
+  const wrap = document.createElement('div');
+  wrap.className = 'chart-wrap';
+  wrap.style.padding = '12px 20px 20px';
+  const cvs = document.createElement('canvas');
+  cvs.className = 'heatmap';
+  wrap.appendChild(cvs);
+  card.appendChild(wrap);
+  cont.appendChild(card);
+
+  let latestState = null;
+
+  function render() {
+    if (!latestState) return;
+    const rows = [];
+    for (const item of latestState.selected) {
+      const e = (item.tr && item.tr.score) ? (item.tr.score.energy_J || 0.0) : 0.0;
+      rows.push({lab: item.lab, label: shortName(NAMES[item.lab]),
+                 energy: e, color: item.color || COLORS[item.lab] || '#607D8B'});
+    }
+    if (!rows.length) return;
+    rows.sort(function(a, b) { return b.energy - a.energy; });
+
+    const dpr = window.devicePixelRatio || 1;
+    const W = wrap.clientWidth;
+    const barH = 34, gap = 14, topPad = 12, botPad = 40;
+    const H = topPad + botPad + rows.length * (barH + gap);
+    cvs.style.width = W + 'px';
+    cvs.style.height = H + 'px';
+    cvs.width = W * dpr;
+    cvs.height = H * dpr;
+    const ctx = cvs.getContext('2d');
+    ctx.scale(dpr, dpr);
+
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, W, H);
+
+    // Measure label widths with shortName and cap to a reasonable left gutter.
+    ctx.font = '700 14px "Segoe UI", sans-serif';
+    let maxLabelW = 160;
+    for (const r of rows) {
+      const w = ctx.measureText(r.label).width;
+      if (w > maxLabelW) maxLabelW = w;
+    }
+    const labelPx = Math.min(360, Math.ceil(maxLabelW) + 18);
+    const valuePx = 110;
+    const leftPad = 18;
+    const plotX = leftPad + labelPx;
+    const plotW = Math.max(80, W - plotX - valuePx - 12);
+    const maxE = Math.max(1e-6, ...rows.map(function(r) { return r.energy; }));
+
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const y = topPad + i * (barH + gap);
+      const yC = y + barH / 2;
+
+      ctx.fillStyle = '#243b53';
+      ctx.textAlign = 'right';
+      ctx.font = '700 14px "Segoe UI", sans-serif';
+      ctx.fillText(r.label, plotX - 12, yC);
+
+      ctx.fillStyle = '#eef2f4';
+      ctx.fillRect(plotX, y, plotW, barH);
+
+      const w = plotW * r.energy / maxE;
+      const grad = ctx.createLinearGradient(plotX, y, plotX + Math.max(1, w), y);
+      grad.addColorStop(0, r.color);
+      grad.addColorStop(1, shadeHex(r.color, 0.25));
+      ctx.fillStyle = grad;
+      ctx.fillRect(plotX, y, w, barH);
+
+      ctx.fillStyle = '#102a43';
+      ctx.textAlign = 'left';
+      ctx.font = '800 14px "Segoe UI", sans-serif';
+      ctx.fillText(r.energy.toFixed(0) + ' J', plotX + plotW + 10, yC);
+    }
+
+    ctx.strokeStyle = '#c5ced6';
+    ctx.beginPath();
+    ctx.moveTo(plotX, topPad + rows.length * (barH + gap) - gap + 4);
+    ctx.lineTo(plotX + plotW, topPad + rows.length * (barH + gap) - gap + 4);
+    ctx.stroke();
+    ctx.fillStyle = '#52606d';
+    ctx.textAlign = 'center';
+    ctx.font = '12px "Segoe UI", sans-serif';
+    const ticks = niceTicks(0, maxE, 5);
+    for (const t of ticks) {
+      const x = plotX + plotW * t / maxE;
+      ctx.fillText(t.toFixed(0), x, H - 20);
+    }
+    ctx.font = '700 13px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#243b53';
+    ctx.fillText('Joules recovered in this scenario (higher is better)',
+                 plotX + plotW / 2, H - 6);
+  }
+
+  function shadeHex(hex, amt) {
+    if (!/^#[0-9a-f]{6}$$/i.test(hex)) return hex;
+    const r = parseInt(hex.slice(1,3),16);
+    const g = parseInt(hex.slice(3,5),16);
+    const b = parseInt(hex.slice(5,7),16);
+    const mix = function(c) { return Math.round(c + (255 - c) * amt); };
+    return 'rgb(' + mix(r) + ',' + mix(g) + ',' + mix(b) + ')';
+  }
+
+  window.__updateEnergyBar = function(state) {
+    latestState = state;
+    render();
+  };
+
+  let resizeTimer;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(render, 100);
+  });
+}
+
+buildEnergyBar();
 buildMotorMap();
 buildTrajectory();
 
@@ -1491,6 +1814,7 @@ buildTrajectory();
         names=json.dumps(names, separators=(",", ":")),
         colors=json.dumps(colors, separators=(",", ":")),
         traj_payload=json.dumps(traj_payload, separators=(",", ":")),
+        basket_summary=json.dumps(basket_summary, separators=(",", ":")),
         t_traj=json.dumps(_round_list(t_traj_sampled, digits=3), separators=(",", ":")),
         traj_brakes=json.dumps(_round_list(traj_brakes), separators=(",", ":")),
         traj_masses=json.dumps(_round_list(traj_masses), separators=(",", ":")),

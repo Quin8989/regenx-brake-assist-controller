@@ -19,7 +19,7 @@ import jax.numpy as jnp
 from jax import lax
 
 # Force float64 so we can compare to numba's double precision.
-from sim.jax_env import DEFAULT_FLOAT  # noqa: F401  (configures jax)
+from sim.jax.env import DEFAULT_FLOAT  # noqa: F401  (configures jax)
 
 
 # ---------------------------------------------------------------------
@@ -39,7 +39,7 @@ def _step(i, carry, consts, buf_len):
      one_plus_n, gear_n, kt, eta_gear, t_drag_coeff, r_phase_15,
      foc_alpha, inv_cur_gain,
      inv_j_carrier, inv_j_wheel,
-     mu_ratio, cap_esr, inv_cap,
+     mu_ratio, stiction_w, cap_esr, inv_cap,
      n_over_np1, rpm_scale,
      free_decel, v_min_w,
      t_rr_ring, t_grav_ring, t_pedal_ring,
@@ -78,22 +78,22 @@ def _step(i, carry, consts, buf_len):
     t_em_ring = gear_n * t_em * eta_gear
 
     # ─── Band / carrier update (coupled branch) ───────────────────────
-    # Accumulate band deformation; clamp static→kinetic on breakaway.
-    delta_band_tentative = delta_band + w_carrier * dt
-    delta_band_tentative = jnp.maximum(delta_band_tentative, 0.0)
-
-    static_cap = jnp.where(k_band > 0.0, brake_val / k_band, 0.0)
-    break_away = (brake_val > 0.0) & (delta_band_tentative > static_cap)
-    delta_band_coupled = jnp.where(
-        brake_val > 0.0,
-        jnp.where(break_away, brake_val * mu_ratio / k_band, delta_band_tentative),
-        0.0,
-    )
+    # Karnopp Coulomb friction (matches sim.physics).  k_band / c_band
+    # parameters retained in the signature for log-compatibility but
+    # no longer affect t_brake — the torsional-compliance layer caused
+    # an unbounded damping term that let the motor dump arbitrary
+    # torque through the band regardless of brake_val.
+    static_cap = brake_val
+    kinetic_cap = brake_val * mu_ratio
+    locked = w_carrier <= stiction_w
+    t_brake_hold = jnp.where(t_em_car > 0.0, t_em_car, 0.0)
+    t_brake_locked = jnp.where(t_em_car <= static_cap, t_brake_hold, kinetic_cap)
     t_brake_coupled = jnp.where(
         brake_val > 0.0,
-        jnp.maximum(k_band * delta_band_coupled + c_band * w_carrier, 0.0),
+        jnp.where(locked, t_brake_locked, kinetic_cap),
         0.0,
     )
+    delta_band_coupled = jnp.asarray(0.0, dtype=delta_band.dtype)
 
     # Carrier dynamics.  Reproduce the two-branch integration in numba.
     net_car = t_em_car - t_brake_coupled
@@ -215,12 +215,10 @@ def run_physics_batch_jax(
     """JAX equivalent of sim.physics._run_physics_batch.
 
     Signature matches the numba version exactly.  `stiction_w` is
-    accepted but ignored (numba version also never reads it — it's
-    reserved for a carrier-locking refinement that is currently
-    implemented kinematically via the `w_carrier <= 0` branch).
+    accepted and used by the Karnopp friction model (identical to
+    the numba kernel after the 2026-04-23 band-cap fix).
     Returns a tuple in the same order numba does.
     """
-    del stiction_w  # unused — present only for signature parity.
 
     # Cast scalar inputs to f64.
     dt_f = DEFAULT_FLOAT(dt)
@@ -244,7 +242,7 @@ def run_physics_batch_jax(
         DEFAULT_FLOAT(eta_gear), DEFAULT_FLOAT(t_drag_coeff), DEFAULT_FLOAT(r_phase_15),
         DEFAULT_FLOAT(foc_alpha), DEFAULT_FLOAT(inv_cur_gain),
         DEFAULT_FLOAT(inv_j_carrier), DEFAULT_FLOAT(inv_j_wheel),
-        DEFAULT_FLOAT(mu_ratio), DEFAULT_FLOAT(cap_esr), DEFAULT_FLOAT(inv_cap),
+        DEFAULT_FLOAT(mu_ratio), DEFAULT_FLOAT(stiction_w), DEFAULT_FLOAT(cap_esr), DEFAULT_FLOAT(inv_cap),
         DEFAULT_FLOAT(n_over_np1), DEFAULT_FLOAT(rpm_scale),
         jnp.bool_(free_decel), DEFAULT_FLOAT(v_min_w),
         DEFAULT_FLOAT(t_rr_ring), DEFAULT_FLOAT(t_grav_ring), DEFAULT_FLOAT(t_pedal_ring),

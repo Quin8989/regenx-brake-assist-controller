@@ -21,14 +21,15 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
-from sim.physics_jax import _step as _physics_step
-from sim.physics_jax_loop import (
+from sim.jax.physics import _step as _physics_step
+from sim.physics import STICTION_W as _STICTION_W
+from sim.jax.physics_loop import (
     voltage_taper_jax,
     ff_current_jax,
     apply_regen_limits_jax,
 )
 
-from sim.jax_env import DEFAULT_FLOAT  # (configures jax)
+from sim.jax.env import DEFAULT_FLOAT  # (configures jax)
 
 _TWO_PI = 2.0 * jnp.pi
 _G = 9.81
@@ -59,6 +60,18 @@ def lambdify_expression_jax(equation: str) -> Callable:
         "relu":    lambda x: (sp.Abs(x) + x) / 2,
         "negrelu": lambda x: (sp.Abs(x) - x) / 2,
         "step":    sp.Heaviside,
+        # Expanded op set (2026-04-23): smooth saturation (tanh),
+        # native min/max for clamps, and safe transcendentals.
+        # ``safeexp`` / ``safelog`` match the Julia-side definitions in
+        # scripts/pysr_invent_composite.py so expressions round-trip.
+        "tanh":     sp.tanh,
+        "safetanh": sp.tanh,
+        "min":      sp.Min,
+        "max":      sp.Max,
+        # Clamp the exp argument to match the Julia side exactly.
+        # Using sp.Min/sp.Max keeps it symbolic so lambdify emits jnp.
+        "safeexp": lambda x: sp.exp(sp.Min(sp.Max(x, -30), 30)),
+        "safelog": lambda x: sp.log(sp.Abs(x) + 1e-9),
     }
     syms = sp.symbols(FEATURE_NAMES)
     expr = sp.sympify(equation, locals=locals_map)
@@ -75,7 +88,15 @@ def simulate_ride_strategy_jax(
     # Strategy: (rpm, drpm_mean, drpm_peak_neg, iq, duty_cycle, vcap,
     #            k_prev, jerk_mean, jerk_peak, slip_delta,
     #            decel_frac, d_iq, power_mech) -> k_next
-    strategy_fn: Callable,
+    strategy_fn: Callable | None = None,
+    # Optional stateful strategy API (preferred for classical controllers
+    # like pi_controller / aimd_ff).  Signature:
+    #   strategy_step_fn(feats_tuple, strategy_state) -> (k_next, new_strategy_state)
+    # where ``feats_tuple`` is the same 13-element tuple passed to the
+    # stateless ``strategy_fn`` above.  On taper==0 (regen inhibited) the
+    # carried state is reset to ``strategy_state0``.
+    strategy_step_fn: Callable | None = None,
+    strategy_state0=None,
     # Initial state
     w_ring0, w_carrier0, i_actual0, e_cap0, w_ring_base0,
     delay_slots,               # static
@@ -123,6 +144,28 @@ def simulate_ride_strategy_jax(
     """JAX ride simulator with strategy dispatch.  Same log layout as
     :func:`simulate_ride_fixed_gain_jax`.
     """
+    # ── Resolve strategy dispatch mode ─────────────────────────────
+    # Stateless path (PySR default): wrap the pure callable in an
+    # adapter that carries a dummy scalar state.  Traced graph is
+    # functionally identical to the pre-refactor version.
+    if strategy_step_fn is None:
+        if strategy_fn is None:
+            raise ValueError(
+                "simulate_ride_strategy_jax: provide strategy_fn "
+                "(stateless) or strategy_step_fn (stateful)."
+            )
+        _sf = strategy_fn  # bind for closure
+        def _stateless_adapter(feats, state):
+            return _sf(*feats), state
+        strategy_step_fn = _stateless_adapter
+        strategy_state0 = jnp.zeros((), dtype=DEFAULT_FLOAT)
+    else:
+        if strategy_state0 is None:
+            raise ValueError(
+                "simulate_ride_strategy_jax: strategy_step_fn requires "
+                "a non-None strategy_state0 pytree."
+            )
+
     rpm_buf0 = jnp.zeros(delay_slots, dtype=DEFAULT_FLOAT)
 
     rider_kp_p_per_err = 150.0
@@ -155,6 +198,9 @@ def simulate_ride_strategy_jax(
         drpm_peak_neg_last_used=DEFAULT_FLOAT(0.0),
         iq_last_used=DEFAULT_FLOAT(0.0),
         k_prev=DEFAULT_FLOAT(0.1),
+        # Per-strategy extra carry (integral / k_eff / slip_prev_raw / ...).
+        # Scalar 0-d array for stateless PySR strategies.
+        strategy_state=strategy_state0,
     )
 
     # ── Noise key bootstrap ───────────────────────────────────────────
@@ -265,11 +311,14 @@ def simulate_ride_strategy_jax(
         d_iq       = iq_feat - state["iq_last_used"]
         power_mech = rpm_feat * iq_feat
 
-        k_raw = strategy_fn(
+        feats = (
             rpm_feat, ctx_drpm_mean, ctx_drpm_peak_neg,
             iq_feat, duty_est, v_cap_sensed, state["k_prev"],
             jerk_mean, jerk_peak, slip_delta,
             decel_frac, d_iq, power_mech,
+        )
+        k_raw, strategy_state_updated = strategy_step_fn(
+            feats, state["strategy_state"],
         )
         # Non-finite guard — fall back to k_prev.
         k_raw = jnp.where(jnp.isfinite(k_raw), k_raw, state["k_prev"])
@@ -282,6 +331,15 @@ def simulate_ride_strategy_jax(
         new_dm_last    = jnp.where(taper_active, ctx_drpm_mean, 0.0)
         new_dpn_last   = jnp.where(taper_active, ctx_drpm_peak_neg, 0.0)
         new_iq_last    = jnp.where(taper_active, iq_feat, 0.0)
+
+        # Reset per-strategy carry when taper==0 (mirrors each numpy
+        # strategy's ``_reset`` on regen inhibit).  tree_map handles
+        # arbitrary pytree state (scalar / dict / nested).
+        new_strategy_state = jax.tree_util.tree_map(
+            lambda new, init: jnp.where(taper_active, new, init),
+            strategy_state_updated,
+            strategy_state0,
+        )
 
         # ── i_cmd from ff_current * taper, clipped to [0, I_MAX] ────
         i_cmd_pre = ff_current_jax(
@@ -337,7 +395,7 @@ def simulate_ride_strategy_jax(
             DEFAULT_FLOAT(eta_gear), DEFAULT_FLOAT(t_drag_coeff), DEFAULT_FLOAT(r_phase_15),
             DEFAULT_FLOAT(foc_alpha), DEFAULT_FLOAT(inv_cur_gain),
             DEFAULT_FLOAT(inv_j_carrier), DEFAULT_FLOAT(inv_j_wheel),
-            DEFAULT_FLOAT(mu_ratio), DEFAULT_FLOAT(cap_esr), DEFAULT_FLOAT(inv_cap),
+            DEFAULT_FLOAT(mu_ratio), DEFAULT_FLOAT(_STICTION_W), DEFAULT_FLOAT(cap_esr), DEFAULT_FLOAT(inv_cap),
             DEFAULT_FLOAT(n_over_np1), DEFAULT_FLOAT(rpm_scale),
             jnp.bool_(True), DEFAULT_FLOAT(v_min_w),
             DEFAULT_FLOAT(t_rr_ring), DEFAULT_FLOAT(t_grav_ring), DEFAULT_FLOAT(t_pedal_ring),
@@ -386,6 +444,7 @@ def simulate_ride_strategy_jax(
             iq_last_used=new_iq_last,
             k_prev=new_k_prev,
             noise_key=nkey_next,
+            strategy_state=new_strategy_state,
         )
 
         t_val = DEFAULT_FLOAT(tick_idx) * ctrl_period

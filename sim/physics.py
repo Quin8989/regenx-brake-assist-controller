@@ -64,12 +64,12 @@ from .strategy_context import StrategyContext
 KT           = 1.5 * POLE_PAIRS * FLUX_LINKAGE   # Nm/A
 
 # Rotor drag coefficient (iron loss + bearing + magnetic cogging), applied
-# to |w_sun|.  Derived from a bench observation on 2026-04-20: with the
+# to |w_sun|.  Derived from a bench observation on 2026-04-22: with the
 # band brake OFF (freewheel disengaged, rotor decoupled from wheel), the
-# motor rotor spins down from 30 km/h road-equivalent (w_rotor ≈ 121 rad/s
-# through the 4.8:1 gear) to visible rest in ~0.5 s.  Treating this as a
+# motor rotor spins down from 35 km/h road-equivalent (w_rotor ≈ 141 rad/s
+# through the 4.8:1 gear) to visible rest in ~1.5 s.  Treating this as a
 # first-order decay ω(t) = ω0·exp(-b/J·t), "visibly at rest" ≈ 4τ gives
-# τ ≈ 0.12 s.
+# τ ≈ 0.38 s.
 #
 # Rotor inertia estimate for the Puyan H01 (3.2 kg total motor,
 # manufacturer spec): hub shell ~1.5 kg, stator ~0.6 kg, gears/bearings
@@ -77,9 +77,11 @@ KT           = 1.5 * POLE_PAIRS * FLUX_LINKAGE   # Nm/A
 # surface magnets, OD ~55 mm, stack ~25 mm, mean radius ~25 mm.  For a
 # thin-wall can J ≈ m·r_mean² = 0.7 · 0.025² ≈ 4.4e-4 kg·m².
 #
-# Therefore b_rotor = J_rotor / τ ≈ 4.4e-4 / 0.12 ≈ 3.7e-3 Nm·s/rad.
+# Therefore b_rotor = J_rotor / τ ≈ 4.4e-4 / 0.38 ≈ 1.2e-3 Nm·s/rad.
+# Supersedes the earlier 2026-04-20 estimate (0.5 s → 3.7e-3) which
+# was biased short by eyeballing a noisy visual cue.
 # Stage 9 of bench_test_notes.md verifies this with a direct τ fit.
-T_DRAG_COEFF = 0.0037       # Nm/(rad/s)
+T_DRAG_COEFF = 0.0012       # Nm/(rad/s)
 
 # ── Planetary gear ────────────────────────────────────────────────────
 # Puyan H01 manufacturer spec: 4.8:1 reduction (motor_rpm / wheel_rpm).
@@ -136,6 +138,45 @@ G_ACCEL    = 9.81
 # residuals on coast traces are dominated by this.
 J_CARRIER = 0.015            # kg·m² (reflected rotor + carrier + planets)
 
+# ── Band brake torsional compliance ─────────────────────────────────
+# Two series springs dominate the carrier-to-ground compliance:
+#
+#   1. Band axial stretch (spring-steel strap, 15 mm × ~0.5 mm cross
+#      section, 120° wrap over a 73 mm OD drum plus ~50 mm of anchor-
+#      to-lever tail → load path L ≈ 0.125 m).  E = 200 GPa.
+#      k_band_axial = E·A/L ≈ 12 MN/m
+#      k_band_tors  = k_axial·r² ≈ 12e6 · 0.0365² ≈ 16 000 Nm/rad.
+#
+#   2. ABS 3D-printed drum.  E_abs ≈ 2 GPa, G_abs ≈ 0.7 GPa — 100×
+#      softer than steel.  Modelled as a short thin shell (wall ~3 mm,
+#      axial length ~15 mm) that must transmit band friction torque
+#      from its OD down to the carrier shaft.
+#      J_polar ≈ 2πr³·t ≈ 9.2e-7 m⁴
+#      k_drum  = G·J/L ≈ 43 000 Nm/rad.
+#
+# In series: 1/k = 1/16 000 + 1/43 000 → k ≈ 12 000 Nm/rad (lower bound
+# at 0.5 mm band thickness; thicker strap moves this up to ~18 000).
+# The 50 000 Nm/rad I originally wrote was based on assuming a steel
+# drum and does NOT apply to your ABS build.
+#
+# Natural period at J = 0.015:
+#   ω_n = √(k/J) ≈ 894 rad/s → T_n ≈ 7 ms
+# That is ~70 % of the 10 ms telemetry window, so band ring-down is
+# NOT fully damped inside one drpm_mean aggregate — the strategy sees
+# a partially-settled transient, not a clean edge.  This shows up as
+# ~150–750 k rpm/s² jerk spikes (5–20× smaller than the instantaneous-
+# unlock model predicted).
+#
+# C_BAND is 0.7 × critical damping, representative of the heavy
+# dissipation from steel-on-ABS kinetic friction plus structural
+# damping in the filled ABS print:
+#   C_crit = 2·√(J·k) ≈ 2·√(0.015·12 000) ≈ 26.8 Nm·s/rad
+#   C_BAND = 0.7 · C_crit ≈ 18.8 Nm·s/rad.
+# Semi-implicit Euler is used for the spring integrator so stability
+# holds for dt·ω_n < 2 (0.89 at ω_n ≈ 894 rad/s, dt = 1 ms).
+K_BAND = 1.2e4              # Nm/rad — band torsional stiffness (series band+drum)
+C_BAND = 18.8               # Nm·s/rad — 0.7 × critical for J=0.015, K=1.2e4
+
 # ── Simulation timing defaults ────────────────────────────────────────
 DT          = 0.001         # 1 ms  (was 0.2 ms — stable for J=0.05)
 CTRL_PERIOD = 0.01          # 10 ms (100 Hz)
@@ -152,23 +193,43 @@ _RPM_SCALE = 60.0 / (2.0 * math.pi)
 _TWO_PI    = 2.0 * math.pi
 
 # ── Fast-path telemetry noise model ─────────────────────────────────
-# Injected on the StrategyContext fast fields (rpm_fast, iq_mean,
-# drpm_mean, drpm_peak_neg) to model realistic VESC + LispBM jitter.
-# Magnitudes derived from bench observation:
-#   mech-RPM (ERPM/pole_pairs=23) quantisation → σ_rpm ≈ 0.1 rpm.
-#   iq averaged over 10 ms window →  σ_iq ≈ 0.05 A.
-# Derivative signals inherit σ_rpm amplified by the differencing window:
-#   σ(drpm_mean)     = σ_rpm · √2 / (n_sub·dt)    ≈ 14 rpm/s   (n=10, dt=1 ms)
-#   σ(drpm_peak_neg) = σ_rpm · √2 / dt            ≈ 140 rpm/s
-# The peak-negative sample is the minimum of n independent normals on
-# the derivative, which has E[min] = −σ·√(2·ln n) ≈ −2.14·σ_deriv.
-# That bias matters — without it, slip_signal (= drpm_mean − drpm_peak_neg)
-# has a noise-only mean of ~200 rpm/s that strategies must threshold above.
-_RPM_NOISE_SIGMA             = 0.1      # rpm (mech)
-_IQ_NOISE_SIGMA              = 0.05     # A
-_DRPM_MEAN_NOISE_SIGMA       = 14.0     # rpm/s
-_DRPM_PEAK_NEG_NOISE_SIGMA   = 140.0    # rpm/s
-_DRPM_PEAK_NEG_NOISE_BIAS    = -300.0   # rpm/s (E[min] of 10 N(0,140) ≈ −300)
+# Nominal sigmas modelling the realistic VESC + LispBM jitter seen on
+# our hardware.  Each is overridable per-simulation via simulate() /
+# simulate_ride() kwargs; sim.scoring perturbs all of them in its
+# Monte-Carlo robustness sweep.
+#
+# Calibrated against a Puyan H01 hub on a VESC 6.x-class controller:
+#   * rpm:   sensorless observer jitter, roughly ±10 rpm (mech)
+#            steady-state.  Worsens below ~200 rpm but that regime is
+#            excluded by the speed cutoff anyway.
+#   * iq:    post-FOC-averaged current readout, ~0.2 A σ after the
+#            shunt + ADC chain.  Independent of iq_bias below.
+#   * iq_bias: slowly-varying zero offset on the current sensor.
+#            VESC's boot-time auto-cal trims the fresh value to ~50 mA,
+#            but shunt/amp thermal drift adds up to ~300 mA over a
+#            40 °C warm-up.  Treat as constant within a single sim run.
+#   * vcap:  resistor-divider + ADC noise on the bus voltage, ~30 mV σ.
+#
+# drpm_mean / drpm_peak_neg sigmas are not derived from σ_rpm because
+# the LispBM script aggregates over the 10 ms window with averaging
+# that reduces naive-difference noise substantially.  These numbers
+# come from bench traces:
+#   σ(drpm_mean)     ≈ 14 rpm/s
+#   σ(drpm_peak_neg) ≈ 140 rpm/s   (expected-minimum bias: −300 rpm/s)
+RPM_NOISE_SIGMA_DEFAULT           = 10.0    # rpm (mech) — sensorless observer
+IQ_NOISE_SIGMA_DEFAULT            = 0.2     # A           — post-FOC readout
+IQ_BIAS_DEFAULT                   = 0.0     # A           — current-sensor offset
+VCAP_NOISE_SIGMA_DEFAULT          = 0.03    # V           — resistor-divider + ADC
+DRPM_MEAN_NOISE_SIGMA_DEFAULT     = 14.0    # rpm/s       — 10 ms window noise
+DRPM_PEAK_NEG_NOISE_SIGMA_DEFAULT = 140.0   # rpm/s       — per-sample peak hold
+DRPM_PEAK_NEG_NOISE_BIAS_DEFAULT  = -300.0  # rpm/s       — E[min of n normals]
+
+# Legacy aliases — still used by a few callers that import directly.
+_RPM_NOISE_SIGMA             = RPM_NOISE_SIGMA_DEFAULT
+_IQ_NOISE_SIGMA              = IQ_NOISE_SIGMA_DEFAULT
+_DRPM_MEAN_NOISE_SIGMA       = DRPM_MEAN_NOISE_SIGMA_DEFAULT
+_DRPM_PEAK_NEG_NOISE_SIGMA   = DRPM_PEAK_NEG_NOISE_SIGMA_DEFAULT
+_DRPM_PEAK_NEG_NOISE_BIAS    = DRPM_PEAK_NEG_NOISE_BIAS_DEFAULT
 
 # ── Numba JIT ────────────────────────────────────────────────────────
 try:
@@ -194,9 +255,10 @@ def _run_physics_batch(
     mu_ratio, stiction_w, cap_esr, inv_cap,
     n_over_np1, rpm_scale,
     free_decel, v_min_w,
-    t_rr_ring, t_grav_ring,
+    t_rr_ring, t_grav_ring, t_pedal_ring,
     rpm_buf, rpm_idx,
     rpm_prev_sub_in,
+    delta_band, k_band, c_band,
 ):
     """Run n_sub physics timesteps with fixed i_cmd and brake.
 
@@ -260,40 +322,106 @@ def _run_physics_batch(
         if i_actual < 0.0:
             i_actual = 0.0
 
+        # Motor coupling.  The one-way clutch engages whenever the band
+        # is clamped (brake_val > 0 → carrier forced to react against
+        # ground) or whenever the controller is commanding current (and
+        # therefore producing EM torque).  Otherwise the clutch is free
+        # and the motor is mechanically decoupled: zero rotor drag
+        # coupled to the wheel, zero band torque, carrier follows the
+        # freewheel kinematic constraint (w_sun = 0, i.e.
+        # w_carrier = N/(1+N) · w_ring) so the rotor spins at the wheel
+        # equivalent.  Rotor bearing drag alone is ≈ 0 Nm, confirmed by
+        # the 2026-04-22 rotor spin-down bench observation.
+        motor_coupled = (brake_val > 0.0) or (i_cmd > 1e-4) or (i_actual > 1e-4)
+
         # Electromagnetic torque
         t_em = kt * i_actual if w_sun < 0.0 else 0.0
-        t_drag = t_drag_coeff * abs(w_sun)
+        t_drag = t_drag_coeff * abs(w_sun) if motor_coupled else 0.0
 
         # Gear torques
         t_em_car = one_plus_n * t_em * eta_gear
         t_em_ring = gear_n * t_em * eta_gear
 
-        # Band brake friction
-        if abs(w_carrier) < stiction_w:
-            t_brake = brake_val
-        else:
-            t_brake = brake_val * mu_ratio
+        if motor_coupled:
+            # Band brake — Karnopp Coulomb friction model.
+            #
+            # Rider input is brake_val, the *static* holding torque the
+            # band can react before the drum slides on the pad.  Once
+            # sliding, kinetic friction drops to brake_val · µ_k/µ_s.
+            # Earlier revisions of this model tried to layer a torsional
+            # spring + damper in series with the Coulomb element, but
+            # the damping term c_band·ω_carrier is unbounded and lets
+            # the motor dump arbitrary torque through the band
+            # regardless of brake_val — the exact bug that inflated
+            # regen capture ~3× in the 2026-04-23 audit.  The band's
+            # torsional compliance is ~7 ms ring-down (documented near
+            # K_BAND/C_BAND above), comparable to the 10 ms telemetry
+            # window, so the controller never observes the transient.
+            # Dropping compliance and keeping just the Coulomb slider
+            # gives the same average-case behaviour without the bug.
+            #
+            # State:
+            #   w_carrier ≈ 0 AND t_em_car ≤ static_cap
+            #       → band holds, transmits exactly t_em_car, no heat
+            #   t_em_car > static_cap
+            #       → static breakaway, drops to kinetic_cap
+            #   w_carrier > stiction_w
+            #       → slipping, transmits kinetic_cap, dissipates
+            #         t_brake · ω_carrier as heat
+            # Freewheel (one-way clutch): t_brake ≥ 0 always.
+            if brake_val > 0.0:
+                static_cap = brake_val
+                kinetic_cap = brake_val * mu_ratio
+                if w_carrier <= stiction_w:
+                    # Locked or about to lock.
+                    if t_em_car <= static_cap:
+                        # Band holds — reaction exactly cancels motor
+                        # push, carrier stays stationary.
+                        t_brake = t_em_car if t_em_car > 0.0 else 0.0
+                    else:
+                        # Static breakaway to kinetic regime.
+                        t_brake = kinetic_cap
+                else:
+                    # Slipping.
+                    t_brake = kinetic_cap
+            else:
+                t_brake = 0.0
+            # delta_band state retained for log compatibility but no
+            # longer influences t_brake.
+            delta_band = 0.0
 
-        # Carrier dynamics
-        net = t_em_car - t_brake
-        if w_carrier <= 0.0:
-            w_carrier = 0.0
-            if net > 0.0:
-                w_carrier = w_carrier + net * inv_j_carrier * dt
-        else:
-            w_carrier = w_carrier + net * inv_j_carrier * dt
-            if w_carrier < 0.0:
+            # Carrier dynamics (inertial integration against motor +
+            # band reactions).
+            net = t_em_car - t_brake
+            if w_carrier <= 0.0:
                 w_carrier = 0.0
+                if net > 0.0:
+                    w_carrier = w_carrier + net * inv_j_carrier * dt
+            else:
+                w_carrier = w_carrier + net * inv_j_carrier * dt
+                if w_carrier < 0.0:
+                    w_carrier = 0.0
+        else:
+            # Freewheel decoupled — kinematic constraint keeps w_sun=0
+            # so the rotor coasts at the wheel-equivalent speed with
+            # no reaction torque back on the wheel.
+            t_brake = 0.0
+            delta_band = 0.0
+            w_carrier = n_over_np1 * w_ring
 
         # Wheel dynamics
         if free_decel:
             # Resistive torques at the ring (= wheel axis):
             #   motor regen drag + rotor-drag reflected + rolling resistance
-            # Assistive torque: gravity component along road (downhill = +).
+            # Assistive torques: gravity along road (downhill = +) and
+            # rider pedal input (positive = adding wheel speed).  Rotor
+            # drag only couples to the wheel when the freewheel clutch
+            # is engaged (motor_coupled).
             t_rr_signed = t_rr_ring if w_ring > 0.0 else 0.0
+            t_drag_to_wheel = (gear_n * t_drag * eta_gear) if motor_coupled else 0.0
             w_ring = w_ring - (
-                t_em_ring + gear_n * t_drag * eta_gear
-                + t_rr_signed - t_grav_ring
+                t_em_ring + t_drag_to_wheel
+                + t_rr_signed - t_grav_ring - t_pedal_ring
             ) * inv_j_wheel * dt
             if w_ring < 0.0:
                 w_ring = 0.0
@@ -367,7 +495,8 @@ def _run_physics_batch(
     return (w_ring, w_carrier, i_actual, e_cap, w_ring_base,
             motor_rpm, rpm_idx, stopped,
             p_net_sum, pcu_esr_sum, p_brake_sum, p_drg_sum,
-            drpm_mean, drpm_peak_neg, iq_mean, rpm_prev_sub)
+            drpm_mean, drpm_peak_neg, iq_mean, rpm_prev_sub,
+            delta_band)
 
 
 # =====================================================================
@@ -401,7 +530,12 @@ def simulate(controller, brake, *, v0_kmh=15.0, mass_kg=100.0,
              v_min_kmh=0.0,
              vesc_current_gain=1.0, vesc_voltage_gain=1.0,
              telem_delay=None,
-             grade_rad=0.0, c_rr=None):
+             rpm_noise_sigma=RPM_NOISE_SIGMA_DEFAULT,
+             iq_noise_sigma=IQ_NOISE_SIGMA_DEFAULT,
+             iq_bias=IQ_BIAS_DEFAULT,
+             vcap_noise_sigma=VCAP_NOISE_SIGMA_DEFAULT,
+             grade_rad=0.0, c_rr=None,
+             k_band=None, c_band=None):
     """Run the full physics simulation.
 
     Args:
@@ -433,14 +567,18 @@ def simulate(controller, brake, *, v0_kmh=15.0, mass_kg=100.0,
     params = _resolve_params(
         eta_gear, j_carrier_override, t_drag_coeff,
         r_phase_override, flux_linkage_override,
-        cap_esr, foc_tau,
+        cap_esr, foc_tau, k_band, c_band,
     )
 
     # ── Initialise state ─────────────────────────────────────────────
     state = _init_state(v0_kmh, mass_kg, dt, mu_s, mu_k, params,
                         vesc_current_gain, vesc_voltage_gain,
                         constant_speed, v_min_kmh, iq_kp,
-                        telem_delay=telem_delay)
+                        telem_delay=telem_delay,
+                        rpm_noise_sigma=rpm_noise_sigma,
+                        iq_noise_sigma=iq_noise_sigma,
+                        iq_bias=iq_bias,
+                        vcap_noise_sigma=vcap_noise_sigma)
 
     # ── Controller dispatch ──────────────────────────────────────────
     use_strategy = hasattr(controller, 'update')
@@ -486,6 +624,13 @@ def simulate(controller, brake, *, v0_kmh=15.0, mass_kg=100.0,
             drpm_peak_neg_prev=state['drpm_peak_neg_prev'],
             iq_mean_prev=state['iq_mean_prev'],
             noise_rng=state['noise_rng'],
+            rpm_noise_sigma=state['rpm_noise_sigma'],
+            iq_noise_sigma=state['iq_noise_sigma'],
+            iq_bias=state['iq_bias'],
+            vcap_noise_sigma=state['vcap_noise_sigma'],
+            drpm_mean_noise_sigma=state['drpm_mean_noise_sigma'],
+            drpm_peak_neg_noise_sigma=state['drpm_peak_neg_noise_sigma'],
+            drpm_peak_neg_noise_bias=state['drpm_peak_neg_noise_bias'],
         )
 
         # ── Brake for this tick ──────────────────────────────────────
@@ -497,7 +642,8 @@ def simulate(controller, brake, *, v0_kmh=15.0, mass_kg=100.0,
          motor_rpm, state['rpm_idx'], stopped,
          p_net_sum, pcu_esr_sum, p_brake_sum, p_drg_sum,
          drpm_mean_new, drpm_peak_neg_new, iq_mean_new,
-         state['rpm_prev_sub']) = _run_physics_batch(
+         state['rpm_prev_sub'],
+         state['delta_band']) = _run_physics_batch(
             state['ctrl_steps'], dt,
             state['w_ring'], state['w_carrier'], state['i_actual'], state['e_cap'],
             state['w_ring_base'],
@@ -509,9 +655,10 @@ def simulate(controller, brake, *, v0_kmh=15.0, mass_kg=100.0,
             state['mu_ratio'], STICTION_W, params['cap_esr'], state['inv_cap'],
             state['_NoverNp1'], _RPM_SCALE,
             state['free_decel'], state['v_min_w'],
-            t_rr_ring, t_grav_ring,
+            t_rr_ring, t_grav_ring, 0.0,
             state['rpm_buf'], state['rpm_idx'],
             state['rpm_prev_sub'],
+            state['delta_band'], params['k_band'], params['c_band'],
         )
         state['drpm_mean_prev'] = drpm_mean_new
         state['drpm_peak_neg_prev'] = drpm_peak_neg_new
@@ -536,12 +683,214 @@ def simulate(controller, brake, *, v0_kmh=15.0, mass_kg=100.0,
 
 
 # =====================================================================
+#  Ride-trace entry point — continuous 60 s stochastic rides
+# =====================================================================
+
+def simulate_ride(controller, ride, *, force_motor_off=False,
+                  dt=DT, mu_s=MU_S, mu_k=MU_K,
+                  eta_gear=None, j_carrier_override=None,
+                  t_drag_coeff=None, r_phase_override=None,
+                  flux_linkage_override=None,
+                  cap_esr=None, foc_tau=None,
+                  iq_kp=IQ_KP_DEFAULT,
+                  vesc_current_gain=1.0, vesc_voltage_gain=1.0,
+                  telem_delay=None,
+                  rpm_noise_sigma=RPM_NOISE_SIGMA_DEFAULT,
+                  iq_noise_sigma=IQ_NOISE_SIGMA_DEFAULT,
+                  iq_bias=IQ_BIAS_DEFAULT,
+                  vcap_noise_sigma=VCAP_NOISE_SIGMA_DEFAULT,
+                  c_rr=None,
+                  k_band=None, c_band=None):
+    """Run one physics sim driven by a ``RideTrace``.
+
+    The ride trace supplies three 1 ms-sampled inputs:
+        * ``brake_torque``   — rider's clamping demand at the carrier
+        * ``pedal_torque``   — rider's positive torque at the wheel
+        * ``grade_rad``      — road grade, +down / −up
+
+    ``force_motor_off=True`` clamps i_cmd to 0 regardless of what the
+    strategy returns — used by the linearity-reference pass in
+    ``sim.scoring`` to produce the "same ride, no motor" trajectory
+    the real controller is benchmarked against.
+
+    Initial wheel speed is the rider's cruise target (the rider is
+    mid-ride, not starting from rest).
+
+    Returns the same log-array dict as :func:`simulate`, with length
+    equal to the ride duration at ``CTRL_PERIOD`` cadence.
+    """
+    # ── Resolve overrides ────────────────────────────────────────────
+    params = _resolve_params(
+        eta_gear, j_carrier_override, t_drag_coeff,
+        r_phase_override, flux_linkage_override,
+        cap_esr, foc_tau, k_band, c_band,
+    )
+
+    mass_kg = float(ride.mass_kg)
+    v0_kmh = float(ride.cruise_kmh)
+
+    state = _init_state(v0_kmh, mass_kg, dt, mu_s, mu_k, params,
+                        vesc_current_gain, vesc_voltage_gain,
+                        constant_speed=False, v_min_kmh=0.0,
+                        iq_kp=iq_kp, telem_delay=telem_delay,
+                        rpm_noise_sigma=rpm_noise_sigma,
+                        iq_noise_sigma=iq_noise_sigma,
+                        iq_bias=iq_bias,
+                        vcap_noise_sigma=vcap_noise_sigma)
+
+    use_strategy = hasattr(controller, 'update')
+    k_fixed = 0.0 if use_strategy else float(controller)
+
+    _c_rr = C_RR if c_rr is None else float(c_rr)
+
+    # ── Resample 1 ms ride arrays onto the CTRL_PERIOD (10 ms) grid ──
+    ctrl_steps = max(1, int(round(CTRL_PERIOD / dt)))
+    n_ticks_ride = ride.n // ctrl_steps
+    n_ticks = n_ticks_ride + 1   # +1 for the final log sample
+
+    # For each control tick, take the mean of the ride arrays over the
+    # 10-sample sub-window.  Brake / grade move much more slowly than
+    # 100 Hz so this is loss-free in practice.
+    idx = np.arange(n_ticks_ride) * ctrl_steps
+    brake_ticks = np.add.reduceat(
+        ride.brake_torque[:n_ticks_ride * ctrl_steps], idx) / ctrl_steps
+    grade_ticks = np.add.reduceat(
+        ride.grade_rad[:n_ticks_ride * ctrl_steps], idx) / ctrl_steps
+    # Pedal is a bool mask → a tick counts as "pedal active" if any of
+    # its 10 ms sub-samples is True.
+    pedal_active_ticks = np.add.reduceat(
+        ride.pedal_active[:n_ticks_ride * ctrl_steps].astype(np.int32),
+        idx) > 0
+
+    # Rider pedal-model constants.  Closed-loop on wheel speed.
+    v_cruise = float(ride.cruise_kmh) / 3.6
+    rider_kp_p_per_err = 150.0   # W of added drive per (m/s) error
+    rider_p_sustain_w  = 150.0
+    rider_p_burst_w    = 400.0
+    rider_t_max_nm     = 120.0   # physiological torque cap at the wheel
+
+    # ── Log arrays ───────────────────────────────────────────────────
+    logs = _make_log_arrays(n_ticks)
+    # Extra per-tick diagnostics beyond the standard set.
+    logs['pedal'] = np.empty(n_ticks)
+    logs['grade'] = np.empty(n_ticks)
+    ix = 0
+
+    # ── Main control loop (100 Hz) ──────────────────────────────────
+    for tick in range(n_ticks_ride):
+        t = tick * CTRL_PERIOD
+        brake_val = float(brake_ticks[tick])
+        grade_val = float(grade_ticks[tick])
+        pedal_on = bool(pedal_active_ticks[tick])
+
+        cos_g = math.cos(grade_val)
+        sin_g = math.sin(grade_val)
+        t_rr_ring   = _c_rr * mass_kg * G_ACCEL * cos_g * R_WHEEL
+        t_grav_ring = mass_kg * G_ACCEL * sin_g * R_WHEEL
+
+        # ── Rider pedal P-controller (closed-loop on wheel speed) ──
+        # Rider applies positive drive power to hold cruise.  Zero
+        # when on the brakes or when already above cruise.
+        v_now = state['w_ring'] * R_WHEEL
+        if pedal_on and v_now < v_cruise + 0.1 and v_now > 0.5:
+            err_ms = max(0.0, v_cruise - v_now)
+            # Steady-state demand at current grade (to counter losses).
+            p_ss = max(0.0, (
+                _c_rr * mass_kg * G_ACCEL * cos_g
+                + 0.28 * 0.509 * v_cruise * v_cruise / max(1.0, v_cruise)
+                + mass_kg * G_ACCEL * sin_g
+            ) * v_cruise)
+            p_rider = p_ss + rider_kp_p_per_err * err_ms
+            p_rider = min(p_rider, rider_p_burst_w)
+            if p_rider > rider_p_sustain_w:
+                # Soft sag between sustained and burst.
+                excess = (p_rider - rider_p_sustain_w) / (
+                    rider_p_burst_w - rider_p_sustain_w)
+                p_rider *= 1.0 - 0.2 * excess
+            t_pedal_ring = p_rider / v_now
+            if t_pedal_ring > rider_t_max_nm:
+                t_pedal_ring = rider_t_max_nm
+        else:
+            t_pedal_ring = 0.0
+
+        # ── Sense ────────────────────────────────────────────────────
+        rpm_buf = cast(Any, state['rpm_buf'])
+        rpm_idx = int(state['rpm_idx'])
+        delayed_rpm = float(rpm_buf[rpm_idx])
+        v_cap = math.sqrt(2.0 * state['e_cap'] * state['inv_cap']) if state['e_cap'] > 0.0 else 0.0
+        v_cap_sensed = v_cap * state['vcap_gain']
+
+        # ── Compute current command ──────────────────────────────────
+        i_cmd = _compute_current_command(
+            use_strategy, controller, k_fixed,
+            delayed_rpm, v_cap_sensed, v_cap,
+            state['i_actual'], state['iq_kp'],
+            vesc_current_gain, params['flux'], params['watt_max'],
+            drpm_mean_prev=state['drpm_mean_prev'],
+            drpm_peak_neg_prev=state['drpm_peak_neg_prev'],
+            iq_mean_prev=state['iq_mean_prev'],
+            noise_rng=state['noise_rng'],
+            rpm_noise_sigma=state['rpm_noise_sigma'],
+            iq_noise_sigma=state['iq_noise_sigma'],
+            iq_bias=state['iq_bias'],
+            vcap_noise_sigma=state['vcap_noise_sigma'],
+            drpm_mean_noise_sigma=state['drpm_mean_noise_sigma'],
+            drpm_peak_neg_noise_sigma=state['drpm_peak_neg_noise_sigma'],
+            drpm_peak_neg_noise_bias=state['drpm_peak_neg_noise_bias'],
+        )
+        if force_motor_off:
+            i_cmd = 0.0
+
+        # ── Physics substeps (numba JIT) ─────────────────────────────
+        (state['w_ring'], state['w_carrier'], state['i_actual'], state['e_cap'],
+         state['w_ring_base'],
+         motor_rpm, state['rpm_idx'], stopped,
+         p_net_sum, pcu_esr_sum, p_brake_sum, p_drg_sum,
+         drpm_mean_new, drpm_peak_neg_new, iq_mean_new,
+         state['rpm_prev_sub'],
+         state['delta_band']) = _run_physics_batch(
+            state['ctrl_steps'], dt,
+            state['w_ring'], state['w_carrier'], state['i_actual'], state['e_cap'],
+            state['w_ring_base'],
+            i_cmd, brake_val,
+            state['_1pN'], GEAR_N, params['kt'], params['eta_gear'],
+            params['t_drag'], params['_1p5R'],
+            state['foc_alpha'], state['inv_cur_gain'],
+            state['inv_j_carrier'], state['inv_j_wheel'],
+            state['mu_ratio'], STICTION_W, params['cap_esr'], state['inv_cap'],
+            state['_NoverNp1'], _RPM_SCALE,
+            state['free_decel'], state['v_min_w'],
+            t_rr_ring, t_grav_ring, t_pedal_ring,
+            state['rpm_buf'], state['rpm_idx'],
+            state['rpm_prev_sub'],
+            state['delta_band'], params['k_band'], params['c_band'],
+        )
+        state['drpm_mean_prev'] = drpm_mean_new
+        state['drpm_peak_neg_prev'] = drpm_peak_neg_new
+        state['iq_mean_prev'] = iq_mean_new
+
+        # ── Log ──────────────────────────────────────────────────────
+        v_cap = math.sqrt(2.0 * state['e_cap'] * state['inv_cap']) if state['e_cap'] > 0.0 else 0.0
+        if ix < n_ticks:
+            _record_log(logs, ix, t, state, motor_rpm, v_cap,
+                        p_net_sum, pcu_esr_sum, p_brake_sum,
+                        p_drg_sum, brake_val,
+                        state['inv_sub'])
+            logs['pedal'][ix] = t_pedal_ring
+            logs['grade'][ix] = grade_val
+            ix += 1
+
+    s = slice(0, ix)
+    return {k: v[s] for k, v in logs.items()}
+
+
+# =====================================================================
 #  Private helpers — each handles one concern
 # =====================================================================
 
 def _resolve_params(eta_gear, j_carrier_override, t_drag_coeff,
                     r_phase_override, flux_linkage_override,
-                    cap_esr, foc_tau):
+                    cap_esr, foc_tau, k_band, c_band):
     """Resolve parameter overrides, falling back to module defaults."""
     _eta_gear = eta_gear if eta_gear is not None else ETA_GEAR
     _j_carrier = j_carrier_override if j_carrier_override is not None else J_CARRIER
@@ -550,18 +899,28 @@ def _resolve_params(eta_gear, j_carrier_override, t_drag_coeff,
     _flux = flux_linkage_override if flux_linkage_override is not None else FLUX_LINKAGE
     _cap_esr = cap_esr if cap_esr is not None else CAP_ESR
     _foc_tau = foc_tau if foc_tau is not None else FOC_TAU
+    _k_band = k_band if k_band is not None else K_BAND
+    _c_band = c_band if c_band is not None else C_BAND
     _kt = 1.5 * POLE_PAIRS * _flux
     return dict(
         eta_gear=_eta_gear, j_carrier=_j_carrier, t_drag=_t_drag,
         r_phase=_r_phase, flux=_flux, cap_esr=_cap_esr, foc_tau=_foc_tau,
         kt=_kt, _1p5R=1.5 * _r_phase, watt_max=VESC_WATT_MAX,
+        k_band=_k_band, c_band=_c_band,
     )
 
 
 def _init_state(v0_kmh, mass_kg, dt, mu_s, mu_k, params,
                 vesc_current_gain, vesc_voltage_gain,
                 constant_speed, v_min_kmh, iq_kp,
-                telem_delay=None):
+                telem_delay=None,
+                rpm_noise_sigma=RPM_NOISE_SIGMA_DEFAULT,
+                iq_noise_sigma=IQ_NOISE_SIGMA_DEFAULT,
+                iq_bias=IQ_BIAS_DEFAULT,
+                vcap_noise_sigma=VCAP_NOISE_SIGMA_DEFAULT,
+                drpm_mean_noise_sigma=DRPM_MEAN_NOISE_SIGMA_DEFAULT,
+                drpm_peak_neg_noise_sigma=DRPM_PEAK_NEG_NOISE_SIGMA_DEFAULT,
+                drpm_peak_neg_noise_bias=DRPM_PEAK_NEG_NOISE_BIAS_DEFAULT):
     """Build the mutable simulation state dict."""
     N = GEAR_N
     _1pN = 1.0 + N
@@ -613,6 +972,20 @@ def _init_state(v0_kmh, mass_kg, dt, mu_s, mu_k, params,
         # is fixed so tuning/scoring is reproducible; the sim still
         # exposes realistic jitter on the fast-path signals.
         noise_rng=np.random.default_rng(0xC0FFEE),
+        # Sensor noise magnitudes for this run (parameterised so
+        # sim.scoring can perturb them in the robustness sweep).
+        rpm_noise_sigma=float(rpm_noise_sigma),
+        iq_noise_sigma=float(iq_noise_sigma),
+        iq_bias=float(iq_bias),
+        vcap_noise_sigma=float(vcap_noise_sigma),
+        drpm_mean_noise_sigma=float(drpm_mean_noise_sigma),
+        drpm_peak_neg_noise_sigma=float(drpm_peak_neg_noise_sigma),
+        drpm_peak_neg_noise_bias=float(drpm_peak_neg_noise_bias),
+        # Band-brake torsional deformation (rad).  Builds up as carrier
+        # tries to rotate against clamping force; clamped to the kinetic
+        # holding level on static breakaway.  Zero at sim start (no
+        # prestress) — realistic for a lever that is initially released.
+        delta_band=0.0,
     )
 
 
@@ -643,7 +1016,14 @@ def _compute_current_command(use_strategy, controller, k_fixed,
                              drpm_mean_prev=0.0,
                              drpm_peak_neg_prev=0.0,
                              iq_mean_prev=0.0,
-                             noise_rng=None):
+                             noise_rng=None,
+                             rpm_noise_sigma=RPM_NOISE_SIGMA_DEFAULT,
+                             iq_noise_sigma=IQ_NOISE_SIGMA_DEFAULT,
+                             iq_bias=IQ_BIAS_DEFAULT,
+                             vcap_noise_sigma=VCAP_NOISE_SIGMA_DEFAULT,
+                             drpm_mean_noise_sigma=DRPM_MEAN_NOISE_SIGMA_DEFAULT,
+                             drpm_peak_neg_noise_sigma=DRPM_PEAK_NEG_NOISE_SIGMA_DEFAULT,
+                             drpm_peak_neg_noise_bias=DRPM_PEAK_NEG_NOISE_BIAS_DEFAULT):
     """Compute the current command for this control tick.
 
     Handles strategy dispatch, fixed-gain fallback, iq feedback,
@@ -673,7 +1053,10 @@ def _compute_current_command(use_strategy, controller, k_fixed,
     """
     # ── Strategy or fixed-gain ───────────────────────────────────────
     if use_strategy:
-        iq_for_strategy = i_actual * vesc_current_gain
+        # iq_bias is a constant-per-run sensor offset (zero-point error):
+        # applied to everything the strategy sees via an iq field, the
+        # same way a real offset would bias every reading.
+        iq_for_strategy = i_actual * vesc_current_gain + iq_bias
         # Estimate duty from back-EMF and bus voltage (same info VESC reports)
         omega_e_est = delayed_rpm * POLE_PAIRS * _TWO_PI / 60.0
         bemf_est = flux * omega_e_est
@@ -686,16 +1069,17 @@ def _compute_current_command(use_strategy, controller, k_fixed,
         drpm_mean = drpm_mean_prev
         drpm_peak_neg = drpm_peak_neg_prev
         if noise_rng is not None:
-            rpm_fast = rpm_fast + noise_rng.normal(0.0, _RPM_NOISE_SIGMA)
-            iq_mean = iq_mean + noise_rng.normal(0.0, _IQ_NOISE_SIGMA)
-            drpm_mean = drpm_mean + noise_rng.normal(0.0, _DRPM_MEAN_NOISE_SIGMA)
+            rpm_fast = rpm_fast + noise_rng.normal(0.0, rpm_noise_sigma)
+            iq_mean = iq_mean + noise_rng.normal(0.0, iq_noise_sigma)
+            drpm_mean = drpm_mean + noise_rng.normal(0.0, drpm_mean_noise_sigma)
             drpm_peak_neg = (drpm_peak_neg
-                             + _DRPM_PEAK_NEG_NOISE_BIAS
-                             + noise_rng.normal(0.0, _DRPM_PEAK_NEG_NOISE_SIGMA))
+                             + drpm_peak_neg_noise_bias
+                             + noise_rng.normal(0.0, drpm_peak_neg_noise_sigma))
             if drpm_peak_neg > 0.0:
                 # Peak-held minimum is bounded above by 0 on hardware
                 # (min starts at 0, only goes more negative).
                 drpm_peak_neg = 0.0
+            v_cap_sensed = v_cap_sensed + noise_rng.normal(0.0, vcap_noise_sigma)
 
         ctx = StrategyContext(
             rpm=delayed_rpm,

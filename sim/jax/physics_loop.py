@@ -17,9 +17,10 @@ import jax
 import jax.numpy as jnp
 from jax import lax
 
-from sim.physics_jax import _step as _physics_step
+from sim.jax.physics import _step as _physics_step
+from sim.physics import STICTION_W as _STICTION_W
 
-from sim.jax_env import DEFAULT_FLOAT  # noqa: F401  (configures jax)
+from sim.jax.env import DEFAULT_FLOAT  # noqa: F401  (configures jax)
 
 
 # ---------------------------------------------------------------------
@@ -217,7 +218,7 @@ def simulate_fixed_gain_jax(
             DEFAULT_FLOAT(eta_gear), DEFAULT_FLOAT(t_drag_coeff), DEFAULT_FLOAT(r_phase_15),
             DEFAULT_FLOAT(foc_alpha), DEFAULT_FLOAT(inv_cur_gain),
             DEFAULT_FLOAT(inv_j_carrier), DEFAULT_FLOAT(inv_j_wheel),
-            DEFAULT_FLOAT(mu_ratio), DEFAULT_FLOAT(cap_esr), DEFAULT_FLOAT(inv_cap),
+            DEFAULT_FLOAT(mu_ratio), DEFAULT_FLOAT(_STICTION_W), DEFAULT_FLOAT(cap_esr), DEFAULT_FLOAT(inv_cap),
             DEFAULT_FLOAT(n_over_np1), DEFAULT_FLOAT(rpm_scale),
             jnp.bool_(free_decel), DEFAULT_FLOAT(v_min_w),
             DEFAULT_FLOAT(t_rr_ring), DEFAULT_FLOAT(t_grav_ring), DEFAULT_FLOAT(0.0),

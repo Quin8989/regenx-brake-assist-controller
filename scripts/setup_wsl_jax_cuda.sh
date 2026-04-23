@@ -75,8 +75,8 @@ Activate with:
     source .venv-linux/bin/activate
 
 Then benchmark:
-    python scripts/benchmark_jax_startup.py fp32
-    python scripts/benchmark_jax_cvar20.py
+    python scripts/research/benchmark_jax_startup.py fp32
+    python scripts/research/benchmark_jax_cvar20.py
 
 Both scripts should report a CudaDevice in the startup summary.
 ─────────────────────────────────────────────
