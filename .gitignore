@@ -16,6 +16,9 @@ htmlcov/
 # Sim output (large generated HTML / logs)
 sim/output/
 
+# JAX persistent XLA compile cache
+.jax_cache/
+
 # Local device snapshots / bench artifacts
 /vesc_snapshot_appconf.bin
 /vesc_snapshot_mcconf.bin
