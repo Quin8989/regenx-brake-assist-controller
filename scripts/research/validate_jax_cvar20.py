@@ -27,8 +27,8 @@ from sim.ride_generator import generate_ride_set
 from sim.scoring import (
     score_strategy_robust, _sample_perturbations, UNCERTAIN_PARAMS,
 )
-from sim.pysr_driver_jax import CandidateEvaluator
-from scripts.benchmark_jax_cvar20 import _NumpyPysr, PYSR_EQ
+from sim.jax.pysr_driver import CandidateEvaluator
+from scripts.research.benchmark_jax_cvar20 import _NumpyPysr, PYSR_EQ
 
 
 def main():

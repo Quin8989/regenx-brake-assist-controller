@@ -38,7 +38,7 @@ from config.settings import (
     VESC_WATT_MAX,
 )
 from sim.ride_generator import generate_ride, PROFILES
-from sim.physics_jax_ride import simulate_ride_fixed_gain_jax
+from sim.jax.physics_ride import simulate_ride_fixed_gain_jax
 
 
 def resample_ride_to_ticks(ride, ctrl_steps):

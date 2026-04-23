@@ -32,7 +32,7 @@ from config.settings import (
     WHEEL_RADIUS_M as R_WHEEL,
     REGEN_CURRENT_MAX_A,
 )
-from sim.physics_jax import run_physics_batch_jax
+from sim.jax.physics import run_physics_batch_jax
 
 
 def build_inputs(*, v0_kmh, i_cmd, brake_val, i_actual_init=0.0,

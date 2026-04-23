@@ -47,11 +47,11 @@ from sim.physics import (
     DRPM_PEAK_NEG_NOISE_BIAS_DEFAULT,
 )
 from sim.ride_generator import generate_ride, PROFILES
-from sim.physics_jax_strategy import (
+from sim.jax.physics_strategy import (
     simulate_ride_strategy_jax, lambdify_expression_jax,
     K_FLOOR, K_CEIL,
 )
-from scripts.validate_jax_ride_strategy import build_jax_kwargs
+from scripts.research.validate_jax_ride_strategy import build_jax_kwargs
 
 
 # A realistic-looking PySR expression.

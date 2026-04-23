@@ -42,10 +42,10 @@ from sim.physics import (
     DUTY_SAT_THRESHOLD,
 )
 from sim.ride_generator import generate_ride, PROFILES
-from sim.physics_jax_strategy import (
+from sim.jax.physics_strategy import (
     simulate_ride_strategy_jax, K_FLOOR, K_CEIL,
 )
-from sim.jax_env import DEFAULT_FLOAT
+from sim.jax.env import DEFAULT_FLOAT
 
 # Silence default telemetry noise so numpy matches the noise-free JAX.
 # simulate_ride uses positional defaults on _init_state for drpm_*_noise_*
@@ -284,7 +284,7 @@ def main():
     # Build a PySR-shaped strategy via the lambdifier — this is the
     # realistic workload: thousands of candidate expressions evaluated
     # inside a batched ride loop.
-    from sim.physics_jax_strategy import lambdify_expression_jax
+    from sim.jax.physics_strategy import lambdify_expression_jax
     pysr_like_eq = (
         "relu(0.1 + 0.0005 * drpm_peak_neg + 0.02 * k_prev) "
         "+ step(rpm - 100) * 0.05"

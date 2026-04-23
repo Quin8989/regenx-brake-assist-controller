@@ -40,7 +40,7 @@ from config.settings import (
     VESC_WATT_MAX,
 )
 from sim.physics import DUTY_SAT_THRESHOLD
-from sim.physics_jax_loop import simulate_fixed_gain_jax
+from sim.jax.physics_loop import simulate_fixed_gain_jax
 
 
 def run_jax(*, k_gain, brake_const, v0_kmh, mass_kg=100.0,

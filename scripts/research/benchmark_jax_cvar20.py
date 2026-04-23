@@ -31,11 +31,11 @@ from sim.ride_generator import PROFILES, generate_ride_set
 from sim.scoring import (
     _sample_perturbations, _sim_kwargs_from_perturbation, UNCERTAIN_PARAMS,
 )
-from sim.physics_jax_strategy import (
+from sim.jax.physics_strategy import (
     simulate_ride_strategy_jax, lambdify_expression_jax, K_FLOOR, K_CEIL,
 )
-from sim.jax_env import DEFAULT_FLOAT
-from scripts.validate_jax_ride_strategy import build_jax_kwargs
+from sim.jax.env import DEFAULT_FLOAT
+from scripts.research.validate_jax_ride_strategy import build_jax_kwargs
 
 
 PYSR_EQ = ("relu(0.1 + 0.0005 * drpm_peak_neg + 0.02 * k_prev) "

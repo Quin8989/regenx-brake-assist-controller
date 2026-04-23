@@ -22,7 +22,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from sim.jax_env import DEFAULT_FLOAT  # noqa: F401  (configures jax)
+from sim.jax.env import DEFAULT_FLOAT  # noqa: F401  (configures jax)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -30,12 +30,12 @@ if str(_REPO_ROOT) not in sys.path:
 sys.path.insert(0, str(_REPO_ROOT / "firmware"))
 
 from sim.physics import DT, CTRL_PERIOD
-from sim.physics_jax_strategy import (
+from sim.jax.physics_strategy import (
     simulate_ride_strategy_jax, lambdify_expression_jax,
 )
 from sim.ride_generator import PROFILES
 from sim.scoring import UNCERTAIN_PARAMS, _sample_perturbations
-from sim.scoring_jax import (
+from sim.jax.scoring import (
     score_rides_jax, profile_weighted_composite, cvar20,
 )
 
@@ -81,9 +81,9 @@ def build_batch(rides, perturbations, *, seed_base=0xB6B6):
     Returns ``(static, traced_batched, profile_names_B, n_valid_B,
                brake_mask_B, noise_keys_B)``.
 
-    Lazy-imports to avoid a circular init from scripts.validate_jax_*.
+    Lazy-imports to avoid a circular init from scripts.research.validate_jax_*.
     """
-    from scripts.validate_jax_ride_strategy import build_jax_kwargs
+    from scripts.research.validate_jax_ride_strategy import build_jax_kwargs
 
     ctrl_steps = max(1, int(CTRL_PERIOD / DT))
     n_ticks_padded = max(r.n // ctrl_steps for r in rides)

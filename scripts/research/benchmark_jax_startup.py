@@ -35,14 +35,14 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 sys.path.insert(0, str(_REPO_ROOT / "firmware"))
 
-from sim.jax_env import summary  # noqa: E402
+from sim.jax.env import summary  # noqa: E402
 print("[jax]", summary())
 
 import numpy as np  # noqa: E402
 from sim.ride_generator import generate_ride_set  # noqa: E402
 from sim.scoring import _sample_perturbations, UNCERTAIN_PARAMS  # noqa: E402
-from sim.pysr_driver_jax import CandidateEvaluator  # noqa: E402
-from scripts.benchmark_jax_cvar20 import PYSR_EQ  # noqa: E402
+from sim.jax.pysr_driver import CandidateEvaluator  # noqa: E402
+from scripts.research.benchmark_jax_cvar20 import PYSR_EQ  # noqa: E402
 
 
 def main():
