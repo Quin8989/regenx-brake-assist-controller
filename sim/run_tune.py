@@ -37,16 +37,22 @@ except ImportError:
     _cma = None
     _HAS_CMA = False
 
+from .ride_generator import generate_ride_set
 from .scoring import (
-    SCENARIOS,
-    SCREEN_MASSES,
-    SCREEN_SCENARIOS,
-    score_strategy,
+    precompute_motor_off_logs,
+    score_rides,
     score_strategy_robust,
 )
 from .strategies import DEFAULT_STRATEGY_NAMES, STRATEGY_BY_NAME, parse_strategy_names
 
 DEFAULT_STRATEGIES = list(DEFAULT_STRATEGY_NAMES)
+
+# ── Ride-set sizing ─────────────────────────────────────────────────
+# DE/CMA screen: a smaller basket (8 rides) to keep inner-loop cost low.
+# Full / polish / final scoring: the canonical 20-ride basket
+# (5 seeds × 4 profiles) that the robustness table is built around.
+SCREEN_SEEDS_PER_PROFILE = 2
+FULL_SEEDS_PER_PROFILE   = 5
 
 
 # =====================================================================
@@ -89,8 +95,8 @@ class _Objective:
         strat_cls,
         names,
         int_flags,
-        scenarios,
-        masses,
+        rides,
+        motor_off_logs=None,
         mode="nominal",
         robust_samples=8,
         robust_seed=42,
@@ -100,8 +106,10 @@ class _Objective:
         self.strat_cls = strat_cls
         self.names = names
         self.int_flags = int_flags
-        self.scenarios = scenarios
-        self.masses = masses
+        self.rides = rides
+        # Cached motor-off reference trajectories (nominal physics only
+        # — robust objective recomputes them per-perturbation).
+        self.motor_off_logs = motor_off_logs
         self.mode = mode
         self.robust_samples = robust_samples
         self.robust_seed = robust_seed
@@ -124,20 +132,19 @@ class _Objective:
     def __call__(self, x):
         params = _vec_to_params(x, self.names, self.int_flags)
         if self.mode == "nominal":
-            result = score_strategy(
+            result = score_rides(
                 lambda: self.strat_cls(**params),
-                scenarios=self.scenarios,
-                masses=self.masses,
+                self.rides,
+                motor_off_logs=self.motor_off_logs,
             )
-            return -result["weighted"]
+            return -result.composite
 
         n_samples = self._samples_for_this_eval()
         robust = score_strategy_robust(
             strategy_factory=None,
+            rides=self.rides,
             n_samples=n_samples,
             seed=self.robust_seed,
-            scenarios=self.scenarios,
-            masses=self.masses,
             workers=1,
             strat_cls=self.strat_cls,
             strat_params=params,
@@ -187,43 +194,37 @@ def _vec_to_params(x, names, int_flags):
     return params
 
 
-def _avg_dims(score_result):
-    per_s = score_result["per_scenario"]
-    total_wt = sum(s["weight"] for s in per_s)
-    e = sum(s["energy"] * s["weight"] for s in per_s) / total_wt
-    t = sum(s["tracking"] * s["weight"] for s in per_s) / total_wt
-    s_ = sum(s["smoothness"] * s["weight"] for s in per_s) / total_wt
-    return e, t, s_
+def _dims_of(score_result):
+    """Return (energy, linearity) from a RideSetScore."""
+    return score_result.energy, score_result.linearity
 
 
 # =====================================================================
 #  Per-strategy pipeline
 # =====================================================================
 
-def _full_nominal_objective(x, strat_cls, names, int_flags):
+def _full_nominal_objective(x, strat_cls, names, int_flags, rides,
+                            motor_off_logs=None):
     """Full-evaluation nominal objective (used only when objective=nominal)."""
     params = _vec_to_params(x, names, int_flags)
-    result = score_strategy(lambda: strat_cls(**params))
-    return -result["weighted"]
+    result = score_rides(lambda: strat_cls(**params), rides,
+                         motor_off_logs=motor_off_logs)
+    return -result.composite
 
 
 def _make_polish_objective(strat_cls, names, int_flags, *,
+                           rides, motor_off_logs,
                            objective_mode, robust_samples,
                            robust_seed, robust_lambda):
     """Build a polish objective that matches the DE objective mode.
 
-    Previously the polish phase always compared against the nominal
-    full-eval score.  That silently replaced a robustly-tuned set of
-    params with a set polished against the nominal objective, which
-    could score lower on the robust metric.  This factory returns a
-    full-scenario objective using the *same* mode as the DE phase so
-    pre/post comparison is apples-to-apples.
+    Always runs on the full 20-ride basket so the polish is comparing
+    against the same criterion used in the final report.
     """
-    from .scoring import MASS_DISTRIBUTION
     obj = _Objective(
         strat_cls, names, int_flags,
-        scenarios=SCENARIOS,            # full set, not screen
-        masses=MASS_DISTRIBUTION,        # full mass distribution
+        rides=rides,
+        motor_off_logs=motor_off_logs,
         mode=objective_mode,
         robust_samples=robust_samples,
         robust_seed=robust_seed,
@@ -232,15 +233,13 @@ def _make_polish_objective(strat_cls, names, int_flags, *,
     return obj
 
 
-def _grid_warm_start_init(strat_cls, names, bounds, popsize, pool, log_fn):
-    """Screen param_grid() nominally on SCREEN scenarios; return top-N as init.
+def _grid_warm_start_init(strat_cls, names, bounds, popsize, pool,
+                          log_fn, rides, motor_off_logs):
+    """Screen param_grid() nominally on the screen ride set; top-N as init.
 
     Cheap one-shot: evaluates every row in ``param_grid()`` on the screen
-    scenarios without robust sampling.  Sorts by score and takes the top
-    ``popsize*D`` rows as scipy's DE initial population.  Points are
-    clipped to the search bounds and perturbed by tiny noise to ensure
-    distinctness.  If the grid is smaller than the required population,
-    the remainder is backfilled with Latin-hypercube samples.
+    rides without robust sampling.  Sorts by score and takes the top
+    ``popsize*D`` rows as scipy's DE initial population.
     """
     grid = strat_cls.param_grid()
     if not grid:
@@ -252,7 +251,7 @@ def _grid_warm_start_init(strat_cls, names, bounds, popsize, pool, log_fn):
     # Score every grid point on the cheap screen objective.
     screen_obj = _Objective(
         strat_cls, names, int_flags,
-        scenarios=SCREEN_SCENARIOS, masses=SCREEN_MASSES,
+        rides=rides, motor_off_logs=motor_off_logs,
         mode="nominal",
     )
     vecs = np.array([[row[k] for k in names] for row in grid], dtype=float)
@@ -350,6 +349,10 @@ def _tune_one(
     pool,
     seed,
     log_fn,
+    screen_rides,
+    full_rides,
+    screen_off_logs,
+    full_off_logs,
     objective_mode,
     objective_robust_samples,
     objective_robust_lambda,
@@ -360,11 +363,7 @@ def _tune_one(
     adaptive_samples=True,
     n_workers=1,
 ):
-    """Screen-DE/CMA → full-eval for one strategy class.
-
-    *pool* must be a multiprocessing.Pool whose .map is passed to scipy
-    so no internal pools are created or destroyed between strategies.
-    """
+    """Screen-DE/CMA → full-eval for one strategy class."""
     strategy_name = strat_cls.key
     names, bounds, int_flags = _build_bounds(strat_cls)
 
@@ -388,8 +387,8 @@ def _tune_one(
     # Phase 1: DE/CMA with screen config
     objective = _Objective(
         strat_cls, names, int_flags,
-        scenarios=SCREEN_SCENARIOS,
-        masses=SCREEN_MASSES,
+        rides=screen_rides,
+        motor_off_logs=screen_off_logs,
         mode=objective_mode,
         robust_samples=objective_robust_samples,
         robust_seed=seed,
@@ -415,6 +414,7 @@ def _tune_one(
     if warm_start:
         init = _grid_warm_start_init(
             strat_cls, names, bounds, popsize, pool, log_fn,
+            rides=screen_rides, motor_off_logs=screen_off_logs,
         )
 
     t0 = time.time()
@@ -454,32 +454,24 @@ def _tune_one(
     polish_score = None
 
     if polish:
-        # Local search on the FULL objective matching DE's mode (nominal
-        # or robust).  Powell handles mixed/discontinuous landscapes
-        # better than gradient methods when integer-like parameters are
-        # rounded in _vec_to_params.
-        #
-        # Powell is strictly serial (each iter depends on the previous),
-        # but each iter evaluates the full robust objective.  We route
-        # the MC samples through the shared pool so polish actually uses
-        # all cores instead of starving at 1.  DE's workers cannot do
-        # this because they are themselves inside the pool.
-        from .scoring import MASS_DISTRIBUTION, score_strategy_robust as _ssr
-
+        # Local Powell search on the FULL 20-ride basket with the same
+        # objective mode as DE.  Powell is strictly serial, but each
+        # iter evaluates the robust objective whose MC samples are
+        # routed through the shared pool so all cores stay busy.
         def polish_obj(x):
             params = _vec_to_params(x, names, int_flags)
             if objective_mode == "nominal":
-                res = score_strategy(
+                res = score_rides(
                     lambda: strat_cls(**params),
-                    scenarios=SCENARIOS, masses=MASS_DISTRIBUTION,
+                    full_rides,
+                    motor_off_logs=full_off_logs,
                 )
-                return -res["weighted"]
-            robust = _ssr(
+                return -res.composite
+            robust = score_strategy_robust(
                 strategy_factory=None,
+                rides=full_rides,
                 n_samples=objective_robust_samples,
                 seed=seed,
-                scenarios=SCENARIOS,
-                masses=MASS_DISTRIBUTION,
                 pool=pool,               # parallel MC samples
                 strat_cls=strat_cls,
                 strat_params=params,
@@ -519,10 +511,11 @@ def _tune_one(
 
     # Phase 2: full scoring on best params
     t1 = time.time()
-    full = score_strategy(lambda: strat_cls(**best_params))
+    full = score_rides(lambda: strat_cls(**best_params), full_rides,
+                       motor_off_logs=full_off_logs)
     full_elapsed = time.time() - t1
 
-    e_avg, t_avg, s_avg = _avg_dims(full)
+    e_avg, t_avg = _dims_of(full)
     total_elapsed = screen_elapsed + full_elapsed
 
     return {
@@ -532,10 +525,9 @@ def _tune_one(
         "seed": int(seed),
         "objective_mode": objective_mode,
         "screen_score": screen_score,
-        "composite": float(full["weighted"]),
+        "composite": float(full.composite),
         "energy": float(e_avg),
-        "tracking": float(t_avg),
-        "smoothness": float(s_avg),
+        "linearity": float(t_avg),
         "nfev": int(result.nfev),
         "nit": int(result.nit),
         "success": bool(result.success),
@@ -565,7 +557,7 @@ def _write_artifacts(base_dir: Path, meta: dict, rows: list[dict]):
         w = csv.writer(f)
         w.writerow([
             "rank", "strategy", "seed", "objective_mode", "composite",
-            "energy", "tracking", "smoothness", "elapsed_s", "nfev",
+            "energy", "linearity", "elapsed_s", "nfev",
             "success", "polish_used", "polish_improved", "params",
         ])
         for i, r in enumerate(rows_sorted, start=1):
@@ -574,7 +566,7 @@ def _write_artifacts(base_dir: Path, meta: dict, rows: list[dict]):
                 r.get("seed", ""),
                 r.get("objective_mode", "nominal"),
                 f"{r['composite']:.3f}", f"{r['energy']:.3f}",
-                f"{r['tracking']:.3f}", f"{r['smoothness']:.3f}",
+                f"{r['linearity']:.3f}",
                 f"{r['elapsed_s']:.1f}", r["nfev"], r["success"],
                 r.get("polish_used", False),
                 r.get("polish_improved", False),
@@ -588,7 +580,7 @@ def _write_artifacts(base_dir: Path, meta: dict, rows: list[dict]):
             f.write(f"({r['strategy']}, dict({pstr})),\n")
             f.write(
                 f"  # composite={r['composite']:.1f}  energy={r['energy']:.1f}"
-                f"  tracking={r['tracking']:.1f}  smoothness={r['smoothness']:.1f}\n"
+                f"  linearity={r['linearity']:.1f}\n"
             )
 
 
@@ -765,6 +757,17 @@ def _parse_args():
         action="store_true",
         help="Disable adaptive ramp of robust_samples across generations.",
     )
+    p.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="Resume from a previous run's output dir (e.g. "
+             "sim/output/tune/20260422_074732). Reads checkpoint.json, "
+             "skips (strategy, seed) pairs already completed, and "
+             "appends new results to the same directory. The robustness "
+             "phase also skips rows that already have robust_mean.",
+    )
     return p.parse_args()
 
 
@@ -789,6 +792,28 @@ if __name__ == "__main__":
     log_path = out_dir / "run.log"
     ckpt_path = out_dir / "checkpoint.json"
 
+    # ── Resume support: reuse a previous run's directory + checkpoint ──
+    # We keep the original run_id (folder name) so summary.csv lands where
+    # the user expects, and we preload `results` so the main loop and the
+    # robustness phase can skip anything already on disk.
+    resumed_results: list[dict] = []
+    if args.resume:
+        resume_dir = Path(args.resume)
+        if not resume_dir.is_dir():
+            raise SystemExit(f"--resume: directory not found: {resume_dir}")
+        resume_ckpt = resume_dir / "checkpoint.json"
+        if not resume_ckpt.is_file():
+            raise SystemExit(
+                f"--resume: checkpoint.json not found in {resume_dir}")
+        with resume_ckpt.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+        resumed_results = list(payload.get("completed", []))
+        # Adopt the old folder's run_id so new log entries append there.
+        out_dir = resume_dir
+        run_id = payload.get("run_id", out_dir.name)
+        log_path = out_dir / "run.log"
+        ckpt_path = out_dir / "checkpoint.json"
+
     # Suppress Numba C-level JIT diagnostics that bypass sys.stdout.
     # This avoids needing os.dup2 which breaks VS Code's ConPTY.
     os.environ.setdefault("NUMBA_DISABLE_PERFORMANCE_WARNINGS", "1")
@@ -809,14 +834,22 @@ if __name__ == "__main__":
     _real_stderr = sys.stderr
 
     t_all = time.time()
-    results: list[dict] = []
+    results: list[dict] = list(resumed_results)
+    # Fast-lookup set of (strategy, seed) pairs already on disk. The main
+    # tuning loop below skips any pair in this set; the robustness phase
+    # skips rows that already carry a robust_mean key.
+    completed_pairs: set[tuple[str, int]] = {
+        (r["strategy"], int(r.get("seed", args.seed))) for r in results
+    }
 
     # ── One persistent pool for the entire run ──
     # Workers are spawned once, stay warm (numba JIT cached), and are
     # silenced via _pool_worker_init so nothing leaks to VS Code's pty.
     pool = mp.Pool(args.workers, initializer=_pool_worker_init)
 
-    with log_path.open("w", encoding="utf-8") as out_log:
+    # Append to run.log on resume so we keep the full history in one file.
+    log_mode = "a" if args.resume else "w"
+    with log_path.open(log_mode, encoding="utf-8") as out_log:
         # Python-level redirect catches print(), warnings, and scipy output.
         # We intentionally do NOT use os.dup2 to redirect fd 1/2 — that
         # disconnects VS Code's ConPTY pipe and crashes the extension host.
@@ -851,12 +884,43 @@ if __name__ == "__main__":
                 out_log.write(line + "\n")
                 out_log.flush()
 
+            # ── Build ride baskets + cache motor-off passes once ──
+            # Same rides reused across all strategies and tuning seeds
+            # so every controller is scored on the identical experience.
+            _log_file(
+                f"Building rides: screen={SCREEN_SEEDS_PER_PROFILE}*4="
+                f"{SCREEN_SEEDS_PER_PROFILE*4} rides, "
+                f"full={FULL_SEEDS_PER_PROFILE}*4={FULL_SEEDS_PER_PROFILE*4} rides"
+            )
+            t_rides = time.time()
+            screen_rides = generate_ride_set(
+                seeds_per_profile=SCREEN_SEEDS_PER_PROFILE,
+                base_seed=args.seed,
+            )
+            full_rides = generate_ride_set(
+                seeds_per_profile=FULL_SEEDS_PER_PROFILE,
+                base_seed=args.seed,
+            )
+            screen_off_logs = precompute_motor_off_logs(screen_rides)
+            full_off_logs   = precompute_motor_off_logs(full_rides)
+            _log_file(
+                f"  ride baskets + motor-off caches built in "
+                f"{time.time() - t_rides:.1f}s"
+            )
+
             total_runs = len(strategy_names) * len(seeds)
             run_idx = 0
             for strategy_name in strategy_names:
                 strat_cls = STRATEGY_BY_NAME[strategy_name]
                 for seed in seeds:
                     run_idx += 1
+                    if (strategy_name, int(seed)) in completed_pairs:
+                        _log_file(
+                            f"[{run_idx}/{total_runs}] Strategy "
+                            f"{strategy_name} seed={seed} - SKIP (resume, "
+                            f"already on disk)"
+                        )
+                        continue
                     _log_file(
                         f"[{run_idx}/{total_runs}] Strategy {strategy_name} "
                         f"seed={seed} - tuning..."
@@ -869,6 +933,10 @@ if __name__ == "__main__":
                         pool=pool,
                         seed=int(seed),
                         log_fn=_log_file,
+                        screen_rides=screen_rides,
+                        full_rides=full_rides,
+                        screen_off_logs=screen_off_logs,
+                        full_off_logs=full_off_logs,
                         objective_mode=args.objective,
                         objective_robust_samples=args.robust_objective_samples,
                         objective_robust_lambda=args.robust_objective_lambda,
@@ -895,26 +963,28 @@ if __name__ == "__main__":
 
                     gc.collect()   # release DE temporaries before next run
 
-            # Phase 3: Monte-Carlo robustness
+            # Phase 3: Monte-Carlo robustness (on full 20-ride basket)
             if not args.no_robust:
-                from .scoring import score_strategy_robust
                 _log_file(f"\nRobustness check ({args.robust_samples} "
                           f"samples, {args.workers} workers)...")
                 for row in results:
                     strategy_name = row["strategy"]
+                    if "robust_mean" in row:
+                        _log_file(
+                            f"  {strategy_name} seed={row.get('seed')}: "
+                            f"SKIP (resume, robust already on disk)"
+                        )
+                        continue
                     strat_cls = STRATEGY_BY_NAME[strategy_name]
                     params = row["params"]
-                    # Use the existing pool so all cores stay busy —
-                    # previously this ran with workers=1 which left the
-                    # machine at ~1 active core for minutes per strategy.
                     rob = score_strategy_robust(
                         strategy_factory=None,
+                        rides=full_rides,
                         n_samples=args.robust_samples,
                         pool=pool,
                         seed=int(row.get("seed", args.seed)),
                         strat_cls=strat_cls,
                         strat_params=params,
-                        scenarios=SCENARIOS,
                     )
                     row["robust_mean"] = rob["mean"]
                     row["robust_std"] = rob["std"]
@@ -925,6 +995,11 @@ if __name__ == "__main__":
                         f"std={rob['std']:.1f}  "
                         f"p5={rob['p5']:.1f}  p95={rob['p95']:.1f}"
                     )
+                    # Persist robustness progress so a crash during this
+                    # phase is also recoverable by --resume.
+                    with ckpt_path.open("w", encoding="utf-8") as f:
+                        json.dump({"run_id": run_id, "completed": results},
+                                  f, indent=2)
 
         finally:
             # Shut down the single pool before restoring streams
@@ -963,8 +1038,8 @@ if __name__ == "__main__":
         print(
             f"  {r['strategy']} seed={r.get('seed', '')}  "
             f"composite={r['composite']:.2f}  "
-            f"energy={r['energy']:.1f}  tracking={r['tracking']:.1f}  "
-            f"smooth={r['smoothness']:.1f}{rob}"
+            f"energy={r['energy']:.1f}  linearity={r['linearity']:.1f}"
+            f"{rob}"
         )
         print(f"    PARAMS = dict({pstr})")
 
