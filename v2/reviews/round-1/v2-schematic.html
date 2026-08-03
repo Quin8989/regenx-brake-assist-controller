@@ -1,0 +1,618 @@
+<title>ReGenX v2 — Schematic Set</title>
+<style>
+  :root {
+    --ground:#F2F4F4; --surface:#FFFFFF; --surface-2:#EAEDED;
+    --ink:#12161A; --ink-mid:#454D53; --ink-soft:#6B747A;
+    --rule:#D6DCDD; --accent:#A8481A; --accent-ink:#8C3B14;
+    --wire:#12161A; --wire-pwr:#A8481A; --wire-sig:#1D6E7A; --wire-gnd:#5A6167;
+    --sym:#FFFFFF; --border:#12161A;
+    --mono: ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0D1012; --surface:#15191C; --surface-2:#1D2225;
+      --ink:#E7EBEC; --ink-mid:#B2BABF; --ink-soft:#8B959B;
+      --rule:#282E31; --accent:#DE8A52; --accent-ink:#EFA372;
+      --wire:#C8CFD2; --wire-pwr:#DE8A52; --wire-sig:#5FC2CE; --wire-gnd:#8B959B;
+      --sym:#15191C; --border:#C8CFD2;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0D1012; --surface:#15191C; --surface-2:#1D2225;
+    --ink:#E7EBEC; --ink-mid:#B2BABF; --ink-soft:#8B959B;
+    --rule:#282E31; --accent:#DE8A52; --accent-ink:#EFA372;
+    --wire:#C8CFD2; --wire-pwr:#DE8A52; --wire-sig:#5FC2CE; --wire-gnd:#8B959B;
+    --sym:#15191C; --border:#C8CFD2;
+  }
+  :root[data-theme="light"] {
+    --ground:#F2F4F4; --surface:#FFFFFF; --surface-2:#EAEDED;
+    --ink:#12161A; --ink-mid:#454D53; --ink-soft:#6B747A;
+    --rule:#D6DCDD; --accent:#A8481A; --accent-ink:#8C3B14;
+    --wire:#12161A; --wire-pwr:#A8481A; --wire-sig:#1D6E7A; --wire-gnd:#5A6167;
+    --sym:#FFFFFF; --border:#12161A;
+  }
+
+  body { background:var(--ground); color:var(--ink); font-family:var(--sans); line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1240px; margin:0 auto; padding:clamp(18px,3vw,40px) clamp(12px,2vw,28px) 72px; display:flex; flex-direction:column; gap:34px; }
+
+  header { border-bottom:2px solid var(--ink); padding-bottom:14px; display:flex; flex-direction:column; gap:4px; }
+  .eyebrow { font-family:var(--mono); font-size:.68rem; letter-spacing:.15em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+  h1 { font-family:var(--mono); font-size:clamp(1.4rem,3vw,1.9rem); font-weight:600; letter-spacing:-.02em; margin:0; }
+
+  section { display:flex; flex-direction:column; gap:12px; }
+  h2 { font-family:var(--mono); font-size:1.02rem; font-weight:600; margin:0; display:flex; align-items:baseline; gap:10px; }
+  h2::before { content:""; flex:none; width:18px; height:3px; background:var(--accent); transform:translateY(-4px); }
+  h3 { font-family:var(--mono); font-size:.67rem; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-soft); font-weight:600; margin:6px 0 0; }
+
+  .sheet { background:var(--surface); border:1px solid var(--rule); padding:8px; overflow-x:auto; }
+  svg { display:block; min-width:1260px; width:100%; height:auto; }
+
+  .scroller { overflow-x:auto; border:1px solid var(--rule); background:var(--surface); }
+  table { border-collapse:collapse; width:100%; font-size:.83rem; min-width:620px; }
+  th,td { text-align:left; padding:7px 12px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  thead th { font-family:var(--mono); font-size:.64rem; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-soft); font-weight:600; background:var(--surface-2); }
+  tbody tr:last-child td { border-bottom:none; }
+  td.r { font-family:var(--mono); font-weight:600; color:var(--accent-ink); white-space:nowrap; }
+  td.m { font-family:var(--mono); font-size:.78rem; }
+  td.z { font-family:var(--mono); font-size:.78rem; color:var(--ink-soft); white-space:nowrap; }
+
+  .w   { stroke:var(--wire);     stroke-width:1.7; fill:none; }
+  .wp  { stroke:var(--wire-pwr); stroke-width:2.7; fill:none; }
+  .wg  { stroke:var(--wire-gnd); stroke-width:2.1; fill:none; }
+  .ws  { stroke:var(--wire-sig); stroke-width:1.7; fill:none; }
+  .box { stroke:var(--ink); stroke-width:1.7; fill:var(--sym); }
+  .sym { stroke:var(--ink); stroke-width:1.7; fill:var(--sym); }
+  .brd { stroke:var(--border); stroke-width:1.4; fill:none; }
+  .brdt{ stroke:var(--border); stroke-width:1; fill:none; }
+  .fil { fill:var(--ink); stroke:none; }
+  .dot { fill:var(--wire); stroke:none; }
+  .flag{ stroke:var(--accent); stroke-width:1.5; fill:var(--sym); }
+  text { font-family:var(--mono); fill:var(--ink); }
+  .t  { font-size:13px; }
+  .ts { font-size:11.5px; fill:var(--ink-soft); }
+  .tz { font-size:12px; fill:var(--ink-soft); }
+  .tr { font-size:13px; font-weight:600; fill:var(--accent-ink); }
+  .tt { font-size:14px; font-weight:600; }
+  .tn { font-size:12px; }
+  .tf { font-size:12px; font-weight:600; fill:var(--accent-ink); }
+  .dash { stroke-dasharray:5 4; }
+</style>
+
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Document RGX-2-100 · Rev A</div>
+  <h1>ReGenX v2 — Schematic Set</h1>
+</header>
+
+<!-- ══════════════ SHEET 1 ══════════════ -->
+<section>
+  <h2>Sheet 1 of 3 — System block diagram</h2>
+  <div class="sheet">
+  <svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+    <rect class="brd" x="10" y="10" width="1380" height="880"/>
+    <rect class="brd" x="34" y="34" width="1332" height="832"/>
+    <text class="tz" x="201" y="26" text-anchor="middle">1</text><path class="brdt" d="M368 10 V 34"/>
+    <text class="tz" x="535" y="26" text-anchor="middle">2</text><path class="brdt" d="M701 10 V 34"/>
+    <text class="tz" x="868" y="26" text-anchor="middle">3</text><path class="brdt" d="M1034 10 V 34"/>
+    <text class="tz" x="1200" y="26" text-anchor="middle">4</text>
+    <text class="tz" x="201" y="884" text-anchor="middle">1</text><path class="brdt" d="M368 866 V 890"/>
+    <text class="tz" x="535" y="884" text-anchor="middle">2</text><path class="brdt" d="M701 866 V 890"/>
+    <text class="tz" x="868" y="884" text-anchor="middle">3</text><path class="brdt" d="M1034 866 V 890"/>
+    <text class="tz" x="1200" y="884" text-anchor="middle">4</text>
+    <text class="tz" x="22" y="145" text-anchor="middle">A</text><path class="brdt" d="M10 242 H 34"/>
+    <text class="tz" x="22" y="352" text-anchor="middle">B</text><path class="brdt" d="M10 450 H 34"/>
+    <text class="tz" x="22" y="560" text-anchor="middle">C</text><path class="brdt" d="M10 658 H 34"/>
+    <text class="tz" x="22" y="768" text-anchor="middle">D</text>
+    <text class="tz" x="1378" y="145" text-anchor="middle">A</text><path class="brdt" d="M1366 242 H 1390"/>
+    <text class="tz" x="1378" y="352" text-anchor="middle">B</text><path class="brdt" d="M1366 450 H 1390"/>
+    <text class="tz" x="1378" y="560" text-anchor="middle">C</text><path class="brdt" d="M1366 658 H 1390"/>
+    <text class="tz" x="1378" y="768" text-anchor="middle">D</text>
+
+    <!-- blocks -->
+    <rect class="box" x="90" y="120" width="200" height="96" rx="3"/>
+    <text class="tr" x="190" y="152" text-anchor="middle">BT1</text>
+    <text class="ts" x="190" y="176" text-anchor="middle">4S Li-ion pack</text>
+    <text class="ts" x="190" y="196" text-anchor="middle">keep-alive store</text>
+
+    <rect class="box" x="450" y="120" width="220" height="96" rx="3"/>
+    <text class="tr" x="560" y="152" text-anchor="middle">C1–C3</text>
+    <text class="ts" x="560" y="176" text-anchor="middle">supercap bank</text>
+    <text class="ts" x="560" y="196" text-anchor="middle">6.67 F  ·  40 V max</text>
+
+    <rect class="box" x="830" y="120" width="220" height="96" rx="3"/>
+    <text class="tr" x="940" y="152" text-anchor="middle">A1</text>
+    <text class="ts" x="940" y="176" text-anchor="middle">motor controller</text>
+    <text class="ts" x="940" y="196" text-anchor="middle">FOC, sensored</text>
+
+    <rect class="box" x="1180" y="120" width="150" height="96" rx="3"/>
+    <text class="tr" x="1255" y="152" text-anchor="middle">M1</text>
+    <text class="ts" x="1255" y="176" text-anchor="middle">geared hub</text>
+    <text class="ts" x="1255" y="196" text-anchor="middle">rear</text>
+
+    <rect class="box" x="450" y="420" width="220" height="110" rx="3"/>
+    <text class="tr" x="560" y="454" text-anchor="middle">U2</text>
+    <text class="ts" x="560" y="478" text-anchor="middle">MCU</text>
+    <text class="ts" x="560" y="498" text-anchor="middle">control + HMI</text>
+
+    <rect class="box" x="120" y="420" width="170" height="80" rx="3"/>
+    <text class="tr" x="205" y="452" text-anchor="middle">J3</text>
+    <text class="ts" x="205" y="476" text-anchor="middle">throttle</text>
+
+    <rect class="box" x="120" y="560" width="170" height="80" rx="3"/>
+    <text class="tr" x="205" y="592" text-anchor="middle">DS1</text>
+    <text class="ts" x="205" y="616" text-anchor="middle">display</text>
+
+    <rect class="box" x="830" y="420" width="220" height="80" rx="3"/>
+    <text class="tr" x="940" y="452" text-anchor="middle">U1</text>
+    <text class="ts" x="940" y="476" text-anchor="middle">pack charger</text>
+
+    <!-- power flows -->
+    <path class="wp" d="M290 168 H 450"/>
+    <text class="ts" x="370" y="158" text-anchor="middle">keep-alive</text>
+    <text class="ts" x="370" y="192" text-anchor="middle">SHT 2</text>
+    <path class="wp" d="M670 168 H 830"/>
+    <text class="ts" x="750" y="158" text-anchor="middle">F1 / S1</text>
+    <text class="ts" x="750" y="192" text-anchor="middle">SHT 2</text>
+    <path class="wp" d="M1050 168 H 1180"/>
+    <text class="ts" x="1115" y="158" text-anchor="middle">3-phase</text>
+
+    <path class="wp" d="M560 216 V 420"/>
+    <text class="ts" x="576" y="320">5 V BEC</text>
+    <text class="ts" x="576" y="336">SHT 3</text>
+
+    <path class="wp" d="M940 216 V 420"/>
+    <text class="ts" x="956" y="320">SW+</text>
+    <text class="ts" x="956" y="336">SHT 2</text>
+    <path class="wp" d="M830 460 H 700 V 200 H 290 V 190"/>
+    <text class="ts" x="684" y="380" text-anchor="end">to BT1</text>
+
+    <path class="ws" d="M290 460 H 450"/>
+    <text class="ts" x="370" y="450" text-anchor="middle">analog</text>
+    <path class="ws" d="M290 600 H 380 V 500 H 450"/>
+    <text class="ts" x="340" y="590" text-anchor="middle">I²C</text>
+    <path class="ws" d="M670 450 H 830"/>
+    <text class="ts" x="750" y="440" text-anchor="middle">UART</text>
+    <text class="ts" x="750" y="474" text-anchor="middle">SHT 3</text>
+    <path class="ws" d="M1255 216 V 348 H 690 V 470 H 670"/>
+    <text class="ts" x="856" y="340" text-anchor="middle">shell speed  ·  SHT 3</text>
+    <path class="ws" d="M1180 190 H 1140 V 240 H 1080 V 216"/>
+    <text class="ts" x="1112" y="232" text-anchor="middle">halls</text>
+
+    <!-- notes -->
+    <rect class="brdt" x="70" y="700" width="560" height="146"/>
+    <text class="tt" x="86" y="722">NOTES</text>
+    <text class="tn" x="86" y="748">1.  UNLESS OTHERWISE SPECIFIED, RESISTORS ARE ±5 %, 1/4 W.</text>
+    <text class="tn" x="86" y="768">2.  ALL GROUNDS SHALL STAR AT A1 V− TERMINAL.</text>
+    <text class="tn" x="86" y="788">3.  SIGNAL WIRING SHALL BE ROUTED CLEAR OF MOTOR PHASE LEADS.</text>
+    <text class="tn" x="86" y="808">4.  ITEM SPECIFICATIONS PER PARTS LIST BELOW EACH SHEET.</text>
+    <text class="tn" x="86" y="828">5.  NO SIGNAL CROSSES A SHEET BOUNDARY WITHOUT A NET NAME.</text>
+
+    <!-- title block -->
+    <rect class="brd" x="1026" y="750" width="340" height="116"/>
+    <path class="brdt" d="M1026 782 H 1366"/>
+    <path class="brdt" d="M1026 810 H 1366"/>
+    <path class="brdt" d="M1026 838 H 1366"/>
+    <path class="brdt" d="M1226 810 V 866"/>
+    <text class="tt" x="1040" y="772">ReGenX v2</text>
+    <text class="t"  x="1040" y="802">System block diagram</text>
+    <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
+    <text class="ts" x="1240" y="828">REV  A</text>
+    <text class="ts" x="1040" y="856">SHEET 1 OF 3</text>
+    <text class="ts" x="1240" y="856">2026-08-02</text>
+  </svg>
+  </div>
+</section>
+
+<!-- ══════════════ SHEET 2 ══════════════ -->
+<section>
+  <h2>Sheet 2 of 3 — Power distribution and protection</h2>
+  <div class="sheet">
+  <svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+    <rect class="brd" x="10" y="10" width="1380" height="880"/>
+    <rect class="brd" x="34" y="34" width="1332" height="832"/>
+    <text class="tz" x="201" y="26" text-anchor="middle">1</text><path class="brdt" d="M368 10 V 34"/>
+    <text class="tz" x="535" y="26" text-anchor="middle">2</text><path class="brdt" d="M701 10 V 34"/>
+    <text class="tz" x="868" y="26" text-anchor="middle">3</text><path class="brdt" d="M1034 10 V 34"/>
+    <text class="tz" x="1200" y="26" text-anchor="middle">4</text>
+    <text class="tz" x="201" y="884" text-anchor="middle">1</text><path class="brdt" d="M368 866 V 890"/>
+    <text class="tz" x="535" y="884" text-anchor="middle">2</text><path class="brdt" d="M701 866 V 890"/>
+    <text class="tz" x="868" y="884" text-anchor="middle">3</text><path class="brdt" d="M1034 866 V 890"/>
+    <text class="tz" x="1200" y="884" text-anchor="middle">4</text>
+    <text class="tz" x="22" y="145" text-anchor="middle">A</text><path class="brdt" d="M10 242 H 34"/>
+    <text class="tz" x="22" y="352" text-anchor="middle">B</text><path class="brdt" d="M10 450 H 34"/>
+    <text class="tz" x="22" y="560" text-anchor="middle">C</text><path class="brdt" d="M10 658 H 34"/>
+    <text class="tz" x="22" y="768" text-anchor="middle">D</text>
+    <text class="tz" x="1378" y="145" text-anchor="middle">A</text><path class="brdt" d="M1366 242 H 1390"/>
+    <text class="tz" x="1378" y="352" text-anchor="middle">B</text><path class="brdt" d="M1366 450 H 1390"/>
+    <text class="tz" x="1378" y="560" text-anchor="middle">C</text><path class="brdt" d="M1366 658 H 1390"/>
+    <text class="tz" x="1378" y="768" text-anchor="middle">D</text>
+
+    <!-- BT1 -->
+    <rect class="box" x="70" y="180" width="112" height="92" rx="3"/>
+    <text class="tr" x="126" y="212" text-anchor="middle">BT1</text>
+    <text class="ts" x="126" y="240" text-anchor="middle">4S</text>
+    <path class="wg" d="M182 252 H 226 V 690"/>
+
+    <!-- F3 -->
+    <path class="wp" d="M182 200 H 240"/>
+    <rect class="sym" x="240" y="189" width="50" height="22" rx="2"/>
+    <path class="w" d="M240 200 H 290"/>
+    <text class="tr" x="265" y="180" text-anchor="middle">F3</text>
+    <path class="wp" d="M290 200 H 330"/>
+    <circle class="dot" cx="330" cy="200" r="4"/>
+
+    <!-- R1 -->
+    <rect class="sym" x="330" y="189" width="60" height="22" rx="2"/>
+    <text class="tr" x="360" y="180" text-anchor="middle">R1</text>
+    <path class="wp" d="M390 200 H 448"/>
+
+    <!-- D1 -->
+    <path class="fil" d="M448 189 L 448 211 L 470 200 Z"/>
+    <path class="sym" d="M470 187 V 213"/>
+    <text class="tr" x="459" y="180" text-anchor="middle">D1</text>
+    <path class="wp" d="M470 200 H 580"/>
+    <path class="flag" d="M420 232 L 436 260 L 404 260 Z"/>
+    <text class="tf" x="420" y="256" text-anchor="middle">2</text>
+
+    <!-- bank -->
+    <circle class="dot" cx="580" cy="200" r="4"/>
+    <text class="ts" x="580" y="180" text-anchor="middle">BANK+</text>
+    <path class="wp" d="M580 200 V 260"/>
+    <rect class="box" x="516" y="260" width="128" height="40" rx="3"/>
+    <text class="tr" x="580" y="286" text-anchor="middle">C1</text>
+    <path class="wp" d="M580 300 V 340"/>
+    <rect class="box" x="516" y="340" width="128" height="40" rx="3"/>
+    <text class="tr" x="580" y="366" text-anchor="middle">C2</text>
+    <path class="wp" d="M580 380 V 420"/>
+    <rect class="box" x="516" y="420" width="128" height="40" rx="3"/>
+    <text class="tr" x="580" y="446" text-anchor="middle">C3</text>
+    <path class="wg" d="M580 460 V 690"/>
+
+    <!-- F1 -->
+    <path class="wp" d="M580 200 H 700"/>
+    <rect class="sym" x="700" y="189" width="50" height="22" rx="2"/>
+    <path class="w" d="M700 200 H 750"/>
+    <text class="tr" x="725" y="180" text-anchor="middle">F1</text>
+    <path class="flag" d="M725 232 L 741 260 L 709 260 Z"/>
+    <text class="tf" x="725" y="256" text-anchor="middle">3</text>
+    <path class="wp" d="M750 200 H 800"/>
+
+    <!-- S1 -->
+    <circle class="sym" cx="806" cy="200" r="4"/>
+    <path class="w" d="M810 198 L 850 176"/>
+    <circle class="sym" cx="856" cy="174" r="4"/>
+    <text class="tr" x="832" y="156" text-anchor="middle">S1</text>
+    <path class="wp" d="M860 174 H 930"/>
+    <circle class="dot" cx="930" cy="174" r="4"/>
+    <text class="ts" x="930" y="156" text-anchor="middle">SW+</text>
+
+    <!-- A1 -->
+    <path class="wp" d="M930 174 H 1080"/>
+    <rect class="box" x="1080" y="126" width="200" height="130" rx="3"/>
+    <text class="tr" x="1180" y="160" text-anchor="middle">A1</text>
+    <text class="ts" x="1180" y="184" text-anchor="middle">motor controller</text>
+    <text class="ts" x="1094" y="216">V+</text>
+    <text class="ts" x="1094" y="240">V−</text>
+    <text class="ts" x="1194" y="216">SHT 3</text>
+    <path class="wg" d="M1080 244 H 1042 V 690"/>
+
+    <!-- F2 / U1 / D2 -->
+    <path class="wp" d="M930 174 V 400"/>
+    <rect class="sym" x="905" y="400" width="50" height="22" rx="2"/>
+    <path class="w" d="M905 411 H 955"/>
+    <text class="tr" x="975" y="416">F2</text>
+    <path class="wp" d="M930 422 V 480"/>
+
+    <rect class="box" x="836" y="480" width="188" height="84" rx="3"/>
+    <text class="tr" x="930" y="514" text-anchor="middle">U1</text>
+    <text class="ts" x="930" y="540" text-anchor="middle">CC / CV charger</text>
+    <path class="wg" d="M930 564 V 690"/>
+    <path class="flag" d="M770 436 L 786 464 L 754 464 Z"/>
+    <text class="tf" x="770" y="460" text-anchor="middle">4</text>
+
+    <path class="w" d="M836 522 H 760"/>
+    <path class="fil" d="M760 511 L 760 533 L 738 522 Z"/>
+    <path class="sym" d="M738 509 V 535"/>
+    <text class="tr" x="749" y="556" text-anchor="middle">D2</text>
+    <path class="w" d="M738 522 H 330 V 200"/>
+
+    <!-- ground -->
+    <path class="wg" d="M226 690 H 1042"/>
+    <path class="wg" d="M700 690 V 714"/>
+    <path class="wg" d="M672 714 H 728"/>
+    <path class="wg" d="M682 726 H 718"/>
+    <path class="wg" d="M692 738 H 708"/>
+    <text class="ts" x="742" y="732">GND</text>
+    <path class="flag" d="M620 700 L 636 728 L 604 728 Z"/>
+    <text class="tf" x="620" y="724" text-anchor="middle">1</text>
+
+    <!-- notes -->
+    <rect class="brdt" x="70" y="752" width="940" height="114"/>
+    <text class="tt" x="86" y="774">NOTES — THIS SHEET</text>
+    <text class="tn" x="86" y="794">1.  ALL GROUNDS SHALL STAR AT A1 V− TERMINAL.</text>
+    <text class="tn" x="86" y="812">2.  R1 SETS PACK-TO-BANK CURRENT LIMIT. DO NOT SUBSTITUTE LOWER VALUE.</text>
+    <text class="tn" x="86" y="830">3.  F1 SHALL HAVE ≥58 V DC INTERRUPT RATING.</text>
+    <text class="tn" x="86" y="848">4.  U1 OUTPUT SET 17.2 V TO YIELD 16.4 V AT BT1 THROUGH D2.</text>
+    <text class="tn" x="560" y="848">5.  NO FITTED BLEED. DISCONNECT BT1 BEFORE SERVICING.</text>
+
+    <!-- title block -->
+    <rect class="brd" x="1026" y="750" width="340" height="116"/>
+    <path class="brdt" d="M1026 782 H 1366"/>
+    <path class="brdt" d="M1026 810 H 1366"/>
+    <path class="brdt" d="M1026 838 H 1366"/>
+    <path class="brdt" d="M1226 810 V 866"/>
+    <text class="tt" x="1040" y="772">ReGenX v2</text>
+    <text class="t"  x="1040" y="802">Power distribution</text>
+    <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
+    <text class="ts" x="1240" y="828">REV  A</text>
+    <text class="ts" x="1040" y="856">SHEET 2 OF 3</text>
+    <text class="ts" x="1240" y="856">2026-08-02</text>
+  </svg>
+  </div>
+
+  <h3>Sheet 2 — parts list</h3>
+  <div class="scroller">
+    <table>
+      <thead><tr><th>Item</th><th>Zone</th><th>Description</th><th>Specification</th></tr></thead>
+      <tbody>
+        <tr><td class="r">BT1</td><td class="z">A1</td><td>Battery, secondary</td><td class="m">4S Li-ion, 14.8 V nom, 13.5–16.8 V usable, ~15 Wh. Integral BMS: cell balance, OV 4.25 V/cell, UV, OC</td></tr>
+        <tr><td class="r">F3</td><td class="z">A1</td><td>Fuse</td><td class="m">3 A, ≥32 V DC, fast-acting, inline holder</td></tr>
+        <tr><td class="r">R1</td><td class="z">A1</td><td>Resistor, power</td><td class="m">4.7 Ω ±5 %, 50 W, wirewound, aluminium-clad, chassis mount</td></tr>
+        <tr><td class="r">D1</td><td class="z">A1</td><td>Diode, rectifier</td><td class="m">Si, I<sub>F(AV)</sub> ≥ 3 A, V<sub>RRM</sub> ≥ 100 V, I<sub>R</sub> ≤ 10 µA @ 25 °C. 1N5404 or equiv</td></tr>
+        <tr><td class="r">C1–C3</td><td class="z">B2</td><td>Capacitor, EDLC module</td><td class="m">16.2 V, 20 F each (6 × 2.7 V 120 F, integral balancing). Series 6.67 F, ESR 180–360 mΩ</td></tr>
+        <tr><td class="r">F1</td><td class="z">A2</td><td>Fuse</td><td class="m">60 A ANL, ≥58 V DC interrupt rating — see NOTE 3</td></tr>
+        <tr><td class="r">S1</td><td class="z">A3</td><td>Switch, disconnect</td><td class="m">SPST, ≥100 A continuous, ≥48 V DC, marine battery-switch type</td></tr>
+        <tr><td class="r">F2</td><td class="z">B3</td><td>Fuse</td><td class="m">2 A slow-blow, ≥58 V DC, inline holder</td></tr>
+        <tr><td class="r">U1</td><td class="z">C3</td><td>Converter, DC-DC</td><td class="m">LM2596HV CC/CV buck. V<sub>in</sub> 5–57 V, V<sub>out</sub> 1.25–30 V adj, I<sub>CC</sub> 0.2–3 A adj. Requires V<sub>in</sub> ≥ V<sub>out</sub> + 2 V</td></tr>
+        <tr><td class="r">D2</td><td class="z">C2</td><td>Diode, rectifier</td><td class="m">Si, I<sub>F(AV)</sub> ≥ 1 A, V<sub>RRM</sub> ≥ 100 V. 1N4007 or equiv</td></tr>
+        <tr><td class="r">A1</td><td class="z">A4</td><td>Assembly, motor controller</td><td class="m">Flipsky Mini FSESC4.20. 8–60 V, 50 A cont / 150 A pk, sensored FOC, 5 V 1.5 A BEC, 3.3 V UART</td></tr>
+        <tr><td class="r">—</td><td class="z">A2–A4</td><td>Wire, bank circuit</td><td class="m">10 AWG, ring terminals</td></tr>
+        <tr><td class="r">—</td><td class="z">A1, C3</td><td>Wire, branch circuits</td><td class="m">18 AWG pack branch; 22 AWG charger branch</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════ SHEET 3 ══════════════ -->
+<section>
+  <h2>Sheet 3 of 3 — MCU, sensors and interfaces</h2>
+  <div class="sheet">
+  <svg viewBox="0 0 1400 900" xmlns="http://www.w3.org/2000/svg">
+    <rect class="brd" x="10" y="10" width="1380" height="880"/>
+    <rect class="brd" x="34" y="34" width="1332" height="832"/>
+    <text class="tz" x="201" y="26" text-anchor="middle">1</text><path class="brdt" d="M368 10 V 34"/>
+    <text class="tz" x="535" y="26" text-anchor="middle">2</text><path class="brdt" d="M701 10 V 34"/>
+    <text class="tz" x="868" y="26" text-anchor="middle">3</text><path class="brdt" d="M1034 10 V 34"/>
+    <text class="tz" x="1200" y="26" text-anchor="middle">4</text>
+    <text class="tz" x="201" y="884" text-anchor="middle">1</text><path class="brdt" d="M368 866 V 890"/>
+    <text class="tz" x="535" y="884" text-anchor="middle">2</text><path class="brdt" d="M701 866 V 890"/>
+    <text class="tz" x="868" y="884" text-anchor="middle">3</text><path class="brdt" d="M1034 866 V 890"/>
+    <text class="tz" x="1200" y="884" text-anchor="middle">4</text>
+    <text class="tz" x="22" y="145" text-anchor="middle">A</text><path class="brdt" d="M10 242 H 34"/>
+    <text class="tz" x="22" y="352" text-anchor="middle">B</text><path class="brdt" d="M10 450 H 34"/>
+    <text class="tz" x="22" y="560" text-anchor="middle">C</text><path class="brdt" d="M10 658 H 34"/>
+    <text class="tz" x="22" y="768" text-anchor="middle">D</text>
+    <text class="tz" x="1378" y="145" text-anchor="middle">A</text><path class="brdt" d="M1366 242 H 1390"/>
+    <text class="tz" x="1378" y="352" text-anchor="middle">B</text><path class="brdt" d="M1366 450 H 1390"/>
+    <text class="tz" x="1378" y="560" text-anchor="middle">C</text><path class="brdt" d="M1366 658 H 1390"/>
+    <text class="tz" x="1378" y="768" text-anchor="middle">D</text>
+
+    <!-- J1 -->
+    <rect class="box" x="70" y="90" width="130" height="168" rx="3"/>
+    <text class="tr" x="135" y="118" text-anchor="middle">J1</text>
+    <text class="ts" x="82" y="146">1  +5 V</text>
+    <text class="ts" x="82" y="166">2  GND</text>
+    <text class="ts" x="82" y="186">3  H1</text>
+    <text class="ts" x="82" y="206">4  H2</text>
+    <text class="ts" x="82" y="226">5  H3</text>
+    <text class="ts" x="82" y="246">6  SPD</text>
+
+    <rect class="brdt dash" x="232" y="82" width="96" height="184"/>
+    <text class="tr" x="280" y="74" text-anchor="middle">W1</text>
+
+    <path class="w" d="M200 142 H 400"/>
+    <path class="w" d="M200 162 H 400"/>
+    <path class="w" d="M200 182 H 400"/>
+    <path class="w" d="M200 202 H 400"/>
+    <path class="w" d="M200 222 H 400"/>
+    <path class="ws" d="M200 242 H 280 V 380 H 610"/>
+
+    <!-- J2 -->
+    <rect class="box" x="400" y="90" width="140" height="168" rx="3"/>
+    <text class="tr" x="470" y="118" text-anchor="middle">J2</text>
+    <text class="ts" x="412" y="146">1  +5 V</text>
+    <text class="ts" x="412" y="166">2  GND</text>
+    <text class="ts" x="412" y="186">3  H1</text>
+    <text class="ts" x="412" y="206">4  H2</text>
+    <text class="ts" x="412" y="226">5  H3</text>
+    <text class="ts" x="412" y="246">6  n/c</text>
+    <path class="flag" d="M470 274 L 486 302 L 454 302 Z"/>
+    <text class="tf" x="470" y="298" text-anchor="middle">1</text>
+
+    <!-- J3 -->
+    <rect class="box" x="70" y="470" width="130" height="86" rx="3"/>
+    <text class="tr" x="135" y="500" text-anchor="middle">J3</text>
+    <text class="ts" x="135" y="524" text-anchor="middle">throttle</text>
+    <text class="ts" x="135" y="544" text-anchor="middle">3V3·GND·SIG</text>
+    <path class="w" d="M126 440 V 470"/>
+    <path class="w" d="M108 440 H 144"/>
+    <text class="ts" x="126" y="430" text-anchor="middle">+3V3</text>
+
+    <path class="ws" d="M200 528 H 610"/>
+    <circle class="dot" cx="300" cy="528" r="4"/>
+    <path class="w" d="M300 528 V 566"/>
+    <rect class="sym" x="270" y="566" width="60" height="22" rx="2"/>
+    <text class="tr" x="352" y="582">R2</text>
+    <path class="wg" d="M300 588 V 618"/>
+    <path class="wg" d="M280 618 H 320"/>
+    <path class="wg" d="M288 628 H 312"/>
+    <path class="wg" d="M296 638 H 304"/>
+
+    <!-- U2 -->
+    <rect class="box" x="610" y="120" width="250" height="500" rx="4"/>
+    <text class="tr" x="735" y="154" text-anchor="middle">U2</text>
+    <text class="ts" x="735" y="176" text-anchor="middle">MCU board</text>
+
+    <text class="ts" x="622" y="384">GP13</text>
+    <text class="ts" x="622" y="532">GP26</text>
+
+    <text class="ts" x="848" y="222" text-anchor="end">VSYS</text>
+    <text class="ts" x="848" y="304" text-anchor="end">GP0</text>
+    <text class="ts" x="848" y="330" text-anchor="end">GP1</text>
+    <text class="ts" x="848" y="430" text-anchor="end">GP4</text>
+    <text class="ts" x="848" y="456" text-anchor="end">GP5</text>
+    <text class="ts" x="848" y="560" text-anchor="end">GND</text>
+    <text class="ts" x="848" y="600" text-anchor="end">3V3</text>
+
+    <path class="wg" d="M860 556 H 894 V 584"/>
+    <path class="wg" d="M874 584 H 914"/>
+    <path class="wg" d="M882 594 H 906"/>
+    <path class="wg" d="M890 604 H 898"/>
+
+    <!-- supply filter -->
+    <path class="wp" d="M860 216 H 924"/>
+    <circle class="dot" cx="924" cy="216" r="4"/>
+    <path class="wp" d="M924 216 H 992"/>
+    <circle class="dot" cx="992" cy="216" r="4"/>
+    <path class="wp" d="M992 216 H 1046"/>
+    <rect class="sym" x="1046" y="206" width="50" height="20" rx="9"/>
+    <text class="tr" x="1071" y="198" text-anchor="middle">L1</text>
+    <path class="wp" d="M1096 216 H 1150"/>
+
+    <path class="w" d="M924 216 V 258"/>
+    <path class="sym" d="M904 258 H 944"/>
+    <path class="sym" d="M904 270 H 944"/>
+    <text class="tr" x="890" y="270" text-anchor="end">C5</text>
+    <path class="wg" d="M924 270 V 302"/>
+    <path class="wg" d="M904 302 H 944"/>
+    <path class="wg" d="M912 312 H 936"/>
+    <path class="wg" d="M920 322 H 928"/>
+
+    <path class="w" d="M992 216 V 258"/>
+    <path class="sym" d="M972 258 H 1012"/>
+    <path class="sym" d="M972 270 H 1012"/>
+    <text class="tr" x="1026" y="270">C4</text>
+    <path class="wg" d="M992 270 V 302"/>
+    <path class="wg" d="M972 302 H 1012"/>
+    <path class="wg" d="M980 312 H 1004"/>
+    <path class="wg" d="M988 322 H 996"/>
+
+    <!-- A1 BEC -->
+    <rect class="box" x="1150" y="176" width="164" height="80" rx="3"/>
+    <text class="tr" x="1232" y="208" text-anchor="middle">A1</text>
+    <text class="ts" x="1232" y="234" text-anchor="middle">5 V BEC</text>
+
+    <!-- UART -->
+    <path class="ws" d="M860 298 H 946"/>
+    <rect class="sym" x="946" y="287" width="50" height="22" rx="2"/>
+    <text class="tr" x="971" y="278" text-anchor="middle">R3</text>
+    <path class="ws" d="M996 298 H 1150"/>
+    <path class="ws" d="M860 324 H 946"/>
+    <rect class="sym" x="946" y="313" width="50" height="22" rx="2"/>
+    <text class="tr" x="971" y="352" text-anchor="middle">R4</text>
+    <path class="ws" d="M996 324 H 1150"/>
+    <rect class="box" x="1150" y="278" width="164" height="76" rx="3"/>
+    <text class="tr" x="1232" y="310" text-anchor="middle">A1</text>
+    <text class="ts" x="1232" y="336" text-anchor="middle">UART</text>
+    <text class="ts" x="1074" y="292" text-anchor="middle">TX</text>
+    <text class="ts" x="1074" y="342" text-anchor="middle">RX</text>
+
+    <!-- DS1 -->
+    <path class="ws" d="M860 424 H 1150"/>
+    <path class="ws" d="M860 450 H 1150"/>
+    <text class="ts" x="1005" y="416" text-anchor="middle">SDA</text>
+    <text class="ts" x="1005" y="470" text-anchor="middle">SCL</text>
+    <rect class="box" x="1150" y="396" width="164" height="86" rx="3"/>
+    <text class="tr" x="1232" y="428" text-anchor="middle">DS1</text>
+    <text class="ts" x="1232" y="454" text-anchor="middle">display</text>
+    <path class="w" d="M860 596 H 1232 V 482"/>
+    <text class="ts" x="1050" y="588" text-anchor="middle">+3V3</text>
+    <path class="flag" d="M1120 512 L 1136 540 L 1104 540 Z"/>
+    <text class="tf" x="1120" y="536" text-anchor="middle">3</text>
+
+    <!-- notes -->
+    <rect class="brdt" x="70" y="700" width="880" height="112"/>
+    <text class="tt" x="86" y="722">NOTES — THIS SHEET</text>
+    <text class="tn" x="86" y="744">1.  J2 PIN 6 SHALL REMAIN UNCONNECTED. J1 PIN 6 ROUTES TO U2 GP13 VIA W1.</text>
+    <text class="tn" x="86" y="764">2.  U2 GPIO ARE 3.3 V. NO 5 V SIGNAL SHALL BE APPLIED TO ANY U2 PIN.</text>
+    <text class="tn" x="86" y="784">3.  DS1 SHALL BE SUPPLIED FROM +3V3. MODULE PULL-UPS REFERENCE ITS OWN RAIL.</text>
+    <text class="tn" x="86" y="804">4.  U2 GP13 INTERNAL PULL-UP SHALL BE ENABLED IN FIRMWARE.</text>
+
+    <!-- title block -->
+    <rect class="brd" x="1026" y="750" width="340" height="116"/>
+    <path class="brdt" d="M1026 782 H 1366"/>
+    <path class="brdt" d="M1026 810 H 1366"/>
+    <path class="brdt" d="M1026 838 H 1366"/>
+    <path class="brdt" d="M1226 810 V 866"/>
+    <text class="tt" x="1040" y="772">ReGenX v2</text>
+    <text class="t"  x="1040" y="802">MCU and interfaces</text>
+    <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
+    <text class="ts" x="1240" y="828">REV  A</text>
+    <text class="ts" x="1040" y="856">SHEET 3 OF 3</text>
+    <text class="ts" x="1240" y="856">2026-08-02</text>
+  </svg>
+  </div>
+
+  <h3>Sheet 3 — parts list</h3>
+  <div class="scroller">
+    <table>
+      <thead><tr><th>Item</th><th>Zone</th><th>Description</th><th>Specification</th></tr></thead>
+      <tbody>
+        <tr><td class="r">M1</td><td class="z">SHT 1</td><td>Motor, geared hub</td><td class="m">Bafang G020, rear. Single-stage planetary ~5:1. Hall sensors ×3 + shell speed sensor 6 pulse/rev. Interfaces via J1</td></tr>
+        <tr><td class="r">U2</td><td class="z">A2–C2</td><td>Assembly, MCU board</td><td class="m">Raspberry Pi Pico, RP2040. VSYS 1.8–5.5 V, +3V3 out ≥300 mA available. GPIO 3.3 V, <strong>not 5 V tolerant</strong>. ADC 12-bit, ref AVDD</td></tr>
+        <tr><td class="r">J1</td><td class="z">A1</td><td>Connector, motor sensor</td><td class="m">6-way, M1 supplied. Pins: +5 V, GND, H1–H3, shell speed (6 pulse/rev, open-collector)</td></tr>
+        <tr><td class="r">J2</td><td class="z">A2</td><td>Connector, controller hall</td><td class="m">JST-PH 6-way. Pin 6 unconnected — see NOTE 1</td></tr>
+        <tr><td class="r">W1</td><td class="z">A1</td><td>Cable assembly, adapter</td><td class="m">J1 6-way → J2 JST-PH 6-way, 5 conductors through; shell-speed conductor branched to U2 GP13</td></tr>
+        <tr><td class="r">J3</td><td class="z">C1</td><td>Connector, throttle</td><td class="m">3-way. Hall throttle, ratiometric, supplied from +3V3. Output 0.26–0.79 × V<sub>supply</sub></td></tr>
+        <tr><td class="r">R2</td><td class="z">C1</td><td>Resistor</td><td class="m">100 kΩ ±5 %, 1/4 W. Throttle pulldown</td></tr>
+        <tr><td class="r">R3, R4</td><td class="z">B3</td><td>Resistor</td><td class="m">100 Ω ±5 %, 1/4 W. UART series</td></tr>
+        <tr><td class="r">L1</td><td class="z">A3</td><td>Ferrite bead</td><td class="m">~600 Ω @ 100 MHz, I<sub>rated</sub> ≥ 1 A, DCR ≤ 0.1 Ω</td></tr>
+        <tr><td class="r">C4</td><td class="z">A3</td><td>Capacitor</td><td class="m">100 µF, ≥10 V, aluminium electrolytic. VSYS bulk hold-up</td></tr>
+        <tr><td class="r">C5</td><td class="z">A3</td><td>Capacitor</td><td class="m">100 nF, ≥16 V, X7R ceramic. Decoupling, mount adjacent to U2 VSYS pin</td></tr>
+        <tr><td class="r">DS1</td><td class="z">B4</td><td>Display</td><td class="m">SSD1306 128×64 OLED, I²C, 3.3 V supply, address 0x3C — see NOTE 3</td></tr>
+        <tr><td class="r">A1</td><td class="z">A4, B4</td><td>Assembly, motor controller</td><td class="m">Reference SHEET 2. BEC and UART interfaces shown</td></tr>
+        <tr><td class="r">—</td><td class="z">all</td><td>Wire, signal</td><td class="m">24 AWG. Shell speed twisted with GND; UART twisted pair</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════ INTERFACE ══════════════ -->
+<section>
+  <h2>Interface schedule</h2>
+  <div class="scroller">
+    <table>
+      <thead><tr><th>Net</th><th>From</th><th>To</th><th>Sheet</th><th>Type</th></tr></thead>
+      <tbody>
+        <tr><td class="r">BANK+</td><td class="m">C1 positive</td><td class="m">F1 → S1 → A1 V+</td><td class="z">2</td><td class="m">power, 10 AWG</td></tr>
+        <tr><td class="r">SW+</td><td class="m">S1</td><td class="m">A1 V+, F2</td><td class="z">2</td><td class="m">power, 10 AWG</td></tr>
+        <tr><td class="r">GND</td><td class="m">A1 V− star</td><td class="m">BT1 −, C3 −, U1 −, U2 GND</td><td class="z">2, 3</td><td class="m">power, 10 AWG</td></tr>
+        <tr><td class="r">+5V</td><td class="m">A1 BEC</td><td class="m">U2 VSYS via L1, C4, C5</td><td class="z">3</td><td class="m">power, 22 AWG</td></tr>
+        <tr><td class="r">+3V3</td><td class="m">U2 3V3 out</td><td class="m">J3, DS1</td><td class="z">3</td><td class="m">power, 24 AWG</td></tr>
+        <tr><td class="r">SPD</td><td class="m">J1 pin 6</td><td class="m">U2 GP13</td><td class="z">3</td><td class="m">digital, 6 pulse/rev</td></tr>
+        <tr><td class="r">THR</td><td class="m">J3 SIG</td><td class="m">U2 GP26</td><td class="z">3</td><td class="m">analog, 0–3.3 V</td></tr>
+        <tr><td class="r">UART_TX</td><td class="m">U2 GP0</td><td class="m">A1 UART RX</td><td class="z">3</td><td class="m">digital, 3.3 V</td></tr>
+        <tr><td class="r">UART_RX</td><td class="m">A1 UART TX</td><td class="m">U2 GP1</td><td class="z">3</td><td class="m">digital, 3.3 V</td></tr>
+        <tr><td class="r">SDA / SCL</td><td class="m">U2 GP4 / GP5</td><td class="m">DS1</td><td class="z">3</td><td class="m">I²C, 3.3 V</td></tr>
+        <tr><td class="r">H1–H3</td><td class="m">J1 pins 3–5</td><td class="m">J2 pins 3–5</td><td class="z">3</td><td class="m">digital, 5 V, A1 domain</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════ REVISION ══════════════ -->
+<section>
+  <h2>Revision history</h2>
+  <div class="scroller">
+    <table>
+      <thead><tr><th>Rev</th><th>Date</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td class="r">A</td><td class="z">2026-08-02</td><td>Initial release. Three sheets, document RGX-2-100.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</div>

@@ -17,4 +17,5 @@ jobs:
       - name: Install deps
         run: pip install pytest numpy scipy
       - name: Run pytest
+        working-directory: v1-legacy
         run: python -m pytest -q

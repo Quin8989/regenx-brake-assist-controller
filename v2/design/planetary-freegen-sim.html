@@ -1,0 +1,498 @@
+<title>Freegen Planetary Simulator</title>
+<style>
+  :root {
+    --ground:#F4F6F6; --surface:#FFFFFF; --surface-2:#EBEEEE;
+    --ink:#14181B; --ink-mid:#454D53; --ink-soft:#6B747A;
+    --rule:#D8DEDF; --rule-strong:#B9C2C4;
+    --accent:#A8481A; --accent-ink:#8C3B14; --accent-wash:#F6EAE2;
+    --good:#1E6647; --good-wash:#E4EFE9;
+    --warn:#7D5F10; --warn-wash:#F4EEDC;
+    --crit:#9B2B24; --crit-wash:#F6E5E3;
+    --sun:#A8481A; --planet:#2C6E8F; --ring:#3F4A50; --carrier:#7D5F10;
+    --tq:#7E3FA8;
+    --on-accent:#FFFFFF;
+    --mono: ui-monospace,"SF Mono","Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:#0E1113; --surface:#171B1E; --surface-2:#1F2427;
+      --ink:#E7EBEC; --ink-mid:#B2BABF; --ink-soft:#8B959B;
+      --rule:#2A3033; --rule-strong:#3C4448;
+      --accent:#DE8A52; --accent-ink:#EFA372; --accent-wash:#2A1D15;
+      --good:#6CC49B; --good-wash:#14251E;
+      --warn:#D6B45C; --warn-wash:#262014;
+      --crit:#E88A80; --crit-wash:#2A1817;
+      --sun:#DE8A52; --planet:#6FB4D6; --ring:#9AA6AD; --carrier:#D6B45C;
+      --tq:#C79AEA;
+      --on-accent:#12161A;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0E1113; --surface:#171B1E; --surface-2:#1F2427;
+    --ink:#E7EBEC; --ink-mid:#B2BABF; --ink-soft:#8B959B;
+    --rule:#2A3033; --rule-strong:#3C4448;
+    --accent:#DE8A52; --accent-ink:#EFA372; --accent-wash:#2A1D15;
+    --good:#6CC49B; --good-wash:#14251E;
+    --warn:#D6B45C; --warn-wash:#262014;
+    --crit:#E88A80; --crit-wash:#2A1817;
+    --sun:#DE8A52; --planet:#6FB4D6; --ring:#9AA6AD; --carrier:#D6B45C;
+    --tq:#C79AEA;
+    --on-accent:#12161A;
+  }
+  :root[data-theme="light"] {
+    --ground:#F4F6F6; --surface:#FFFFFF; --surface-2:#EBEEEE;
+    --ink:#14181B; --ink-mid:#454D53; --ink-soft:#6B747A;
+    --rule:#D8DEDF; --rule-strong:#B9C2C4;
+    --accent:#A8481A; --accent-ink:#8C3B14; --accent-wash:#F6EAE2;
+    --good:#1E6647; --good-wash:#E4EFE9;
+    --warn:#7D5F10; --warn-wash:#F4EEDC;
+    --crit:#9B2B24; --crit-wash:#F6E5E3;
+    --sun:#A8481A; --planet:#2C6E8F; --ring:#3F4A50; --carrier:#7D5F10;
+    --tq:#7E3FA8;
+    --on-accent:#FFFFFF;
+  }
+
+  body { background:var(--ground); color:var(--ink); font-family:var(--sans); line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1180px; margin:0 auto; padding:clamp(20px,4vw,44px) clamp(14px,3vw,32px) 72px; display:flex; flex-direction:column; gap:28px; }
+
+  header { border-bottom:2px solid var(--ink); padding-bottom:16px; display:flex; flex-direction:column; gap:8px; }
+  .eyebrow { font-family:var(--mono); font-size:.7rem; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:600; }
+  h1 { font-family:var(--mono); font-size:clamp(1.5rem,3.4vw,2.1rem); font-weight:600; letter-spacing:-.02em; margin:0; }
+  .sub { color:var(--ink-mid); max-width:64ch; font-size:.97rem; margin:0; }
+
+  .stage { display:grid; gap:20px; align-items:start; }
+  @media (min-width:940px) { .stage { grid-template-columns:minmax(0,1fr) 372px; } }
+
+  .canvas-card { background:var(--surface); border:1px solid var(--rule); padding:14px; display:flex; flex-direction:column; gap:12px; }
+  canvas { width:100%; height:auto; display:block; touch-action:none; }
+
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-family:var(--mono); font-size:.72rem; color:var(--ink-mid); }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .sw { width:11px; height:11px; border-radius:2px; flex:none; }
+
+  .panel { display:flex; flex-direction:column; gap:16px; }
+  .card { background:var(--surface); border:1px solid var(--rule); padding:16px 18px; display:flex; flex-direction:column; gap:12px; }
+  .card h2 { font-family:var(--mono); font-size:.72rem; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-soft); font-weight:600; margin:0; }
+
+  .modes { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--rule); border:1px solid var(--rule); }
+  .modes button {
+    font-family:var(--mono); font-size:.76rem; font-weight:600; letter-spacing:.04em;
+    padding:11px 6px; border:0; background:var(--surface); color:var(--ink-mid);
+    cursor:pointer; transition:background .12s, color .12s; line-height:1.3;
+  }
+  .modes button:hover { background:var(--surface-2); }
+  .modes button[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); }
+  .modes button:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+
+  .ctl { display:flex; flex-direction:column; gap:6px; }
+  .ctl label { font-family:var(--mono); font-size:.72rem; color:var(--ink-mid); display:flex; justify-content:space-between; gap:10px; }
+  .ctl label b { color:var(--accent-ink); font-weight:600; font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; accent-color:var(--accent); cursor:pointer; }
+  input[type=range]:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  .ctl.off { opacity:.36; pointer-events:none; }
+
+  table.read { width:100%; border-collapse:collapse; font-size:.84rem; }
+  table.read th { text-align:left; font-family:var(--mono); font-size:.68rem; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-soft); font-weight:600; padding:0 0 7px; }
+  table.read td { padding:6px 0; border-top:1px solid var(--rule); font-variant-numeric:tabular-nums; }
+  table.read td:first-child { font-weight:600; }
+  table.read td.v { font-family:var(--mono); text-align:right; white-space:nowrap; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; vertical-align:baseline; }
+
+  .badge { display:inline-block; font-family:var(--mono); font-size:.66rem; letter-spacing:.08em; text-transform:uppercase; font-weight:600; padding:3px 8px; border:1px solid; border-radius:2px; }
+  .badge.lock { background:var(--good-wash); color:var(--good); border-color:var(--good); }
+  .badge.over { background:var(--warn-wash); color:var(--warn); border-color:var(--warn); }
+  .badge.none { background:var(--crit-wash); color:var(--crit); border-color:var(--crit); }
+
+  .split { display:flex; height:26px; border:1px solid var(--rule-strong); overflow:hidden; font-family:var(--mono); font-size:.66rem; font-weight:600; }
+  .split div { display:flex; align-items:center; justify-content:center; color:#fff; white-space:nowrap; overflow:hidden; transition:flex-grow .18s; }
+  .split .el { background:var(--accent); }
+  .split .ht { background:var(--crit); }
+
+  code { font-family:var(--mono); font-size:.87em; background:var(--surface-2); padding:.1em .34em; border:1px solid var(--rule); border-radius:3px; }
+  .playrow { display:flex; gap:10px; align-items:center; }
+  .playrow button { font-family:var(--mono); font-size:.72rem; font-weight:600; padding:7px 13px; background:var(--surface-2); color:var(--ink); border:1px solid var(--rule-strong); cursor:pointer; }
+  .playrow button:hover { background:var(--rule); }
+  .playrow button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">ReGenX v2 — mechanism study</div>
+    <h1>Freegen planetary: who holds the carrier?</h1>
+    <p class="sub">
+      Sun = motor rotor, ring = wheel shell, carrier = the braked member.
+      21 / 39 / 99 teeth, three planets — a real buildable set giving
+      <code>k = Z<sub>r</sub>/Z<sub>s</sub> = 4.71</code>. Watch which way each member turns,
+      and what the one-way clutch can and cannot do.
+    </p>
+  </header>
+
+  <div class="stage">
+    <div class="canvas-card">
+      <canvas id="cv" width="960" height="960" aria-label="Animated planetary gearset"></canvas>
+      <div class="legend">
+        <span><i class="sw" style="background:var(--sun)"></i>Sun — motor rotor</span>
+        <span><i class="sw" style="background:var(--planet)"></i>Planets</span>
+        <span><i class="sw" style="background:var(--carrier)"></i>Carrier — brake / clutch</span>
+        <span><i class="sw" style="background:var(--ring)"></i>Ring — wheel shell</span>
+        <span><i class="sw" style="background:repeating-linear-gradient(90deg,var(--carrier) 0 4px,transparent 4px 7px)"></i>Dashed arc — carrier freewheel direction (bar = locked)</span>
+        <span><i class="sw" style="background:var(--tq)"></i>Torque direction — rides with its member</span>
+      </div>
+      <div class="playrow">
+        <button id="play" type="button">Pause</button>
+        <span style="font-family:var(--mono);font-size:.7rem;color:var(--ink-soft)">5× slow motion — speeds in the table are real</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="card">
+        <h2>Operating mode</h2>
+        <div class="modes" role="group" aria-label="Operating mode">
+          <button type="button" data-mode="assist" aria-pressed="true">Assist</button>
+          <button type="button" data-mode="coast" aria-pressed="false">Coast</button>
+          <button type="button" data-mode="regen" aria-pressed="false">Regen brake</button>
+        </div>
+
+        <div class="ctl">
+          <label for="spd">Road speed <b><span id="spdv">2.0</span> km/h</b></label>
+          <input type="range" id="spd" min="0" max="3" step="0.1" value="2">
+        </div>
+
+        <div class="ctl" id="slipctl">
+          <label for="slip">Carrier slip <b><span id="slipv">0</span> %</b></label>
+          <input type="range" id="slip" min="0" max="100" step="1" value="0">
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Speeds &amp; directions</h2>
+        <table class="read">
+          <thead><tr><th>Member</th><th style="text-align:right">Speed</th><th style="text-align:right">Direction</th></tr></thead>
+          <tbody>
+            <tr><td><i class="dot" style="background:var(--sun)"></i>Sun (motor)</td><td class="v" id="r-sun">—</td><td class="v" id="d-sun">—</td></tr>
+            <tr><td><i class="dot" style="background:var(--carrier)"></i>Carrier</td><td class="v" id="r-car">—</td><td class="v" id="d-car">—</td></tr>
+            <tr><td><i class="dot" style="background:var(--ring)"></i>Ring (wheel)</td><td class="v" id="r-ring">—</td><td class="v" id="d-ring">—</td></tr>
+          </tbody>
+        </table>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-family:var(--mono);font-size:.7rem;color:var(--ink-soft)">ONE-WAY CLUTCH</span>
+          <span id="clutch" class="badge lock">Locked</span>
+        </div>
+      </div>
+
+      <div class="card" id="powcard">
+        <h2>Where the braking energy goes</h2>
+        <div class="split">
+          <div class="el" id="pel" style="flex-grow:9">ELECTRICAL</div>
+          <div class="ht" id="pht" style="flex-grow:1">HEAT</div>
+        </div>
+        <p style="margin:0;font-size:.84rem;color:var(--ink-mid)">
+          The split depends only on slip, never on how hard you brake —
+          <code>P<sub>heat</sub>/P<sub>total</sub> = s</code>.
+        </p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var Zs = 21, Zp = 39, Zr = 99, NP = 3;
+  var k = Zr / Zs;                 // 4.714
+  var R_WHEEL = 0.33;
+
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+
+  var state = { mode:"assist", speed:2, slip:0, playing:true };
+
+  // live angles
+  var aSun = 0, aCar = 0, aRing = 0, aPla = 0;
+
+  var C = {};
+  function readColors() {
+    var cs = getComputedStyle(document.documentElement);
+    ["sun","planet","ring","carrier","tq","ink","ink-soft","ink-mid","rule","surface","accent","good","crit","warn","surface-2","rule-strong"]
+      .forEach(function (n) { C[n] = cs.getPropertyValue("--" + n).trim(); });
+  }
+  readColors();
+  new MutationObserver(readColors).observe(document.documentElement, { attributes:true, attributeFilter:["data-theme"] });
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", readColors);
+  }
+
+  // ---- kinematics -------------------------------------------------
+  function solve() {
+    var v = state.speed / 3.6;                       // m/s
+    var wr = v / R_WHEEL;                            // rad/s, ring = wheel
+    var freeCarrier = k * wr / (1 + k);              // carrier speed when sun is free
+    var wc, ws, s = 0;
+
+    if (state.mode === "assist")      { wc = 0; }
+    else if (state.mode === "coast")  { wc = freeCarrier; }
+    else { s = state.slip / 100; wc = s * freeCarrier; }
+
+    ws = (1 + k) * wc - k * wr;                      // Willis
+    var wp = wc - (Zs / Zp) * (ws - wc);             // planet spin about own axis
+
+    return { wr:wr, wc:wc, ws:ws, wp:wp, s:s };
+  }
+
+  var RPM = 60 / (2 * Math.PI);
+
+  // ---- gear drawing ------------------------------------------------
+  function gearPath(cx, cy, R, Z, rot, internal, continuePath) {
+    var p = 2 * Math.PI / Z, h = Math.max(5, R * 0.055);
+    var rRoot = internal ? R + h / 2 : R - h / 2;
+    var rTip  = internal ? R - h / 2 : R + h / 2;
+    if (!continuePath) ctx.beginPath();
+    for (var i = 0; i < Z; i++) {
+      var a = rot + i * p;
+      var pts = [
+        [rRoot, a - p * 0.26], [rTip, a - p * 0.13],
+        [rTip,  a + p * 0.13], [rRoot, a + p * 0.26],
+        [rRoot, a + p * 0.74]
+      ];
+      for (var j = 0; j < pts.length; j++) {
+        var x = cx + pts[j][0] * Math.cos(pts[j][1]);
+        var y = cy + pts[j][0] * Math.sin(pts[j][1]);
+        if (i === 0 && j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+    }
+    ctx.closePath();
+  }
+
+  function arrowHead(x, y, ang, size, col) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+    ctx.beginPath(); ctx.moveTo(0, 0);
+    ctx.lineTo(-size, -size * 0.5); ctx.lineTo(-size, size * 0.5);
+    ctx.closePath(); ctx.fillStyle = col; ctx.fill(); ctx.restore();
+  }
+
+  // Curved arrow centred on `ac`, which each caller ties to its own member's
+  // live angle so the arrow rides along with the gear it belongs to.  Span is
+  // scaled by radius to keep arc lengths visually comparable.  Halo underneath
+  // keeps it legible where it crosses a gear.
+  function arcArrow(cx, cy, r, sign, col, ac, span) {
+    if (!sign) return;
+    span = span || Math.max(0.35, Math.min(1.5, 120 / r));
+    var a0 = ac - (span / 2) * sign, a1 = ac + (span / 2) * sign;
+    var lo = Math.min(a0, a1), hi = Math.max(a0, a1);
+
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.strokeStyle = C["surface"]; ctx.globalAlpha = 0.8; ctx.lineWidth = 12;
+    ctx.beginPath(); ctx.arc(cx, cy, r, lo - 0.05, hi + 0.05); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = col; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(cx, cy, r, lo, hi); ctx.stroke();
+    ctx.restore();
+
+    arrowHead(cx + r * Math.cos(a1), cy + r * Math.sin(a1),
+              a1 + (sign > 0 ? Math.PI / 2 : -Math.PI / 2), 15, col);
+  }
+
+  // Torque direction per member.  +1 = same rotational sense as forward wheel.
+  //
+  // Sun shows the MOTOR's own torque; carrier and ring show what the gear train
+  // does to them.  (Drawing the gear reaction on the sun instead is equally
+  // valid physics but reads backwards — in assist it points against the rotor's
+  // own spin, making a driving motor look like it is resisting.)
+  //
+  //   assist : motor drives with rotor spin; gears drive the ring forward and
+  //            shove the carrier BACKWARDS — into the clutch, which holds it.
+  //   regen  : motor now opposes rotor spin (generating); the ring is braked and
+  //            the carrier is shoved FORWARDS, the direction the clutch
+  //            freewheels — which is exactly why a friction brake is needed.
+  //   coast  : nothing transmits, so there is no torque anywhere.
+  function torqueDirs(mode) {
+    if (mode === "assist") return { s: -1, c: -1, r:  1 };
+    if (mode === "regen")  return { s:  1, c:  1, r: -1 };
+    return { s: 0, c: 0, r: 0 };
+  }
+
+  // Persistent indicator: which way the carrier's one-way clutch lets it run
+  // free, and which way it locks.  Drawn last, over a halo, so it stays legible
+  // as planets sweep underneath.
+  function freewheelIndicator(cx, cy, r) {
+    var a0 = Math.PI * 0.72, a1 = a0 + 0.95;   // lower-left sector, positive sweep
+    ctx.save();
+    ctx.lineCap = "butt";
+
+    ctx.strokeStyle = C["surface"]; ctx.globalAlpha = 0.85; ctx.lineWidth = 13;
+    ctx.beginPath(); ctx.arc(cx, cy, r, a0 - 0.08, a1 + 0.08); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    ctx.strokeStyle = C["carrier"]; ctx.lineWidth = 4.5;
+    ctx.setLineDash([11, 8]);
+    ctx.beginPath(); ctx.arc(cx, cy, r, a0, a1); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // free direction
+    arrowHead(cx + r * Math.cos(a1), cy + r * Math.sin(a1), a1 + Math.PI / 2, 15, C["carrier"]);
+
+    // locked direction: a stop bar across the arc
+    var bx = cx + r * Math.cos(a0), by = cy + r * Math.sin(a0);
+    ctx.translate(bx, by); ctx.rotate(a0);
+    ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(0, 13);
+    ctx.lineWidth = 5.5; ctx.strokeStyle = C["carrier"]; ctx.stroke();
+    ctx.restore();
+  }
+
+  function label(x, y, lines, col, align) {
+    ctx.textAlign = align || "center"; ctx.textBaseline = "middle";
+    for (var i = 0; i < lines.length; i++) {
+      ctx.font = (i === 0 ? "600 " : "") + (i === 0 ? 21 : 17) + "px ui-monospace,Menlo,Consolas,monospace";
+      ctx.fillStyle = i === 0 ? col : C["ink-soft"];
+      ctx.fillText(lines[i], x, y + i * 23);
+    }
+  }
+
+  function draw(k2) {
+    var W = cv.width, H = cv.height, cx = W / 2, cy = H / 2;
+    ctx.clearRect(0, 0, W, H);
+
+    var Rr = W * 0.335;                 // ring pitch radius
+    var m2 = Rr / Zr;                   // module/2 in px
+    var Rs = m2 * Zs, Rp = m2 * Zp;
+
+    // ring gear: outer circle + internal tooth profile, filled even-odd => toothed annulus
+    ctx.beginPath();
+    ctx.arc(cx, cy, Rr + m2 * 9, 0, 6.2832);
+    gearPath(cx, cy, Rr, Zr, aRing, true, true);
+    ctx.fillStyle = C["ring"];
+    ctx.fill("evenodd");
+    ctx.beginPath(); ctx.arc(cx, cy, Rr + m2 * 9, 0, 6.2832);
+    ctx.strokeStyle = C["rule-strong"]; ctx.lineWidth = 2; ctx.stroke();
+
+    // carrier plate
+    var pcx = [], pcy = [];
+    for (var i = 0; i < NP; i++) {
+      var a = aCar + i * 2 * Math.PI / NP;
+      pcx.push(cx + (Rs + Rp) * Math.cos(a));
+      pcy.push(cy + (Rs + Rp) * Math.sin(a));
+    }
+    ctx.beginPath();
+    for (var i2 = 0; i2 < NP; i2++) { if (i2 === 0) ctx.moveTo(pcx[0], pcy[0]); else ctx.lineTo(pcx[i2], pcy[i2]); }
+    ctx.closePath();
+    ctx.strokeStyle = C["carrier"]; ctx.lineWidth = 15; ctx.lineJoin = "round";
+    ctx.globalAlpha = 0.30; ctx.stroke(); ctx.globalAlpha = 1;
+
+    // planets
+    for (var i3 = 0; i3 < NP; i3++) {
+      // aPla is the planet's ABSOLUTE spin angle; each planet only needs a
+      // fixed mesh phase offset for its seat, not a carrier-dependent term.
+      gearPath(pcx[i3], pcy[i3], Rp, Zp, aPla + i3 * (2 * Math.PI / NP) * (Zs / Zp), false);
+      ctx.fillStyle = C["planet"]; ctx.fill();
+      ctx.beginPath(); ctx.arc(pcx[i3], pcy[i3], m2 * 5, 0, 6.2832);
+      ctx.fillStyle = C["carrier"]; ctx.fill();
+    }
+
+    // sun
+    gearPath(cx, cy, Rs, Zs, aSun, false);
+    ctx.fillStyle = C["sun"]; ctx.fill();
+
+    // Torque arrows only — rotation is already obvious from the teeth.
+    // Each arrow's centre angle tracks its own member, so it orbits with the
+    // part it describes.  A stationary member (carrier under assist) therefore
+    // holds a stationary arrow, which is itself the point.
+    // Radii are kept clear of the freewheel indicator at Rs+Rp.
+    var T = torqueDirs(state.mode);
+    arcArrow(cx, cy, Rs * 0.62,        T.s, C["tq"], aSun  + 0.00);
+    arcArrow(cx, cy, (Rs + Rp) * 0.66, T.c, C["tq"], aCar  + 2.09);
+    arcArrow(cx, cy, Rr + m2 * 19,     T.r, C["tq"], aRing + 4.19);
+
+    // always-on: the carrier's one-way clutch direction
+    freewheelIndicator(cx, cy, Rs + Rp);
+  }
+
+  function fmtRpm(w) {
+    var r = w * RPM;
+    if (Math.abs(r) < 0.5) return "0 rpm — still";
+    return (r > 0 ? "+" : "") + r.toFixed(0) + " rpm";
+  }
+
+  // ---- UI ----------------------------------------------------------
+  function setMode(m) {
+    state.mode = m;
+    document.querySelectorAll(".modes button").forEach(function (b) {
+      b.setAttribute("aria-pressed", String(b.dataset.mode === m));
+    });
+    document.getElementById("slipctl").classList.toggle("off", m !== "regen");
+    document.getElementById("powcard").style.display = (m === "regen") ? "" : "none";
+    sync();
+  }
+
+  function dirText(w, wr) {
+    if (Math.abs(w) * RPM < 0.5) return "stationary";
+    if (Math.abs(wr) * RPM < 0.5) return "turning";
+    return (w > 0) === (wr > 0) ? "with wheel" : "against wheel";
+  }
+
+  function sync() {
+    var s = solve();
+    document.getElementById("spdv").textContent = state.speed.toFixed(1);
+    document.getElementById("slipv").textContent = state.slip;
+
+    document.getElementById("r-sun").textContent  = fmtRpm(s.ws);
+    document.getElementById("r-car").textContent  = fmtRpm(s.wc);
+    document.getElementById("r-ring").textContent = fmtRpm(s.wr);
+
+    document.getElementById("d-sun").textContent  = dirText(s.ws, s.wr);
+    document.getElementById("d-car").textContent  = dirText(s.wc, s.wr);
+    document.getElementById("d-ring").textContent = Math.abs(s.wr) * RPM < 0.5 ? "stationary" : "forward";
+
+    var cl = document.getElementById("clutch");
+    if (state.mode === "assist") { cl.className = "badge lock"; cl.textContent = "Locked — carrier grounded"; }
+    else if (state.mode === "coast") { cl.className = "badge over"; cl.textContent = "Overrunning — free"; }
+    else { cl.className = "badge none"; cl.textContent = "Overrunning — no help"; }
+
+    if (state.mode === "regen") {
+      document.getElementById("pel").style.flexGrow = Math.max(0.001, 1 - s.s);
+      document.getElementById("pht").style.flexGrow = Math.max(0.001, s.s);
+      document.getElementById("pel").textContent = s.s < 0.85 ? Math.round((1 - s.s) * 100) + "% ELECTRICAL" : "";
+      document.getElementById("pht").textContent = s.s > 0.15 ? Math.round(s.s * 100) + "% HEAT" : "";
+    }
+    return s;
+  }
+
+  document.querySelectorAll(".modes button").forEach(function (b) {
+    b.addEventListener("click", function () { setMode(b.dataset.mode); });
+  });
+  document.getElementById("spd").addEventListener("input", function (e) { state.speed = +e.target.value; sync(); });
+  document.getElementById("slip").addEventListener("input", function (e) { state.slip = +e.target.value; sync(); });
+
+  var playBtn = document.getElementById("play");
+  playBtn.addEventListener("click", function () {
+    state.playing = !state.playing;
+    playBtn.textContent = state.playing ? "Pause" : "Play";
+  });
+
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    state.playing = false; playBtn.textContent = "Play";
+  }
+
+  var last = performance.now(), SCALE = 0.2;   // 5× slow motion — the sun is the fast one
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000); last = now;
+    var s = solve();
+    if (state.playing) {
+      aSun  += s.ws * dt * SCALE;
+      aCar  += s.wc * dt * SCALE;
+      aRing += s.wr * dt * SCALE;
+      aPla  += s.wp * dt * SCALE;
+    }
+    draw(s);
+    requestAnimationFrame(frame);
+  }
+
+  setMode("assist");
+  requestAnimationFrame(frame);
+})();
+</script>

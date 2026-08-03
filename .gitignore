@@ -1,4 +1,4 @@
-# MicroPython / Python
+﻿# MicroPython / Python
 __pycache__/
 *.pyc
 *.pyo
@@ -14,14 +14,14 @@ htmlcov/
 .idea/
 
 # Sim output (large generated HTML / logs)
-sim/output/
+v1-legacy/sim/output/
 
 # Root-level diagnostic logs
 /*.log
 
 # Regeneratable PySR imitation dataset (rebuilt by
-# scripts/pysr/collect_imitation_dataset.py)
-/data/pysr_aimd_imitation.csv
+# v1-legacy/scripts/pysr/collect_imitation_dataset.py)
+/v1-legacy/data/pysr_aimd_imitation.csv
 
 # JAX persistent XLA compile cache
 .jax_cache/
@@ -29,7 +29,7 @@ sim/output/
 # Local device snapshots / bench artifacts
 /vesc_snapshot_appconf.bin
 /vesc_snapshot_mcconf.bin
-/vesc_snapshot_meta.txt
+/v1-legacy/logs/vesc_snapshot_meta.txt
 
 # OS
 .DS_Store
