@@ -7,7 +7,9 @@ hub, buffered by supercapacitors, returning energy as a few short boosts.
 
 | Path | What it is | Authority |
 |---|---|---|
-| [`design/`](design/) | The **released design**: spec RGX-2-001 Rev C, drawing RGX-2-100 Rev D, planetary simulator, review package zip | **Authoritative** |
+| [`design/`](design/) | The **released design**: spec RGX-2-001 Rev C, drawing RGX-2-100 Rev D, BOM RGX-2-002, firmware architecture RGX-2-003 Rev B | **Authoritative** |
+| [`firmware/`](firmware/) | The v2 firmware implementation (MicroPython, per RGX-2-003). Host-testable core is green; on-target gates FW-0..FW-2 pending a Pico | Implementation |
+| [`tests/`](tests/) | CPython test suite for the firmware's pure core (`python -m pytest` from `v2/`) — runs in CI beside the v1 suite | — |
 | [`research/`](research/) | Working analysis, decision log, sourcing notes — the *why* behind the design | History; where it disagrees with `design/`, the design wins |
 | [`reviews/`](reviews/) | External review rounds, kept verbatim as received | Historical record |
 
@@ -29,6 +31,7 @@ law is deliberately out of scope — it is the output of the scoring work in
 | File | What it is |
 |---|---|
 | [`research/decisions.md`](research/decisions.md) | **Decision log**, newest first. Decisions are made by adding entries here |
+| [`research/carrier-brake-mechanism.md`](research/carrier-brake-mechanism.md) | **Active study** — carrier-brake mechanism concept, teardown question list, CAD plan (spec §11 gate 1) |
 | [`research/hardware-design.md`](research/hardware-design.md) | Component stack, pin map, conditioning, protection — the working draft behind the spec |
 | [`research/power-architecture.md`](research/power-architecture.md) | One-rail keep-alive topology and its derivation |
 | [`research/cap-bank-and-precharge.md`](research/cap-bank-and-precharge.md) | Bank sizing, module matching, precharge, boost-count analysis |

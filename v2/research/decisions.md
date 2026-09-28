@@ -13,6 +13,153 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-08-02 — Firmware implementation started; host core green
+
+**Decided.** Final pre-code verification passed (21/21 numeric checks: mask
+0x818C → 25 B selective response, 24 % wire duty, latency table, Willis
+identities, PIO 1 µs resolution with no 32-bit wrap inside 71 min, record
+layout 24 B, throttle window counts). Protocol constants taken from the v1
+implementation as *wire facts* validated on this exact controller — opcodes,
+selective bit table, scales — explicitly not as design inheritance.
+
+Implementation landed in `v2/firmware/` (8 modules) with `v2/tests/`
+(**43 passing** under CPython, added to CI beside the v1 suite): viper-ready
+table CRC16 with pure fallback, O(1)-resync streaming parser, selective
+telemetry parse, link scheduler with RTT/health counters, Willis kinematics
+with the live k cross-check, safety envelope, INIT/RUN/LIMP state machine,
+seqlock snapshot, ring logger codec, PIO period-capture program, SSD1306
+core-1 UI, and the fenced 100 Hz main loop.
+
+**One design change made by a failing test:** the parser drops VESC
+long-frame (0x03) support. The long-start byte is identical to the frame-END
+byte, so honouring it lets a trailing END swallow the next frame's start
+after any resync — v1 documented exactly this ambiguity and kept the
+ambiguous path. Nothing our command set can receive exceeds 78 B; 0x03 in
+hunt state is junk, counted for diagnostics. The property tests (single-bit
+corruption can never deliver a wrong payload; recovery costs ≤ 1 following
+frame) now pass by construction.
+
+Remaining before hardware: gates FW-0 (pinned-release dual-core soak),
+FW-1/FW-2 on-target timing proofs — need only a Pico.
+
+---
+
+## 2026-08-02 — Firmware architecture rescrutinized (RGX-2-003 Rev B)
+
+**Decided.** Rev A was challenged by the owner as borrowing v1 choices without
+justification. The challenge was correct. Rev B restructures the document as a
+decision register — alternatives, numbers, and the measurement that would
+overturn each choice — after targeted research on the VESC software surface
+and the RP2040/MicroPython platform. What changed:
+
+- **Corrected a Rev A error:** RP2040 executes from XIP flash, so a flash
+  write stalls *both* cores (~45 ms/sector erase). Standstill-only flushing is
+  now understood as protecting core 0, not merely avoiding writes-in-motion.
+- **Dual-core demoted from assumption to bet:** MicroPython's rp2 port runs
+  GIL-less true SMP with a documented memory-corruption history (#7124 class)
+  and release-sensitive stability. New gate FW-0 (pin release + 24 h soak)
+  before anything else; a single-core time-sliced fallback is fully specified.
+- **UART kept on evidence, not inheritance:** v1's physical layer was blamed
+  without proof; the firmware was the killer. Link-health counters become the
+  instrument. CAN via can2040 + transceiver is the designed escape hatch —
+  the Mini's spec sheet lists CAN, board population unconfirmed (bench B-11).
+- **115200 baud justified numerically** (26 % duty, 2.6 ms/frame vs a
+  40–130 ms sensing-dominated latency budget) rather than copied.
+- **Poll SELECTIVE over LispBM push:** SELECTIVE exists since post-3.41 and
+  Flipsky ships 5.2 — no firmware update needed. Push needs 6.x and custom
+  code both sides for ~2 ms; it is the upgrade path, not the default.
+- **A1 firmware: stay on shipped 5.x** — everything needed exists there;
+  clone-flashing hazards are not bought for features we don't use.
+- **The latency insight Rev A missed:** the 6 PPR shell sensor (63–126 ms to
+  see slip onset) dominates lever→torque delay — no protocol choice touches
+  it. A brake-lever sensor collapses the budget ~4× (≈35 ms). Recommended to
+  owner as a hardware delta (spare GPIO, queued for drawing Rev E); strategy
+  contract gains a `brake` input either way.
+- **New for free:** during assist the clutch makes ω_motor = k·ω_wheel exactly
+  — every assist episode live-calibrates k and audits the shell sensor.
+- **New commissioning mode C-0:** ride first on the VESC's own ADC-throttle
+  app with the Pico as read-only observer — proves the powertrain with zero
+  control code and collects the scoring sim's first real corpora. The
+  ADC+UART *hybrid* as permanent architecture was rejected (two writers, one
+  setpoint, undefined arbitration).
+
+---
+
+## 2026-08-02 — Firmware architecture defined (RGX-2-003 Rev A)
+
+**Decided.** Clean-slate architecture, not a v1 refactor. The v1 postmortem was
+re-verified against source before designing: no `rxbuf` (64 B default ring),
+O(n²) buffer reslicing, bit-banged pure-Python CRC (~5–7 ms/frame), a
+*scheduled* 70 ms blocking LCD re-init in the control path, synchronous flash
+appends while riding, and zero link diagnostics. Root cause generalised: **v1
+had no time-domain discipline** — any module could spend milliseconds on the
+shared thread.
+
+Core decisions:
+
+- **Two-core split.** Core 0 runs a 100 Hz allocation-free control loop with a
+  per-tick time budget and fences (no sleep, no print, no file I/O, no display
+  import). Core 1 owns display, logging, and bench I/O and is allowed to block.
+  Seqlock snapshot between them.
+- **Link:** explicit `rxbuf=1024`; incremental O(1)-resync parser; viper
+  table-driven CRC16; `GET_VALUES_SELECTIVE` minimal mask at 50 Hz with
+  `SET_CURRENT` at 100 Hz as the keepalive; A1 app timeout 200 ms as the
+  dead-MCU failsafe; link-health counters in every snapshot and log record.
+- **Control law stays deferred** behind a fixed strategy contract
+  (`update(s, ω_wheel, v_bank, throttle, i_motor, dt) → amps`); a safety
+  envelope in `control.py` clamps it (40 V taper, 28 km/h crossover guard,
+  current cap, slew limit). Strategy exceptions → zero current + LIMP.
+- **Three states** (INIT / RUN / LIMP). No PRECHARGE, no contactor states —
+  the firmware does not resurrect what the hardware deleted.
+- **8 flat modules ≈ 1 100 lines** vs v1's 21 / ~3 500; `kinematics.py` and
+  `strategy.py` are CPython-clean for host tests; v1 ride logs become the
+  regression corpus.
+- **Implementation gates FW-1..FW-7**, each landing with its test; FW-1/FW-2
+  (parser+CRC timing, loop skeleton timing) need only a Pico and can start
+  before the motor arrives.
+
+**Ruled out:** uasyncio for the control loop (jitter unbounded by design);
+logging to flash while moving under any buffering scheme; re-using v1's
+service/driver layering.
+
+---
+
+## 2026-08-02 — BOM consolidated; every part sourced or owned
+
+**Decided.** RGX-2-002 Rev A. Every drawing item resolved to a buyable part or
+an owned one; new spend ≈ $580–700 CAD, motor dominant. Findings that changed
+the record:
+
+- **G020 confirmed compatible, with real data:** 20 magnets / 10 pole pairs,
+  5:1, and the **6-magnet shell speed sensor is confirmed** — spec §4.9's 6 PPR
+  was an assumption and is now sourced. Single winding ~200 rpm @ 36 V ⟹
+  kV_wheel ≈ 5.56 rpm/V.
+- **Back-EMF crossover quantified:** braking below 28 km/h cannot overcharge a
+  full bank even through A1's body diodes; exposure is braking > ~32 km/h with
+  a full bank and a faulted controller. Coasting is immune — the Freegen rotor
+  is stationary. Control-law requirement logged: full-bank regen tapers to zero
+  above ~28 km/h.
+- **The motor has one 9-pin Higo cable, not a separate sensor connector.**
+  White conductor = shell speed. W1 becomes a Z910 splitter pigtail —
+  electrically identical, connector packaging only. **Queued as drawing Rev E.**
+- **BMS UV at 3.00 V/cell is only attainable with a configurable BMS** (JBD
+  smart, app-set). Fixed-threshold parts cut at 2.5–2.8 V/cell — below the
+  10.76 V collapse point, i.e. no protection at all. Bluetooth quiescent trims
+  standby to 82–91 days; accepted.
+- **S2 spec relaxed ≥50 → ≥24 V DC:** open-contact voltage is ≤ ~23 V, and the
+  stock KSD301 manual-reset part is 48 V DC rated.
+- **F2 and F3 unified** on the Littelfuse MINI 58 V blade family — one holder
+  type, both voltage requirements covered, and at 5 A the precharge duty is
+  67 % of rating.
+- **S1 resolved:** 8–60 V DC / 275 A / 1250 A-intermittent marine disconnect
+  class — the ≥60 V DC line is buyable without resorting to 48 V parts.
+
+**Ruled out:** fixed-threshold BMS boards; ANL-style S1 substitutes; ordering
+the motor without vendor confirmation of cassette + speed-sensor variant and a
+frame dropout measurement.
+
+---
+
 ## 2026-08-02 — Second external review; drawing to Rev D, spec to Rev C
 
 **Decided.** A second review pass on the Rev C package returned three functional
