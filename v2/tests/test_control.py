@@ -20,9 +20,13 @@ def test_slip_follows_the_plant():
 
 
 # --- envelope ------------------------------------------------------------------
-def test_slew_limits_the_request():
+def test_slew_limits_only_the_build_up():
     assert envelope(40.0, 0.0, 25.0, 0.0, W, False) == C.SLEW_STEP_A
     assert envelope(-40.0, 0.0, 25.0, 0.0, W, False) == -C.SLEW_STEP_A
+    assert envelope(10.0, 20.0, 25.0, 0.0, W, False) == 10.0      # release: at once
+    assert envelope(0.0, 20.0, 25.0, 0.0, W, False) == 0.0
+    assert envelope(-36.0, 20.0, 25.0, 0.0, W, False) == -C.SLEW_STEP_A   # reversal
+    assert envelope(-10.0, -30.0, 25.0, 0.0, W, False) == -10.0
 
 
 def test_clamps_act_in_the_same_tick():
@@ -103,6 +107,13 @@ def test_coasting_commands_nothing(rig):
         assert rig.step(wheel=W, s=1.0) == 0.0
 
 
+def test_releasing_the_throttle_cuts_assist_at_once(rig):
+    rig.boot()
+    for _ in range(30):
+        rig.step(wheel=W, s=0.0, thr=1.0)
+    assert rig.step(wheel=W, s=0.0, thr=0.0) <= 0.0
+
+
 def test_throttle_loss_keeps_regen(rig):
     # review F03: a dead throttle reads 0 (sensors.Throttle); that only stops
     # assist, the loop stays in RUN and braking still regenerates
@@ -118,8 +129,7 @@ def test_lever_wins_over_throttle(rig):
     rig.boot()
     for _ in range(20):
         rig.step(wheel=W, s=0.0, thr=0.5)
-    assert rig.step(wheel=W, s=0.0, thr=0.5, brake=True) == 0.0    # assist cut at once
-    assert rig.step(wheel=W, s=0.0, thr=0.5, brake=True) < 0.0     # then regen ramps
+    assert rig.step(wheel=W, s=0.0, thr=0.5, brake=True) == -C.SLEW_STEP_A  # at once
 
 
 def test_link_silence_zeroes_at_once_and_recovers(rig):
@@ -160,7 +170,12 @@ class _NaN(strategy.Strategy):
         return math.nan
 
 
-@pytest.mark.parametrize("strat", [_Raises(), _NaN()])
+class _BadReset(strategy.Placeholder):
+    def reset(self):
+        raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize("strat", [_Raises(), _NaN(), _BadReset()])
 def test_bad_strategy_latches_dead(strat):
     r = Rig(strat)
     for _ in range(C.LINK_RECOVER_FRAMES):

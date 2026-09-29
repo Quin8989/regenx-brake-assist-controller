@@ -1,6 +1,6 @@
 # vesc.py — VESC UART link: framing, CRC16, parser, per-tick schedule.
 #
-# Pure over a duck-typed uart (.readinto(mv), .write(buf)), so it runs under
+# Pure over a duck-typed uart (.any(), .readinto(mv), .write(buf)), so it runs under
 # CPython for tests. RGX-2-003 D5/D7/D11.
 #
 # Health is one number: `ok`, the count of consecutive clean telemetry frames.
@@ -105,10 +105,14 @@ class Link:
     def poll(self):
         """Start of tick: drain RX and decode every complete frame."""
         b = self._buf
-        got = self.uart.readinto(self._mv[self._n:])
+        n0 = self._n
+        k = self.uart.any()             # read only what is there: rp2 readinto
+        if not k:                       # waits out the char timeout otherwise
+            return
+        got = self.uart.readinto(self._mv[n0:n0 + min(k, len(b) - n0)])
         if not got:
             return
-        end = self._n + got
+        end = n0 + got
         i = 0
         keep = end                          # first start still waiting for bytes
         while end - i >= 6:
@@ -122,7 +126,7 @@ class Link:
                     i += n + 5
                     keep = end
                     continue
-                else:
+                elif keep == end:           # (counted once, not on every rescan)
                     self.bad += 1
             i += 1
         if keep < i:

@@ -39,8 +39,10 @@ def slip(erpm, w_rpm):
 def envelope(req, last, v_in, i_in, w_rpm, brake):
     """Slew the strategy's request, then clamp it. Pure.
 
-    The clamps only ever shrink |i| toward zero, so applying them after the
-    slew makes every limit act in the same tick. Both voltage limits use the
+    The slew only limits how fast torque builds (SLEW_STEP_A per tick away
+    from zero); any reduction, including a reversal through zero, is taken
+    at once. The clamps only ever shrink |i|, so every limit, a released
+    throttle and a pulled lever act in the same tick. Both voltage limits use the
     open-circuit estimate v_oc = v_in + i_in*R_BANK (VESC i_in > 0 = drawing
     from the bank). Regen current is capped so A1's terminal stays below
     V_TERM_MAX and assist so it stays above V_TERM_MIN. That single formula is
@@ -48,7 +50,10 @@ def envelope(req, last, v_in, i_in, w_rpm, brake):
     the bank's I*R step.
     """
     s = C.SLEW_STEP_A
-    i = last - s if req < last - s else (last + s if req > last + s else req)
+    if req > 0.0:
+        i = min(req, (last if last > 0.0 else 0.0) + s)
+    else:
+        i = max(req, (last if last < 0.0 else 0.0) - s)
     v_oc = v_in + i_in * C.R_BANK
     if i > 0.0:
         cap = 0.0 if brake else min(C.I_ASSIST_MAX, (v_oc - C.V_TERM_MIN) / C.R_BANK)
@@ -78,9 +83,9 @@ class Control:
         run = L.ok >= C.LINK_RECOVER_FRAMES and not self.dead
         i = 0.0
         if run:
-            if not self._ran:
-                self.strategy.reset()
             try:
+                if not self._ran:
+                    self.strategy.reset()
                 req = float(self.strategy.update(slip(L.erpm, w), w, L.v_in,
                                                  thr, brake, L.i_motor, C.DT))
                 if not -1000.0 < req < 1000.0:   # also catches NaN and inf

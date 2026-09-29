@@ -57,12 +57,18 @@ def test_full_scale_and_deadband():
 
 
 @pytest.mark.parametrize("frac", [0.0, C.THR_LO - 0.01, C.THR_HI + 0.01, 1.0])
-def test_open_or_shorted_reads_zero(frac):
+def test_open_or_shorted_reads_zero_and_disarms(frac):
     adc = FakeADC(C.THR_IDLE)
     t = Throttle(adc)
     t.read()
     adc.frac = frac
     assert t.read() == 0.0
+    adc.frac = C.THR_IDLE + 0.6 * SPAN          # wire back, throttle still held
+    assert t.read() == 0.0                      # nothing until released
+    adc.frac = C.THR_IDLE
+    t.read()
+    adc.frac = C.THR_IDLE + 0.6 * SPAN
+    assert t.read() > 0.5
 
 
 # --- wheel speed (review F10, F30, F31, F54, F59) ------------------------------------

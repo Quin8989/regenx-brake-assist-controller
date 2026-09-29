@@ -25,6 +25,9 @@ class FakeUART:
     def inject(self, data):
         self._rx += data
 
+    def any(self):
+        return len(self._rx)
+
     def readinto(self, mv):
         n = min(len(mv), len(self._rx))
         if not n:

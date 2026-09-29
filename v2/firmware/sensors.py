@@ -51,8 +51,9 @@ class Throttle:
     Out of the [THR_LO, THR_HI] window (open wire reads 0 V through R2, a
     short reads rail) the throttle simply reads 0: assist stops, regen is
     untouched, and there is no fault state to manage. Assist arms only once
-    the throttle has been seen at idle, so a held or stuck throttle at
-    power-on gives nothing.
+    the throttle has been seen at idle, at power-on and after any
+    out-of-window reading, so a held, stuck or flickering throttle gives
+    nothing until it is released.
     """
 
     def __init__(self, adc):
@@ -62,6 +63,7 @@ class Throttle:
     def read(self):
         f = self.adc.read_u16() / 65535
         if not C.THR_LO < f < C.THR_HI:
+            self.armed = False
             return 0.0
         t = (f - C.THR_IDLE) / (C.THR_FULL - C.THR_IDLE)
         if t < C.THR_DEADBAND:

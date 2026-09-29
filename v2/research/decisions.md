@@ -17,8 +17,9 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 **Decided.** The firmware was reviewed (`reviews/firmware-1/`), and the fixes
 were made by removing machinery rather than adding checks. Production code
-went from 1 226 lines / 16.1 KB bytecode to about 800 lines / 10.7 KB. Tests
-went from 43 to 266, now written against a Willis/clutch plant.
+went from 1 226 lines / 16.1 KB bytecode to about 835 lines / 10.8 KB. Tests
+went from 43 to 272, now written against a Willis/clutch plant. An
+independent re-review of the rewrite found 8 defects, all fixed before merge.
 
 - **Sign fixed by provisioning, not configured.** A1's direction is set so
   +current drives the wheel forward. With the carrier held, the rotor then
@@ -41,8 +42,9 @@ went from 43 to 266, now written against a Willis/clutch plant.
   1 V below A1's 40 V OV trip, and adds the brownout floor (F09, F19). The
   crossover guard is removed: zeroing the command cannot stop body-diode
   rectification (F08, spec §9). Bank-full fade stays accepted.
-- **Slew then clamp.** Limits act in the same tick (C02). There is no regen
-  below ~3 km/h (design sweep F8).
+- **Slew then clamp; the slew limits build-up only.** Any reduction, including
+  a released throttle or a reversal to regen, is immediate, and the clamps act
+  in the same tick (C02). There is no regen below ~3 km/h (design sweep F8).
 - **Deleted:** seqlock (a torn display/log sample between two ticks is
   harmless), the live k cross-check (k is fitted offline from logs), the RTT
   metric, the full COMM_GET_VALUES fallback, gc.disable() (it turned heap
@@ -52,9 +54,11 @@ went from 43 to 266, now written against a Willis/clutch plant.
   later in the buffer proves an earlier incomplete start false. Every
   single-bit flip and 200 garbage seeds deliver the next good frame (F06, F26,
   F35).
-- **Logging** flushes ≤ 4 KB chunks at every standstill, deletes the oldest
-  rides below 200 KB free, writes a header, and catches every exception on
-  core 1 (F13, F14, F23, F25, F42).
+- **Logging:** one write session per stop, in ≤ 4 KB chunks, never while
+  moving. The oldest rides are deleted below 200 KB free, and the file is
+  closed at once on any write error, so the littlefs finaliser never runs on
+  core 0. It writes a header and catches every exception on core 1 (F13,
+  F14, F23, F25, F42).
 - **C-0 observer mode:** `SEND_CURRENT = False` (F11).
 
 Open for the owner: fit the lever sensor (without it the carrier lever cannot

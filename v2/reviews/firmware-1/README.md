@@ -12,8 +12,14 @@
 Addressed on branch `claude/hopeful-gauss-xk356r`. Wherever possible the
 approach was to remove the machinery a defect lived in rather than add
 another check.
-- **Production firmware:** 1,226 → ~800 lines; 16.1 → 10.7 KB `mpy` bytecode.
-- **Tests:** 43 → 266, driven through a Willis/clutch plant.
+- **Production firmware:** 1,226 → ~835 lines; 16.1 → 10.8 KB `mpy` bytecode.
+- **Tests:** 43 → 272, driven through a Willis/clutch plant.
+- **Re-review:** an independent re-review of the rewrite found 8 more defects
+  (flush churn while parked, a file left open on a write error, a blocking
+  UART read, the `nomain` escape soft-rebooting, slewed throttle release,
+  the `reset()` hook outside the guard, the throttle never disarming, and
+  over-counting). All are fixed.
+- **CI:** green on both jobs.
 - **Docs:** rationale in `research/decisions.md` (2026-09-29); rules in
   RGX-2-003 Rev C.
 

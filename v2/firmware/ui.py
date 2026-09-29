@@ -116,6 +116,7 @@ class Core1:
         self.file = None
         self.errors = 0
         self._t_log = self._t_disp = self._t_move = 0
+        self._stop_done = False
         try:
             os.mkdir(C.LOG_DIR)
         except OSError:
@@ -138,6 +139,7 @@ class Core1:
         moving = not still(cp)
         if moving:
             self._t_move = now
+            self._stop_done = False
         if diff(now, self._t_log) >= (C.LOG_RIDE_MS if moving else C.LOG_IDLE_MS):
             self._t_log = now
             self.log.add(now, cp)
@@ -148,41 +150,58 @@ class Core1:
             except OSError:             # display gone: re-init next time
                 self.oled = None
                 self.errors += 1
-        try:
-            if diff(now, self._t_move) >= C.STANDSTILL_MS and self._flush(cp):
-                return
-            self._close()
-        except OSError:
-            self.errors += 1
-            self.file = None
+        if diff(now, self._t_move) >= C.STANDSTILL_MS:
+            self._flush(cp)
 
     def _flush(self, cp):
-        mv = self.log.chunk()
-        if mv is None:
-            return False
-        if self.file is None:
-            self._open(cp)
-        self.file.write(mv)
-        return True
+        """Standstill only: write what is new, ~4 KB per pass, close once.
+
+        One write session per stop (then again only after FLUSH_RECORDS idle
+        records) keeps littlefs from erasing a block every parked second. A
+        flush interrupted by moving off simply resumes at the next stop, so
+        flash is never touched while moving.
+        """
+        log = self.log
+        if self.file is None and log.w - log.f < (C.FLUSH_RECORDS if self._stop_done else 1):
+            return
+        try:
+            mv = log.chunk()
+            if mv is None:
+                f, self.file = self.file, None
+                self._stop_done = True
+                f.close()
+                return
+            if self.file is None:
+                self._open(cp)
+            if self._room():
+                self.file.write(mv)     # else: drop it rather than fill the FS
+        except OSError:
+            self.errors += 1
+            f, self.file = self.file, None
+            if f is not None:           # close now: never leave it to the GC
+                try:                    # finaliser, which would run on core 0
+                    f.close()
+                except OSError:
+                    pass
 
     def _open(self, cp):
         import os
-        names = sorted(os.listdir(C.LOG_DIR))
-        while names and names[0] != self.name:     # make room: oldest first
-            st = os.statvfs("/")
-            if st[0] * st[3] >= C.LOG_MIN_FREE:
-                break
-            os.remove(C.LOG_DIR + "/" + names.pop(0))
-        new = self.name not in names
+        new = self.name not in os.listdir(C.LOG_DIR)
         self.file = open(C.LOG_DIR + "/" + self.name, "ab")
         if new:
             self.file.write(header(cp[K.SN_FW]))
 
-    def _close(self):
-        f = self.file
-        if f is not None:
-            self.file = None
-            f.close()
+    def _room(self):
+        """Free space >= LOG_MIN_FREE, deleting the oldest rides first."""
+        import os
+        names = sorted(os.listdir(C.LOG_DIR))
+        while True:
+            st = os.statvfs("/")
+            if st[0] * st[3] >= C.LOG_MIN_FREE:
+                return True
+            if not names or names[0] == self.name:
+                return False
+            os.remove(C.LOG_DIR + "/" + names.pop(0))
 
     def _render(self, sn):
         o = self.oled
