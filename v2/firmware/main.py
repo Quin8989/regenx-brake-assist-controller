@@ -15,7 +15,6 @@ from machine import UART, WDT, Pin
 import config as C
 import control
 import sensors
-import strategy
 import ui
 import vesc
 
@@ -23,7 +22,7 @@ import vesc
 def run():
     uart = UART(C.UART_ID, baudrate=C.UART_BAUD, tx=Pin(C.PIN_UART_TX),
                 rx=Pin(C.PIN_UART_RX), rxbuf=C.UART_RXBUF, timeout=0)
-    loop = control.Control(vesc.Link(uart), sensors.Sensors(), strategy.SlipRegulator())
+    loop = control.Control(vesc.Link(uart), sensors.Sensors())
     sn = loop.sn
     _thread.start_new_thread(ui.Core1(sn).run, ())
     wdt = WDT(timeout=C.WDT_MS)

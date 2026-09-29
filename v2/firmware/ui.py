@@ -20,7 +20,7 @@ import control as K
 # (tools/decode_log.py).
 REC_FMT = "<IHhHhhhHHhBB"
 REC_SIZE = struct.calcsize(REC_FMT)  # 24
-STATE_NAMES = ("RUN", "NO LINK", "VESC FAULT", "DEAD")
+STATE_NAMES = ("RUN", "NO LINK", "VESC FAULT")
 
 
 def _i(x, lo, hi):

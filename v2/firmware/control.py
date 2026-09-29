@@ -6,7 +6,6 @@
 # States fall out of the link instead of being tracked:
 #   RUN    link.ok >= LINK_RECOVER_FRAMES (clean telemetry, no VESC fault)
 #   LIMP   otherwise: boot, silence, VESC fault. 0 A, recovers by itself.
-#   DEAD   the strategy raised or returned garbage. 0 A until power cycle.
 
 from array import array
 
@@ -20,7 +19,7 @@ import config as C
  SN_TMAX) = range(16)
 SN_LEN = 16
 
-RUN, LIMP_LINK, LIMP_FAULT, DEAD = 0, 1, 2, 3
+RUN, LIMP_LINK, LIMP_FAULT = 0, 1, 2
 
 
 def slip(erpm, w_rpm):
@@ -36,8 +35,26 @@ def slip(erpm, w_rpm):
     return 0.0 if s < 0.0 else (1.0 if s > 1.0 else s)
 
 
+def request(e, de, throttle, i_last):
+    """The rider's current request: the throttle gives assist and ends regen;
+    otherwise PI on the slip error e = SLIP_SET - s toward the allowed slip.
+
+    Velocity form: it adjusts the current actually sent last tick, so nothing
+    winds up while the envelope clamps it. While the rider holds the carrier
+    (s < SLIP_SET) regen grows until the brake just slips, so the braking
+    torque is whatever the squeeze can hold; when they let go the carrier
+    freewheels (s -> 1) and regen falls to 0. Regenerating with nobody
+    braking is harmless: with the carrier free the motor has nothing to push
+    against and only slows its own rotor.
+    """
+    if throttle > 0.0:
+        return C.I_ASSIST_MAX * throttle
+    r = (-i_last if i_last < 0.0 else 0.0) + C.SLIP_KP * de + C.SLIP_KI * e * C.DT
+    return -r if r > 0.0 else 0.0
+
+
 def envelope(req, last, v_in, i_in, w_rpm):
-    """Slew the strategy's request, then clamp it. Pure.
+    """Slew the request, then clamp it. Pure.
 
     The slew only limits how fast torque builds (SLEW_STEP_A per tick away
     from zero); any reduction, including a reversal through zero, is taken
@@ -63,14 +80,12 @@ def envelope(req, last, v_in, i_in, w_rpm):
 
 
 class Control:
-    def __init__(self, link, sensors, strategy):
+    def __init__(self, link, sensors):
         self.link = link
         self.sensors = sensors
-        self.strategy = strategy
         self.sn = array("f", [0.0] * SN_LEN)
         self.i = 0.0
-        self.dead = False
-        self._ran = False
+        self._e = C.SLIP_SET - 1.0      # slip error, kept current every tick
 
     def tick(self):
         """One 10 ms tick. Returns the current sent to A1 (A, + assist)."""
@@ -79,21 +94,11 @@ class Control:
         L.poll()
         w = S.wheel.read()
         thr = S.throttle.read()
-        run = L.ok >= C.LINK_RECOVER_FRAMES and not self.dead
-        i = 0.0
-        if run:
-            try:
-                if not self._ran:
-                    self.strategy.reset()
-                req = float(self.strategy.update(slip(L.erpm, w), w, thr, self.i, C.DT))
-                if not -1000.0 < req < 1000.0:   # also catches NaN and inf
-                    raise ValueError(req)
-                i = envelope(req, self.i, L.v_in, L.i_in, w)
-            except Exception:
-                self.dead = True
-                run = False
-                i = 0.0
-        self._ran = run
+        e = C.SLIP_SET - slip(L.erpm, w)
+        de = e - self._e
+        self._e = e
+        run = L.ok >= C.LINK_RECOVER_FRAMES
+        i = envelope(request(e, de, thr, self.i), self.i, L.v_in, L.i_in, w) if run else 0.0
         self.i = i
         L.send(i)
 
@@ -107,8 +112,7 @@ class Control:
         sn[SN_THR] = thr
         sn[SN_VSYS] = S.vsys()
         sn[SN_TFET] = L.temp_fet
-        sn[SN_STATE] = (DEAD if self.dead else RUN if run
-                        else LIMP_FAULT if L.fault else LIMP_LINK)
+        sn[SN_STATE] = RUN if run else (LIMP_FAULT if L.fault else LIMP_LINK)
         sn[SN_FAULT] = L.fault
         sn[SN_FW] = L.fw
         sn[SN_FRAMES] = L.frames

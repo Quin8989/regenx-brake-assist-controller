@@ -1,12 +1,9 @@
-import math
-
 import pytest
 
 import config as C
 import control
-import strategy
 from conftest import Rig, last_current, rotor_erpm
-from control import envelope, slip
+from control import envelope, request, slip
 
 W = 150.0          # wheel rpm, ~19 km/h
 
@@ -151,49 +148,6 @@ def test_vesc_fault_limps_until_ten_clean_frames(rig):
     assert rig.state == control.RUN
 
 
-class _Raises(strategy.Strategy):
-    def update(self, *a):
-        raise ValueError("boom")
-
-
-class _NaN(strategy.Strategy):
-    def update(self, *a):
-        return math.nan
-
-
-class _BadReset(strategy.SlipRegulator):
-    def reset(self):
-        raise RuntimeError("boom")
-
-
-@pytest.mark.parametrize("strat", [_Raises(), _NaN(), _BadReset()])
-def test_bad_strategy_latches_dead(strat):
-    r = Rig(strat)
-    for _ in range(C.LINK_RECOVER_FRAMES):
-        r.step(wheel=W, s=0.0, thr=0.5)
-    assert r.state == control.DEAD and r.loop.i == 0.0
-    for _ in range(50):
-        assert r.step(wheel=W, s=0.0, thr=0.5) == 0.0
-    assert r.state == control.DEAD
-
-
-def test_strategy_reset_on_every_entry_to_run():
-    class Counting(strategy.SlipRegulator):
-        resets = 0
-
-        def reset(self):
-            super().reset()
-            self.resets += 1
-
-    strat = Counting()
-    r = Rig(strat)
-    r.boot()
-    for _ in range(C.LINK_TIMEOUT_TICKS + 1):
-        r.step(reply=False)
-    r.boot()
-    assert strat.resets == 2
-
-
 def test_snapshot_publishes_the_tick(rig):
     rig.boot()
     for _ in range(30):
@@ -206,18 +160,19 @@ def test_snapshot_publishes_the_tick(rig):
     assert sn[control.SN_STATE] == control.RUN
 
 
-# --- the slip regulator, closed loop ---------------------------------------------
-def band_plant(i_band, seconds, delay_ticks=6, thr_at=None):
-    """Carrier held by a friction band that grips up to i_band worth of motor
-    current: slip grows while regen exceeds the grip and shrinks while it is
-    below (an integrating plant). The regulator sees slip delay_ticks late,
-    as 6 PPR wheel sensing gives it."""
-    st, s, i, seen, trace = strategy.SlipRegulator(), 0.0, 0.0, [1.0] * delay_ticks, []
+# --- the slip PI, closed loop through the whole tick --------------------------------
+def band_plant(grip, seconds, delay_ticks=6, thr_at=None):
+    """Carrier held by a friction band that grips up to `grip` amps worth of
+    motor current: slip grows while regen exceeds the grip and shrinks while
+    it is below (fixed carrier inertia, an integrating plant). The loop sees
+    slip delay_ticks late, as 6-pulse wheel sensing gives it."""
+    r = Rig()
+    r.boot(wheel=W)
+    s, seen, trace = 0.0, [1.0] * delay_ticks, []
     for n in range(int(seconds / C.DT)):
         thr = 0.5 if thr_at is not None and n * C.DT >= thr_at else 0.0
-        req = st.update(seen[-delay_ticks], W, thr, i, C.DT)
-        i = envelope(req, i, 25.0, 0.0, W)
-        s = min(1.0, max(0.0, s + 0.2 * (-i - i_band) * C.DT))   # fixed carrier inertia
+        i = r.step(wheel=W, s=seen[-delay_ticks], thr=thr)
+        s = min(1.0, max(0.0, s + 0.2 * (-i - grip) * C.DT))
         seen.append(s)
         trace.append((s, i))
     return trace
@@ -243,9 +198,9 @@ def test_the_throttle_ends_regen_at_once():
     assert trace[n - 1][1] < -20.0 and trace[n][1] > 0.0
 
 
-def test_no_regen_while_coasting():
-    st = strategy.SlipRegulator()
+def test_request_never_regenerates_while_coasting():
     i = 0.0
     for _ in range(100):
-        i = envelope(st.update(1.0, W, 0.0, i, C.DT), i, 25.0, 0.0, W)
+        e = C.SLIP_SET - 1.0
+        i = envelope(request(e, 0.0, 0.0, i), i, 25.0, 0.0, W)
     assert i == 0.0

@@ -8,7 +8,6 @@ import pytest  # noqa: E402
 
 import config as C  # noqa: E402
 import control  # noqa: E402
-import strategy  # noqa: E402
 import vesc  # noqa: E402
 
 
@@ -89,11 +88,11 @@ def last_current(tx):
 class Rig:
     """Control loop + link + fakes, stepped one tick at a time."""
 
-    def __init__(self, strat=None):
+    def __init__(self):
         self.uart = FakeUART()
         self.link = vesc.Link(self.uart)
         self.sensors = FakeSensors()
-        self.loop = control.Control(self.link, self.sensors, strat or strategy.SlipRegulator())
+        self.loop = control.Control(self.link, self.sensors)
 
     def step(self, wheel=0.0, s=1.0, thr=0.0, reply=True, **kw):
         """One tick. The plant sets ERPM from wheel speed and slip unless

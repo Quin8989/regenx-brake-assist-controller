@@ -60,7 +60,7 @@ SLIP_KI = 300.0               # [BENCH] A/s per unit   integrating plant, so I-o
 # --- Safety envelope (spec §3, §10; RGX-2-003 §3 as amended) -----------------
 I_ASSIST_MAX = 40.0           # A1 battery limit mirror (spec §10.4)
 I_REGEN_MAX = 40.0
-SLEW_STEP_A = 2.0             # per tick = 200 A/s on the strategy's request
+SLEW_STEP_A = 2.0             # per tick = 200 A/s on the requested current
 R_BANK = 0.367                # [BENCH] bank ESR + wiring, worst case (spec §4.2)
 V_TERM_MAX = 39.0             # regen holds A1's terminal 1 V under its 40 V OV trip
 V_TERM_MIN = 9.0              # assist holds it above A1 start-up 8 V + 1 V (spec §3)

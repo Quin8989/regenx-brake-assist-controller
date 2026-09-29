@@ -12,7 +12,7 @@ import sys
 FIELDS = ("ms", "wheel_rpm", "erpm", "v_in", "i_in", "i_motor", "i_cmd",
           "throttle", "vsys", "temp_fet", "state", "fault")
 SCALE = (1, 10, 0.1, 100, 100, 100, 100, 1000, 1000, 10, 1, 1)
-STATES = ("RUN", "NO_LINK", "VESC_FAULT", "DEAD")
+STATES = ("RUN", "NO_LINK", "VESC_FAULT")
 W_MIN_RPM = 24.0
 
 

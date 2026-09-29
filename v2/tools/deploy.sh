@@ -11,6 +11,6 @@ PORT="${1:-auto}"
 
 mp "$PORT" exec "open('/nomain', 'w').close()" || true   # WDT reboots right after
 sleep 3
-mp "$PORT" cp config.py control.py sensors.py strategy.py ui.py vesc.py vesc_fast.py main.py :
+mp "$PORT" cp config.py control.py sensors.py ui.py vesc.py vesc_fast.py main.py :
 mp "$PORT" exec "import os; os.remove('/nomain')"
 mp "$PORT" reset

@@ -8,7 +8,7 @@ hub, buffered by supercapacitors, returning energy as a few short boosts.
 | Path | What it is | Authority |
 |---|---|---|
 | [`design/`](design/) | The **released design**: spec RGX-2-001 Rev D, drawing RGX-2-100 Rev E, BOM RGX-2-002, firmware architecture RGX-2-003 Rev C | **Authoritative** |
-| [`firmware/`](firmware/) | The v2 firmware (MicroPython, per RGX-2-003 Rev C, ~845 lines). Host core green and cross-compiles for the RP2040; on-target gates FW-0..FW-2 pending a Pico | Implementation |
+| [`firmware/`](firmware/) | The v2 firmware (MicroPython, per RGX-2-003 Rev C, ~815 lines in 7 files). Host core green and cross-compiles for the RP2040; on-target gates FW-0..FW-2 pending a Pico | Implementation |
 | [`tools/`](tools/) | Host side: `deploy.sh` (mpremote, WDT-safe), `decode_log.py` (ride logs → CSV with speed and slip), `A1-SETUP.md` (VESC Tool checklist, including motor direction) | — |
 | [`tests/`](tests/) | CPython test suite for the firmware's pure core, driven through a Willis/clutch plant (`python -m pytest` from `v2/`). Runs in CI as its own job, with an `mpy-cross` build | — |
 | [`research/`](research/) | Working analysis, decision log, sourcing notes — the *why* behind the design | History; where it disagrees with `design/`, the design wins |
@@ -26,9 +26,9 @@ bench measurement schedule (spec §11), gated on:
 The firmware exists and is host-tested. Values that need the bench are marked
 `[BENCH]` in `firmware/config.py`. The regen control law is deliberately out of
 scope: it is the output of the scoring work in `../v1-legacy/sim/`, to be
-revamped against v2's sensing model. `strategy.SlipRegulator` holds carrier
-slip at a setpoint with the throttle as the override; its gains are `[BENCH]`
-until the sim tunes them.
+revamped against v2's sensing model. `control.request()` is that law: a PI that
+holds carrier slip at a setpoint, with the throttle as the override. Its gains
+are `[BENCH]` until the sim tunes them.
 
 ## Research notes index
 

@@ -13,6 +13,20 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-09-29 — One control law, built in
+
+**Decided.** The regen law is the slip PI, and only the slip PI (owner). It now
+lives in `control.py` as `request()`. `strategy.py`, the `Strategy` contract,
+the `reset()` hook and the DEAD state are deleted. The DEAD latch existed to
+contain a swappable law that might raise or return garbage. A fixed PI on
+bounded inputs cannot do either, because slip is only computed above
+`W_MIN_RPM`. The slip error is updated every tick, even in LIMP, so it is never
+stale when RUN resumes. Tuning is `SLIP_SET`, `SLIP_KP` and `SLIP_KI`, not
+swapping code. Supersedes the "strategy exception → DEAD" and `SlipRegulator`
+parts of the entry below.
+
+---
+
 ## 2026-09-29 — Firmware simplified after review 1 (RGX-2-003 Rev C)
 
 **Decided.** The firmware was reviewed (`reviews/firmware-1/`), and the fixes
