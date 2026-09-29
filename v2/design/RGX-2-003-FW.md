@@ -1,10 +1,39 @@
 # ReGenX v2 — Firmware Architecture
 
-**Document** RGX-2-003 **Rev B** · against RGX-2-001 Rev C / RGX-2-100 Rev D /
-RGX-2-002 Rev A · 2026-08-02
+**Document** RGX-2-003 **Rev D** · against RGX-2-001 Rev E / RGX-2-100 Rev F /
+RGX-2-002 Rev A · 2026-09-29
 
-Design only — no code exists yet. The regen control law remains deferred; this
-document defines the machine it plugs into.
+Implemented in `v2/firmware/` (host tests in `v2/tests/`). The regen control
+law remains deferred; this document defines the machine it plugs into.
+
+## Rev C and D amendments (2026-09-29)
+
+Rev C came out of `reviews/firmware-1/`. Rev D, the same day, records the
+owner's simplifications: no ride log, one screen that shows problems only when
+they occur, one telemetry reply per tick, no observer stage. Rows marked
+(Rev D) are new or changed in Rev D. These supersede the Rev B text below
+wherever they conflict. Rationale is in `research/decisions.md`, 2026-09-29.
+
+| Topic | Rule | Supersedes |
+|---|---|---|
+| Sign | A1 is provisioned so +current drives the wheel forward (`tools/A1-SETUP.md` item 4). With the carrier held the rotor then turns at +k·wheel: ERPM ≥ 0 whenever torque flows, and s = 1 − ERPM/(pp·k·ω_wheel). No `DIR_SIGN`. | D10 `DIR_SIGN`, B-2 |
+| States | RUN iff `LINK_RECOVER_FRAMES` consecutive clean telemetry frames (fault = 0); else LIMP at 0 A, auto-recovering. (Rev D) The firmware version is never requested. | §3 States, INIT, FW handshake |
+| Throttle | Outside 0.20–0.85 it reads 0 (assist stops, regen untouched; spec §10.3). Assist arms only after the throttle has read idle, at power-on and after any out-of-window reading. Mapping uses measured idle/full, with a deadband. | §3 "throttle window fault → LIMP" |
+| Envelope | The slew limits only torque build-up (2 A/tick away from zero); any reduction or reversal through zero is immediate. Then clamp. The clamps only shrink \|i\|, so they act in the same tick. Regen and assist caps hold A1's terminal in [9, 39] V via v_oc = v_in + i_in·R_BANK. No regen below ~3 km/h. | §3 envelope: 38→40 V taper, crossover guard |
+| Time | Control never reads a clock. Timeouts count ticks; the slew and the PI step are per tick. | T9 `dt` measured |
+| Snapshot | One `array('f')`, core 0 the only writer. A reader may mix two consecutive ticks, which is harmless for the display. (Rev D) It holds only what the display reads. | D12 seqlock |
+| Deleted | Live k cross-check, RTT metric, full COMM_GET_VALUES fallback, `gc.disable()`, boot guard. (Rev D) The ride log, observer mode, the firmware-version request, the VSYS reading, the worst-tick metric, and the viper CRC: the plain table CRC costs well under 1 ms of the 10 ms tick, and a late tick shows on the display. | D10 cross-check, D5 (a), D11 viper, gate FW-1 timing |
+| Parser | (Rev D) Only the one reply is accepted: start byte, LEN = 22, `COMM_GET_VALUES_SELECTIVE`, CRC, end byte. Anything else is skipped a byte at a time; a start that fails its CRC or end byte counts as bad. Every frame being the same length, a start still waiting for bytes can never be followed by a complete frame, so scanning stops there and keeps the tail. | D11 "O(1) resync, no backtracking"; Rev C rescan with LEN ≤ 80 |
+| Telemetry | (Rev D) One request every tick, mask `0x818D`: FET temperature, motor current (for the display), `i_in`, ERPM, `v_in`, fault (22-byte reply). At most a quarter of either wire direction. | D5 50 Hz poll, 1 Hz temperature |
+| Temperature | (Rev D) A1's FET temperature arrives with every reply. The display flags it above `TEMP_HOT` (80 °C, just under A1's own 85 °C current cutback) or below `TEMP_COLD` (−10 °C, where the bank's resistance exceeds `R_BANK`). Display only: A1 protects itself. | D5 1 Hz temperature |
+| Logging | (Rev D) None (owner). v1's RAM logging could not hold data at a useful resolution, and its buffer caused RAM trouble. Bench data comes from VESC Tool over USB to A1. | D13; Rev C flush rules; `tools/decode_log.py` |
+| Regen law | One law, built into `control.py` as `request()`: velocity-form PI on carrier slip toward `SLIP_SET` (`SLIP_KP`, `SLIP_KI` [BENCH], tuned in the sim). While the rider holds the carrier, regen grows until the brake just slips, so braking torque follows the squeeze. Any throttle ends regen and commands assist. No swappable strategy module, no DEAD state: a fixed PI on bounded inputs cannot raise or return NaN. | D10 strategy contract; "control law deferred"; §3 strategy-exception rule |
+| Lever sensor | None (owner decision 2026-09-29). Rider intent is the carrier slip itself; the throttle overrides regen. Accepted: while the throttle is held the carrier lever cannot brake (the clutch already holds the carrier), and regen onset is set by 6 PPR slip sensing (D9 "slip-only" column). | D9 recommendation (GP14) |
+| Faults | (Rev D) Auto-retry (owner). After A1 clears a fault, RUN resumes after `LINK_RECOVER_FRAMES` clean replies and ramps from 0 A at the slew rate. No hold-off or latch; a fault that keeps recurring shows on the display. | Review F17 |
+| Cores | (Rev D) Two, confirmed (owner): core 1 only draws the display, so no display I/O can delay the VESC link. The single-core fallback of D2 stays the fallback, taken only on measured headroom. | — |
+| C-0 | (Rev D) Dropped (owner). Without a log it would only prove the drivetrain, which the bench does from VESC Tool with the wheel off the ground. The Pico always commands current. | D15, gate C-0, B-10, `SEND_CURRENT` |
+| UI | (Rev D) One screen: speed, bank voltage and the motor current A1 measures, then one line per problem while it lasts, most serious first: `NO LINK` or `VESC FAULT n`, `HOT`/`COLD`, `BAD FRAMES`, `LATE TICKS`, `SCREEN ERR`. The last three are counts since power-on. | D14 three pages; Rev C RIDE and status pages |
+| VSYS | (Rev D) Not read. Drawing sheet 3 NOTE 7 and spec §10 item 6 ("VSYS logged via ADC3") are withdrawn at drawing Rev F / spec Rev E. BEC sag is characterised on the bench instead (spec §11 item 10). | Sheet 3 NOTE 7 |
 
 **Rev B** restructures the document as a **decision register**: every choice
 lists the alternatives considered, the numbers that decided it, and the

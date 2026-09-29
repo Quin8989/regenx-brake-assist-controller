@@ -28,8 +28,8 @@ _README_CHECKS = [
 
 
 def test_readme_constants_match_settings():
-    """Every constant quoted in the README table must match settings.py."""
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    """Every constant quoted in the README-v1 table must match settings.py."""
+    readme = (ROOT / "README-v1.md").read_text(encoding="utf-8")
     for attr, pattern in _README_CHECKS:
         expected = getattr(S, attr)
         matches = re.findall(pattern, readme)

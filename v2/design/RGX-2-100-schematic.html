@@ -1,5 +1,5 @@
 <meta charset="utf-8">
-<title>ReGenX v2 — Schematic Set Rev D</title>
+<title>ReGenX v2 — Schematic Set Rev F</title>
 <style>
   :root {
     --ground:#F2F4F4; --surface:#FFFFFF; --surface-2:#EAEDED;
@@ -84,7 +84,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Document RGX-2-100 · Rev D</div>
+  <div class="eyebrow">Document RGX-2-100 · Rev F</div>
   <h1>ReGenX v2 — Schematic Set</h1>
 </header>
 
@@ -188,7 +188,7 @@
     <rect class="brdt" x="70" y="740" width="600" height="118"/>
     <text class="tt" x="86" y="762">NOTES</text>
     <text class="tn" x="86" y="782">1.  UNLESS OTHERWISE SPECIFIED, RESISTORS ARE ±5 %, 1/4 W.</text>
-    <text class="tn" x="86" y="798">2.  ALL GROUNDS SHALL STAR AT A1 V− TERMINAL.</text>
+    <text class="tn" x="86" y="798">2.  ALL POWER GROUNDS SHALL STAR AT A1 V− TERMINAL. U2: SHEET 3 NOTE 8.</text>
     <text class="tn" x="86" y="814">3.  SIGNAL WIRING SHALL BE ROUTED CLEAR OF MOTOR PHASE LEADS.</text>
     <text class="tn" x="86" y="830">4.  NO SIGNAL CROSSES A SHEET BOUNDARY WITHOUT A NET NAME.</text>
     <text class="tn" x="86" y="846">5.  JUNCTIONS ARE MARKED WITH DOTS. CROSSINGS WITHOUT DOTS ARE NOT CONNECTED.</text>
@@ -201,9 +201,9 @@
     <text class="tt" x="1040" y="772">ReGenX v2</text>
     <text class="t"  x="1040" y="802">System block diagram</text>
     <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
-    <text class="ts" x="1240" y="828">REV  D</text>
+    <text class="ts" x="1240" y="828">REV  F</text>
     <text class="ts" x="1040" y="856">SHEET 1 OF 3</text>
-    <text class="ts" x="1240" y="856">2026-08-02</text>
+    <text class="ts" x="1240" y="856">2026-09-29</text>
   </svg>
   </div>
 </section>
@@ -353,7 +353,7 @@
 
     <rect class="brdt" x="70" y="700" width="940" height="166"/>
     <text class="tt" x="86" y="722">NOTES — THIS SHEET</text>
-    <text class="tn" x="86" y="744">1.  ALL GROUNDS SHALL STAR AT A1 V− TERMINAL.</text>
+    <text class="tn" x="86" y="744">1.  ALL POWER GROUNDS SHALL STAR AT A1 V− TERMINAL.</text>
     <text class="tn" x="86" y="760">2.  A1 SHALL BE CONFIGURED: BATTERY CURRENT LIMIT 40 A, MAX INPUT VOLTAGE 40 V.</text>
     <text class="tn" x="86" y="776">3.  F1 SHALL BE CLASS T. ANL AND MIDI (32 V DC) SHALL NOT BE USED.</text>
     <text class="tn" x="86" y="792">4.  R1 = 4.7 Ω. 8 Ω IS THE ABSOLUTE MAXIMUM AND HAS ZERO COLLAPSE MARGIN.</text>
@@ -370,9 +370,9 @@
     <text class="tt" x="1040" y="772">ReGenX v2</text>
     <text class="t"  x="1040" y="802">Power distribution and protection</text>
     <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
-    <text class="ts" x="1240" y="828">REV  D</text>
+    <text class="ts" x="1240" y="828">REV  F</text>
     <text class="ts" x="1040" y="856">SHEET 2 OF 3</text>
-    <text class="ts" x="1240" y="856">2026-08-02</text>
+    <text class="ts" x="1240" y="856">2026-09-29</text>
   </svg>
   </div>
 
@@ -426,16 +426,18 @@
     <text class="tz" x="1378" y="768" text-anchor="middle">D</text>
 
     <rect class="box" x="60" y="60" width="130" height="168" rx="3"/>
-    <text class="tr" x="125" y="88" text-anchor="middle">J1</text>
-    <text class="ts" x="72" y="116">1  +5 V</text>
-    <text class="ts" x="72" y="136">2  GND</text>
-    <text class="ts" x="72" y="156">3  H1</text>
-    <text class="ts" x="72" y="176">4  H2</text>
-    <text class="ts" x="72" y="196">5  H3</text>
-    <text class="ts" x="72" y="216">6  SPD</text>
+    <text class="tr" x="125" y="88" text-anchor="middle">J1  Z910</text>
+    <text class="ts" x="72" y="116">+5 V</text>
+    <text class="ts" x="72" y="136">GND</text>
+    <text class="ts" x="72" y="156">H1</text>
+    <text class="ts" x="72" y="176">H2</text>
+    <text class="ts" x="72" y="196">H3</text>
+    <text class="ts" x="72" y="216">SPD</text>
+    <text class="ts" x="72" y="250">U V W → A1 phases</text>
 
     <rect class="brdt dash" x="222" y="52" width="96" height="184"/>
     <text class="tr" x="270" y="76" text-anchor="middle">W1</text>
+    <text class="ts" x="270" y="98" text-anchor="middle">splitter</text>
 
     <path class="w" d="M190 112 H 390"/>
     <path class="w" d="M190 132 H 390"/>
@@ -533,6 +535,9 @@
     <text class="ts" x="878" y="648" text-anchor="end">3V3</text>
 
     <path class="wg" d="M890 572 H 924 V 600"/>
+    <circle class="dot" cx="924" cy="572" r="4"/>
+    <path class="wg" d="M924 572 H 1110 V 374 H 1180"/>
+    <text class="ts" x="1018" y="564" text-anchor="middle">+5V_RTN</text>
     <path class="wg" d="M904 600 H 944"/>
     <path class="wg" d="M912 610 H 936"/>
     <path class="wg" d="M920 620 H 928"/>
@@ -577,9 +582,10 @@
     <rect class="sym" x="976" y="323" width="50" height="22" rx="2"/>
     <text class="tr" x="1001" y="362" text-anchor="middle">R4</text>
     <path class="ws" d="M1026 334 H 1180"/>
-    <rect class="box" x="1180" y="288" width="164" height="76" rx="3"/>
+    <rect class="box" x="1180" y="288" width="164" height="100" rx="3"/>
     <text class="tr" x="1262" y="320" text-anchor="middle">A1</text>
     <text class="ts" x="1262" y="346" text-anchor="middle">UART</text>
+    <text class="ts" x="1192" y="378">GND</text>
     <text class="ts" x="1104" y="300" text-anchor="middle">UART_TX</text>
     <text class="ts" x="1104" y="328" text-anchor="middle">UART_RX</text>
     <text class="ts" x="1192" y="312">RX</text>
@@ -599,14 +605,15 @@
 
     <rect class="brdt" x="70" y="700" width="940" height="166"/>
     <text class="tt" x="86" y="722">NOTES — THIS SHEET</text>
-    <text class="tn" x="86" y="744">1.  J2 PIN 6 SHALL REMAIN UNCONNECTED. A1 MOTOR-TEMPERATURE SENSING SHALL BE DISABLED.</text>
-    <text class="tn" x="86" y="760">2.  U2 GPIO ARE 3.3 V AND NOT 5 V TOLERANT. ANY 5 V DOMAIN SIGNAL SHALL ENTER VIA ≥1 kΩ SERIES.</text>
-    <text class="tn" x="86" y="776">3.  DS1 SHALL BE SUPPLIED FROM +3V3. MODULE PULL-UPS REFERENCE ITS OWN RAIL.</text>
-    <text class="tn" x="86" y="792">4.  GP13 SHALL BE READ BY PIO PERIOD CAPTURE, NOT A PYTHON-LEVEL INTERRUPT.</text>
-    <text class="tn" x="86" y="808">5.  J3 SHALL BE VERIFIED TO OPERATE AT 3.3 V SUPPLY BEFORE FITTING.</text>
-    <text class="tn" x="86" y="824">6.  FIRMWARE SHALL REJECT THROTTLE OUTSIDE 0.20–0.85 × V_REF AND ZERO ASSIST.</text>
-    <text class="tn" x="86" y="840">7.  U2 SHALL LOG VSYS VIA ADC3 TO CHARACTERISE A1 BEC SAG.</text>
-    <text class="tn" x="86" y="856">8.  SIGNAL GROUNDS RETURN LOCALLY TO U2, THEN TO STAR VIA THE BEC RETURN ONLY.</text>
+    <text class="tn" x="86" y="742">1.  J2 PIN 6 SHALL REMAIN UNCONNECTED. A1 MOTOR-TEMPERATURE SENSING SHALL BE DISABLED.</text>
+    <text class="tn" x="86" y="756">2.  U2 GPIO ARE 3.3 V AND NOT 5 V TOLERANT. ANY 5 V DOMAIN SIGNAL SHALL ENTER VIA ≥1 kΩ SERIES.</text>
+    <text class="tn" x="86" y="770">3.  DS1 SHALL BE SUPPLIED FROM +3V3. MODULE PULL-UPS REFERENCE ITS OWN RAIL.</text>
+    <text class="tn" x="86" y="784">4.  GP13 SHALL BE READ BY PIO PERIOD CAPTURE, NOT A PYTHON-LEVEL INTERRUPT.</text>
+    <text class="tn" x="86" y="798">5.  J3 SHALL BE VERIFIED TO OPERATE AT 3.3 V SUPPLY BEFORE FITTING.</text>
+    <text class="tn" x="86" y="812">6.  FIRMWARE SHALL REJECT THROTTLE OUTSIDE 0.20–0.85 × V_REF AND ZERO ASSIST.</text>
+    <text class="tn" x="86" y="826">7.  DELETED AT REV F.</text>
+    <text class="tn" x="86" y="840">8.  SIGNAL GROUNDS RETURN LOCALLY TO U2, THEN VIA THE BEC RETURN ONLY TO THE GND PIN OF A1 UART CONNECTOR.</text>
+    <text class="tn" x="86" y="854">9.  UART_TX, UART_RX, +5V AND +5V_RTN SHALL RUN AS ONE TWISTED BUNDLE, CLEAR OF PHASE AND BANK LEADS.</text>
 
     <rect class="brd" x="1026" y="750" width="340" height="116"/>
     <path class="brdt" d="M1026 782 H 1366"/>
@@ -616,9 +623,9 @@
     <text class="tt" x="1040" y="772">ReGenX v2</text>
     <text class="t"  x="1040" y="802">MCU, sensors and interfaces</text>
     <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
-    <text class="ts" x="1240" y="828">REV  D</text>
+    <text class="ts" x="1240" y="828">REV  F</text>
     <text class="ts" x="1040" y="856">SHEET 3 OF 3</text>
-    <text class="ts" x="1240" y="856">2026-08-02</text>
+    <text class="ts" x="1240" y="856">2026-09-29</text>
   </svg>
   </div>
 
@@ -627,14 +634,14 @@
     <table>
       <thead><tr><th>Item</th><th>Zone</th><th>Description</th><th>Specification</th></tr></thead>
       <tbody>
-        <tr><td class="r">M1</td><td class="z">SHT 1</td><td>Motor, geared hub</td><td class="m">Bafang G020, rear. Single-stage planetary ~5:1. Halls ×3 + shell speed 6 pulse/rev. Thermal protection: none fitted</td></tr>
+        <tr><td class="r">M1</td><td class="z">SHT 1</td><td>Motor, geared hub</td><td class="m">Bafang G020, rear. Single-stage planetary ~5:1. Halls ×3 + shell speed 6 pulse/rev. One 9-pin Higo Z910 cable (J1), every pin used: no thermistor conductor. Thermal protection: none fitted</td></tr>
         <tr><td class="r">U2</td><td class="z">A2–C3</td><td>Assembly, MCU board</td><td class="m">Raspberry Pi Pico, RP2040. VSYS 1.8–5.5 V, +3V3 out ≥300 mA, load 30 mA. GPIO 3.3 V, not 5 V tolerant, integral Schmitt. ADC 12-bit ref AVDD; ADC3 = VSYS/3</td></tr>
-        <tr><td class="r">J1</td><td class="z">A1</td><td>Connector, motor sensor</td><td class="m">6-way, M1 supplied. +5 V, GND, H1–H3, shell speed</td></tr>
+        <tr><td class="r">J1</td><td class="z">A1</td><td>Connector, motor cable</td><td class="m">Higo Z910 9-way, M1 supplied: phases U, V, W; +5 V, GND, H1–H3, shell speed (white). <strong>Pin assignment by continuity map before first power</strong> (RGX-2-002 Inspection item 1): Z910 internals vary</td></tr>
         <tr><td class="r">J2</td><td class="z">A2</td><td>Connector, controller hall</td><td class="m">JST-PH 6-way. Pin 6 unconnected</td></tr>
-        <tr><td class="r">W1</td><td class="z">A1</td><td>Cable assembly, adapter</td><td class="m">J1 6-way → J2 JST-PH 6-way. 5 conductors through; shell-speed conductor branched to R6</td></tr>
+        <tr><td class="r">W1</td><td class="z">A1</td><td>Cable assembly, splitter</td><td class="m">Higo Z910 9-pin extension, cut. Phases to A1 phase leads; +5 V, GND, H1–H3 to J2 JST-PH 6-way; shell-speed conductor branched to R6</td></tr>
         <tr><td class="r">R5</td><td class="z">B1</td><td>Resistor</td><td class="m">10 kΩ ±5 %, 1/4 W. Shell-speed pull-up to +3V3</td></tr>
         <tr><td class="r">R6</td><td class="z">B1</td><td>Resistor</td><td class="m">1 kΩ ±5 %, 1/4 W. Series. Fault injection limit 1.7 mA at 5 V</td></tr>
-        <tr><td class="r">C6</td><td class="z">B2</td><td>Capacitor</td><td class="m">1 nF, ≥50 V, C0G. R6·C6 = 1 µs; signal band ≤ 30 Hz</td></tr>
+        <tr><td class="r">C6</td><td class="z">B2</td><td>Capacitor</td><td class="m">10 nF, ≥50 V, C0G. R6·C6 = 10 µs noise filter (a 1 µs, 5 V spike reaches the pin at ≈ 0.5 V); rising edge (R5+R6)·C6 = 110 µs; signal band ≤ 30 Hz</td></tr>
         <tr><td class="r">J3</td><td class="z">C1</td><td>Connector, throttle</td><td class="m">3-way. Hall throttle, ratiometric, supplied from +3V3</td></tr>
         <tr><td class="r">D3</td><td class="z">C1</td><td>Diode, TVS</td><td class="m">Unidirectional, V<sub>RWM</sub> 3.3 V, <strong>V<sub>C</sub> ≤ 4.5 V @ 1 A</strong>, SOD-323 or larger. U2 GPIO absolute max = IOVDD + 0.5 = 3.8 V</td></tr>
         <tr><td class="r">R2</td><td class="z">C2</td><td>Resistor</td><td class="m">100 kΩ ±5 %, 1/4 W. Throttle pulldown, open-circuit detection. R2·C7 = 10 ms</td></tr>
@@ -646,7 +653,7 @@
         <tr><td class="r">C5</td><td class="z">B3</td><td>Capacitor</td><td class="m">100 nF, ≥16 V, X7R. Mount adjacent to U2 VSYS pin</td></tr>
         <tr><td class="r">DS1</td><td class="z">B4–C4</td><td>Display</td><td class="m">SSD1306 128×64 OLED, I²C 400 kHz, 3.3 V supply, address 0x3C, ~20 mA</td></tr>
         <tr><td class="r">A1</td><td class="z">A4, B4</td><td>Assembly, motor controller</td><td class="m">Reference SHEET 2. BEC load 70 mA of 1500 mA</td></tr>
-        <tr><td class="r">—</td><td class="z">all</td><td>Wire, signal</td><td class="m">24 AWG. Shell speed twisted with GND; UART twisted pair</td></tr>
+        <tr><td class="r">—</td><td class="z">all</td><td>Wire, signal</td><td class="m">24 AWG. Shell speed twisted with GND. UART_TX and UART_RX twisted with the +5V / +5V_RTN pair as one bundle, per NOTE 9</td></tr>
       </tbody>
     </table>
   </div>
@@ -662,17 +669,17 @@
         <tr><td class="r">BANK+</td><td class="m">C1 positive</td><td class="m">F1 → S1 → A1 V+</td><td class="z">2</td><td class="m">power, <strong>8 AWG</strong></td></tr>
         <tr><td class="r">SW+</td><td class="m">S1</td><td class="m">A1 V+, F2</td><td class="z">2</td><td class="m">power, <strong>8 AWG</strong></td></tr>
         <tr><td class="r">GND</td><td class="m">A1 V− star</td><td class="m">BT1 −, C3 −, U1 −</td><td class="z">2</td><td class="m">power. <strong>8 AWG</strong> C3 − leg; 18 AWG BT1 − leg; 22 AWG U1 − leg. U2 is <strong>not</strong> on this net — see +5V_RTN</td></tr>
-        <tr><td class="r">+5V_RTN</td><td class="m">U2 GND</td><td class="m">A1 V− star</td><td class="z">1, 3</td><td class="m">return, 22 AWG. Sole U2 ground path, per NOTE 8</td></tr>
-        <tr><td class="r">+5V</td><td class="m">A1 BEC</td><td class="m">U2 VSYS via L1, C4, C5</td><td class="z">1, 3</td><td class="m">power, 22 AWG</td></tr>
+        <tr><td class="r">+5V_RTN</td><td class="m">U2 GND</td><td class="m">A1 GND pin, UART connector</td><td class="z">1, 3</td><td class="m">return, 22 AWG. Sole U2 ground path, per NOTE 8; bundled per NOTE 9</td></tr>
+        <tr><td class="r">+5V</td><td class="m">A1 BEC</td><td class="m">U2 VSYS via L1, C4, C5</td><td class="z">1, 3</td><td class="m">power, 22 AWG; bundled per NOTE 9</td></tr>
         <tr><td class="r">+3V3</td><td class="m">U2 3V3 out</td><td class="m">J3, DS1, R5</td><td class="z">3</td><td class="m">power, 24 AWG</td></tr>
-        <tr><td class="r">SPD</td><td class="m">J1 pin 6</td><td class="m">U2 GP13 via R6</td><td class="z">3</td><td class="m">digital, 5 V domain at source, 6 pulse/rev, 8–24 Hz at 10–30 km/h</td></tr>
+        <tr><td class="r">SPD</td><td class="m">J1 shell speed (white)</td><td class="m">U2 GP13 via R6</td><td class="z">3</td><td class="m">digital, 5 V domain at source, 6 pulse/rev, 8–24 Hz at 10–30 km/h</td></tr>
         <tr><td class="r">THR</td><td class="m">J3 SIG</td><td class="m">U2 GP26 (pin 31) via R7</td><td class="z">3</td><td class="m">analog, 0–3.3 V</td></tr>
         <tr><td class="r">THR_RTN</td><td class="m">J3 GND</td><td class="m">U2 GND, local</td><td class="z">3</td><td class="m">return, 24 AWG, per NOTE 8</td></tr>
         <tr><td class="r">DS1_RTN</td><td class="m">DS1 GND</td><td class="m">U2 GND, local</td><td class="z">3</td><td class="m">return, 24 AWG, per NOTE 8</td></tr>
-        <tr><td class="r">UART_TX</td><td class="m">U2 GP0 via R3</td><td class="m">A1 UART RX</td><td class="z">3</td><td class="m">digital, 3.3 V</td></tr>
-        <tr><td class="r">UART_RX</td><td class="m">A1 UART TX</td><td class="m">U2 GP1 via R4</td><td class="z">3</td><td class="m">digital, 3.3 V</td></tr>
+        <tr><td class="r">UART_TX</td><td class="m">U2 GP0 via R3</td><td class="m">A1 UART RX</td><td class="z">3</td><td class="m">digital, 3.3 V; bundled per NOTE 9</td></tr>
+        <tr><td class="r">UART_RX</td><td class="m">A1 UART TX</td><td class="m">U2 GP1 via R4</td><td class="z">3</td><td class="m">digital, 3.3 V; bundled per NOTE 9</td></tr>
         <tr><td class="r">SDA / SCL</td><td class="m">U2 GP4 / GP5</td><td class="m">DS1</td><td class="z">3</td><td class="m">I²C, 3.3 V</td></tr>
-        <tr><td class="r">H1–H3</td><td class="m">J1 pins 3–5</td><td class="m">J2 pins 3–5</td><td class="z">3</td><td class="m">digital, 5 V, A1 domain</td></tr>
+        <tr><td class="r">H1–H3</td><td class="m">J1 H1–H3</td><td class="m">J2 pins 3–5</td><td class="z">3</td><td class="m">digital, 5 V, A1 domain</td></tr>
         <tr><td class="r">CHG</td><td class="m">J4</td><td class="m">BT1 BMS charge input</td><td class="z">1, 2</td><td class="m">power, 18 AWG</td></tr>
       </tbody>
     </table>
@@ -690,6 +697,8 @@
         <tr><td class="r">B</td><td class="z">2026-08-02</td><td>Added J4, S2, R5, R6, C6, C7, D3. F1 → 50 A Class T. F3 → 5 A time-delay. D1 → 6 A. R3, R4 → 1 kΩ. U1 conduction threshold 19.2 V, setpoints added. Sheet 1 +5V source corrected to A1. Zone references corrected. NOTES 4–8 added.</td></tr>
         <tr><td class="r">C</td><td class="z">2026-08-02</td><td>Added R7 in THR series. D3 respecified by V<sub>C</sub> and redrawn as TVS. Bank circuit 10 → 8 AWG. R1 50 → 100 W, energy 650 → 832 J. S1 make 150 → 300 A, zone A3 → B3. C4 100 → 220 µF, zone A3 → B3. S2 auto → manual reset, voltage rating added. C1–C3 absolute 48.6 → 45.4 V. +5V_RTN added and U2 removed from the GND net. SHEET 2 NOTES 2, 4, 6, 8 and SHEET 3 NOTE 2 revised.</td></tr>
         <tr><td class="r">D</td><td class="z">2026-08-02</td><td>D3 symbol orientation corrected (cathode to THR). S2 redrawn normally-closed. SHEET 2 flags 2 and 4 exchanged to match renumbered notes. Junction dots added at C3 −, U1 − and R2 tees; crossing convention stated in SHEET 1 NOTE 5. R5 branch tee moved to its junction. P/N TBD marked on S1, S2, F1 block, J4. A1 pigtail termination noted. F2 and R2 symbols rotated to match branch direction. D2 return rerouted clear of the bank stack. Polarity marks added to BT1, J4, C1–C3. Title blocks to REV D and titles matched to sheet headings. Sheet-boundary nets renamed +5V, SPD, THR. UART nets labelled; A1 pin sides marked. F3 holder designated BT1 service disconnect; NOTE 7 revised. Zone listings corrected: R1 B1–B2, F2 B3–C3, DS1 B4–C4.</td></tr>
+        <tr><td class="r">E</td><td class="z">2026-09-29</td><td>C6 1 → 10 nF: shell-speed input filtered against phase-lead PWM coupling (R6·C6 1 → 10 µs; rising edge 110 µs, about 1 % of a half-period at 60 km/h). Title blocks to REV E.</td></tr>
+        <tr><td class="r">F</td><td class="z">2026-09-29</td><td>U2 ground lands on the GND pin of A1's UART connector, the reference of the UART signals, instead of the V− star, so no battery current flows between the two grounds: +5V_RTN drawn on SHEET 3, SHEET 3 NOTE 8 revised, NOTE 9 added (UART and BEC pair as one twisted bundle), SHEET 1 NOTE 2 and SHEET 2 NOTE 1 limited to power grounds. SHEET 3 NOTE 7 (VSYS logging) deleted. J1 redrawn as M1's single Higo Z910 cable, pins by continuity map; W1 is the Z910 splitter (queued from RGX-2-002 Rev A). Sheet 3 notes respaced. Title blocks to REV F.</td></tr>
       </tbody>
     </table>
   </div>

@@ -13,6 +13,176 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-09-29 — Drawing Rev F, spec Rev E: Pico ground at A1's UART connector
+
+**Decided.** The owner left Rev F to judgement after the link-noise
+discussion (v1 lost the UART on large current steps at every baud rate, which
+points to a ground offset, not timing).
+
+- **U2's ground return lands on the GND pin of A1's UART connector**, not the
+  V− star. A1's UART signals are measured against its logic ground, which
+  reached the star through A1's V− pigtail. That pigtail carries the battery
+  current, so its drop sat between the two grounds. Now U2's single ground
+  path ends at the reference its UART signals use, and carries only U2's own
+  supply current. It is still the only U2 ground path. The star rule (sheet 1
+  NOTE 2, sheet 2 NOTE 1) is now stated for power grounds.
+- **UART_TX, UART_RX, +5V and +5V_RTN run as one twisted bundle**, clear of
+  phase and bank leads (sheet 3 NOTE 9), keeping the signal loop area small.
+- **RS-422 transceivers are not fitted.** Build with this wiring and watch
+  `BAD FRAMES` and `NO LINK` on the display through hard stops and
+  full-throttle steps. Transceivers need no firmware change if that fails.
+- **Sheet 3 NOTE 7 and spec §10 item 6 (VSYS logging) withdrawn**, as queued
+  by RGX-2-003 Rev D.
+- **J1 is M1's single Higo Z910 cable and W1 its splitter**, queued since
+  RGX-2-002 Rev A. J1 pins are unnumbered: Z910 internals vary, so they are
+  continuity-mapped before first power (RGX-2-002 Inspection item 1). All nine
+  Z910 conductors are used, so the G020 has no separate thermistor wire.
+
+---
+
+## 2026-09-29 — Display current, fault retry and cores (owner answers)
+
+**Decided (owner).**
+
+- **The display shows the motor current A1 measures**, not the commanded
+  current, so it is honest when A1 limits itself. The telemetry mask gains
+  motor current again (`0x818D`, 22-byte reply). This reverses the "motor
+  current is no longer requested" line of the entry below.
+- **VESC faults auto-retry** (review F17 closed). RUN resumes after
+  `LINK_RECOVER_FRAMES` clean replies and ramps from 0 A. A hold-off until
+  the rider lets go was offered and declined; a recurring fault is visible on
+  the display.
+- **Problems are listed by name only.** No derived "NO REAR BRAKE" line: the
+  rider infers it from `NO LINK` or `VESC FAULT`. A full bank is not listed.
+- **Two cores stay.** Moving the display onto core 0 in eighth-screen slices
+  was offered. The owner keeps it on core 1 so no display I/O can ever delay
+  the VESC link, after v1's display corruption, which is attributed to a
+  single core missing sync. D2's single-core fallback remains, taken only if
+  headroom is measured on a Pico.
+
+---
+
+## 2026-09-29 — No ride log; the display shows problems (RGX-2-003 Rev D)
+
+**Decided (owner).** The Pico keeps no ride log. On v1, the RAM ring could
+not hold data at a resolution that meant much, and its buffer caused RAM
+trouble. The display is the only output. It shows speed, bank voltage and
+current, and below them one line per problem, only while there is one: no
+link or a VESC fault, A1 too hot or too cold, bad frames, late ticks, display
+errors. A1's FET temperature is checked all the time but shown only outside
+80 °C / −10 °C ([BENCH]). The observer stage C-0 is dropped: without a log it
+would only prove the drivetrain, which the bench does from VESC Tool.
+
+What falls out with it:
+
+- **One telemetry request per tick**, always with temperature (mask
+  `0x8189`, 18-byte reply). The 50 Hz poll, the 1 Hz temperature request and
+  the second reply format are gone, and the slip reading is 10 ms fresher.
+  Motor current is no longer requested: nothing reads it.
+- **The parser accepts only that one reply.** With every frame the same
+  length, a start still waiting for bytes can never be followed by a complete
+  frame, so the Rev C rescan-with-keep logic is unnecessary.
+- **No firmware-version request, VSYS reading, worst-tick metric or viper
+  CRC.** The plain table CRC costs well under 1 ms of the 10 ms tick, and a
+  late tick now shows on the display, so any overrun is visible.
+- **Core 1 only draws the screen.** No flash writes at all, so the XIP stall
+  that shaped D13 no longer exists.
+- **Queued for the next drawing and spec revisions:** withdraw sheet 3 NOTE 7
+  and spec §10 item 6 ("VSYS logged via ADC3"). BEC sag is characterised on
+  the bench (spec §11 item 10).
+
+Production firmware: 814 → 596 lines, 10.3 → 6.9 KB bytecode, 7 → 6 files.
+Rules out: ride logs as tuning input (the slip PI gains are tuned in the sim
+and then by feel), and `tools/decode_log.py`.
+
+---
+
+## 2026-09-29 — One control law, built in
+
+**Decided.** The regen law is the slip PI, and only the slip PI (owner). It now
+lives in `control.py` as `request()`. `strategy.py`, the `Strategy` contract,
+the `reset()` hook and the DEAD state are deleted. The DEAD latch existed to
+contain a swappable law that might raise or return garbage. A fixed PI on
+bounded inputs cannot do either, because slip is only computed above
+`W_MIN_RPM`. The slip error is updated every tick, even in LIMP, so it is never
+stale when RUN resumes. Tuning is `SLIP_SET`, `SLIP_KP` and `SLIP_KI`, not
+swapping code. Supersedes the "strategy exception → DEAD" and `SlipRegulator`
+parts of the entry below.
+
+---
+
+## 2026-09-29 — Firmware simplified after review 1 (RGX-2-003 Rev C)
+
+**Decided.** The firmware was reviewed (`reviews/firmware-1/`), and the fixes
+were made by removing machinery rather than adding checks. Production code
+went from 1 226 lines / 16.1 KB bytecode to about 835 lines / 10.8 KB. Tests
+went from 43 to 272, now written against a Willis/clutch plant. An
+independent re-review of the rewrite found 8 defects, all fixed before merge.
+
+- **Sign fixed by provisioning, not configured.** A1's direction is set so
+  +current drives the wheel forward. With the carrier held, the rotor then
+  turns at +k·wheel, so ERPM ≥ 0 whenever torque flows. `DIR_SIGN` is deleted.
+  Review F01 showed that a free sign could turn a brake touch into sustained
+  motoring. B-2 is now "set A1's direction" (`tools/A1-SETUP.md` item 4).
+- **States derived, not tracked.** RUN iff `LINK_RECOVER_FRAMES` consecutive
+  clean telemetry frames have arrived; otherwise LIMP (0 A). A strategy
+  exception or an out-of-range/NaN return is DEAD, latched. INIT is gone: RUN
+  no longer waits for the FW handshake, which is re-requested until answered
+  (F04).
+- **Throttle faults stop assist only** (spec §10.3; corrects Rev B §3). The
+  throttle reads 0 when outside its window and arms only after it has been
+  seen at idle, so there is no throttle fault state at all (F03, F05, F18).
+- **No time arithmetic in control.** Timeouts count ticks and the slew is per
+  tick, so ticks_ms wrap and stall-scaled steps cannot happen (F20, F21).
+- **One voltage rule replaces the taper and the crossover guard.** The regen
+  and assist caps keep A1's terminal inside [9, 39] V using
+  v_oc = v_in + i_in·R_BANK. This is stable for any true ESR ≤ R_BANK, ends
+  1 V below A1's 40 V OV trip, and adds the brownout floor (F09, F19). The
+  crossover guard is removed: zeroing the command cannot stop body-diode
+  rectification (F08, spec §9). Bank-full fade stays accepted.
+- **Slew then clamp; the slew limits build-up only.** Any reduction, including
+  a released throttle or a reversal to regen, is immediate, and the clamps act
+  in the same tick (C02). There is no regen below ~3 km/h (design sweep F8).
+- **Deleted:** seqlock (a torn display/log sample between two ticks is
+  harmless), the live k cross-check (k is fitted offline from logs), the RTT
+  metric, the full COMM_GET_VALUES fallback, gc.disable() (it turned heap
+  exhaustion into MemoryError), and the boot guard (A1's timeout plus the WDT
+  are the failure policy).
+- **Parser rescans after a false start** and caps LEN at 80. A complete frame
+  later in the buffer proves an earlier incomplete start false. Every
+  single-bit flip and 200 garbage seeds deliver the next good frame (F06, F26,
+  F35).
+- **Logging:** one write session per stop, in ≤ 4 KB chunks, never while
+  moving. The oldest rides are deleted below 200 KB free, and the file is
+  closed at once on any write error, so the littlefs finaliser never runs on
+  core 0. It writes a header and catches every exception on core 1 (F13,
+  F14, F23, F25, F42).
+- **C-0 observer mode:** `SEND_CURRENT = False` (F11).
+
+- **No lever sensor (owner decision).** The brake acts on the carrier, so the
+  system only needs rotor and wheel speed: their ratio is carrier slip, and
+  slip *is* rider intent. The regen law is a slip regulator (`SlipRegulator`,
+  PI toward `SLIP_SET`): regen grows until the rider's brake just slips, so
+  braking torque follows the squeeze. The throttle is the override: any
+  throttle ends regen. Accepted: with the throttle held the carrier lever
+  cannot brake (the clutch already holds the carrier; release the throttle to
+  brake), and regen onset is limited by 6 PPR slip sensing (D9). Rules out
+  GP14 / the D9 lever fast path.
+
+- **C6 = 10 nF** (drawing Rev E, spec Rev D; was 1 nF). The speed wire runs
+  beside PWM-switched phase leads, and wheel speed now feeds the control
+  variable directly. R6·C6 = 10 µs filters µs-scale spikes (a 1 µs, 5 V spike
+  reaches the pin at ≈ 0.5 V) at no code cost. The rising edge through
+  R5+R6 is 110 µs, about 1 % of a half-period at 60 km/h, and the period
+  measurement is unaffected (one rise and one fall per period). 100 nF was
+  rejected: 1.1 ms rising edges for no further benefit. Still scope the
+  signal at spec §11 item 8.
+  Drawing Rev E carries only this change. The Higo Z910 W1 change, earlier
+  "queued as drawing Rev E", moves to Rev F (BOM Compatibility and Queued
+  changes sheets updated).
+
+---
+
 ## 2026-08-02 — Firmware implementation started; host core green
 
 **Decided.** Final pre-code verification passed (21/21 numeric checks: mask

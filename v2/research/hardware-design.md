@@ -209,11 +209,11 @@ to **3.3 V** and the level-shifting divider is unnecessary:
 ```
 white wire ──┬──[10 kΩ]── 3.3 V
              ├──[1 kΩ]──┬── GP13
-             │          └──[1 nF]── GND
+             │          └──[10 nF]── GND
 ```
 
 Fewer parts and correct. Hysteresis comes from the Pico's pads, which have
-Schmitt-trigger inputs enabled by default. The 1 kΩ + 1 nF gives ~1 µs, ample
+Schmitt-trigger inputs enabled by default. The 1 kΩ + 10 nF gives ~10 µs (drawing Rev E; was 1 nF / 1 µs), ample
 against a signal topping out near 20 Hz.
 
 ### An adapter harness is required

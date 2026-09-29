@@ -1,15 +1,27 @@
 import random
 import struct
 
-import config
+import pytest
+
+import config as C
 import vesc
-from conftest import make_frame, selective_payload, fw_payload
+from conftest import FakeUART, telem
 
 
-# --- CRC ---------------------------------------------------------------------
+def link_with():
+    u = FakeUART()
+    return vesc.Link(u), u
+
+
+def feed(link, uart, data):
+    uart.inject(data)
+    while uart._rx:
+        link.poll()
+
+
+# --- CRC and framing -----------------------------------------------------------
 def test_crc16_xmodem_vector():
-    data = b"123456789"
-    assert vesc.crc16(data, 0, len(data)) == 0x31C3  # CRC-16/XMODEM check
+    assert vesc.crc16(b"123456789", 0, 9) == 0x31C3
 
 
 def test_crc16_matches_bitwise_reference():
@@ -27,151 +39,120 @@ def test_crc16_matches_bitwise_reference():
         assert vesc.crc16(blob, 0, len(blob)) == ref(blob)
 
 
-# --- framing -----------------------------------------------------------------
-def test_set_current_frame_layout():
-    out = bytearray(16)
-    n = vesc.pack_set_current(out, -12.5)
-    assert n == 10
-    assert out[0] == 0x02 and out[1] == 5
-    assert out[2] == vesc.COMM_SET_CURRENT
-    assert struct.unpack_from(">i", out, 3)[0] == -12500
-    assert out[n - 1] == 0x03
+def test_set_current_frame_on_the_wire():
+    link, u = link_with()
+    link.send(-12.5)
+    f = u.tx[:10]
+    assert f[:3] == bytes((2, 5, vesc.COMM_SET_CURRENT)) and f[9] == 3
+    assert struct.unpack_from(">i", f, 3)[0] == -12500
+    assert vesc.crc16(f, 2, 5) == (f[7] << 8 | f[8])
 
 
-def test_telemetry_request_mask():
-    out = bytearray(16)
-    n = vesc.pack_telemetry_req(out, config.TELEM_MASK)
-    assert n == 10
-    assert struct.unpack_from(">I", out, 3)[0] == 0x818C
+# --- schedule --------------------------------------------------------------------
+def count(tx, frame):
+    return bytes(tx).count(bytes(frame))
 
 
-# --- parser round trips ------------------------------------------------------
-def collect_parser():
-    got = []
-    p = vesc.FrameParser(lambda mv, n: got.append(bytes(mv[:n])))
-    return p, got
+def test_every_tick_sends_the_command_then_the_request():
+    link, u = link_with()
+    for _ in range(100):
+        link.send(0.0)
+    assert bytes(u.tx).count(bytes((2, 5, vesc.COMM_SET_CURRENT))) == 100
+    assert count(u.tx, link._req) == 100
+    assert len(u.tx) == 100 * 20
 
 
-def test_parser_roundtrip_random_chunking():
+# --- decode and link health ------------------------------------------------------
+def test_reply_is_the_fixed_length_the_parser_expects():
+    assert len(telem()) == vesc._FRAME
+
+
+def test_decode():
+    link, u = link_with()
+    feed(link, u, telem(erpm=-7940, v_in=39.4, i_in=-3.5, i_motor=-12.25,
+                        temp=-12.5, fault=0))
+    assert (link.erpm, link.v_in, link.i_in, link.i_motor, link.temp_fet, link.fault) == \
+        (-7940.0, pytest.approx(39.4), -3.5, -12.25, -12.5, 0)
+
+
+def test_ok_counts_clean_frames_and_resets_on_fault_or_silence():
+    link, u = link_with()
+    for _ in range(5):
+        feed(link, u, telem())
+    assert link.ok == 5
+    feed(link, u, telem(fault=3))
+    assert link.ok == 0 and link.fault == 3
+    feed(link, u, telem())
+    assert link.ok == 1
+    for _ in range(C.LINK_TIMEOUT_TICKS + 1):
+        link.send(0.0)
+    assert link.ok == 0
+
+
+def test_unknown_opcode_is_ignored():
+    link, u = link_with()
+    other = bytes(vesc.frame(bytes((36,)) + bytes(vesc._LEN - 1)))   # same length
+    feed(link, u, other + bytes(vesc.frame(bytes((36,)) + bytes(16))) + telem(erpm=100))
+    assert link.ok == 1 and link.erpm == 100.0
+
+
+# --- parser robustness (RGX-2-003 §4; review F06/F26/F35) ------------------------
+GOOD = telem(erpm=1234, v_in=30.0, i_in=5.34)  # i_in raw 0x0216: a false start inside
+
+
+def test_random_chunking_roundtrip():
     rng = random.Random(7)
-    payloads = [bytes([vesc.COMM_GET_VALUES_SELECTIVE]) +
-                bytes(rng.randrange(256) for _ in range(rng.randrange(1, 60)))
-                for _ in range(40)]
-    stream = b"".join(make_frame(p) for p in payloads)
-    p, got = collect_parser()
+    frames = [telem(erpm=rng.randrange(-9000, 9000), v_in=rng.uniform(10, 40))
+              for _ in range(60)]
+    link, u = link_with()
+    stream = b"".join(frames)
     i = 0
     while i < len(stream):
-        n = rng.randrange(1, 17)
-        chunk = stream[i:i + n]
-        p.feed(chunk, len(chunk))
+        n = rng.randrange(1, 40)
+        feed(link, u, stream[i:i + n])
         i += n
-    assert got == payloads
-    assert p.crc_fail == 0 and p.resync == 0
+    assert link.ok == 60 and link.bad == 0
 
 
-def test_parser_ignores_long_frames_quietly():
-    # 0x03-start (long) frames are junk by design (see FrameParser docstring)
-    payload = bytes(range(200))
-    stream = b"\x03" + bytes([0, len(payload)]) + payload + b"\x00\x00\x03"
-    p, got = collect_parser()
-    p.feed(stream, len(stream))
-    assert got == []
-    assert p.long_seen >= 1
-    good = make_frame(selective_payload(config.TELEM_MASK, v_in=20.0))
-    p.feed(good, len(good))
-    p.feed(good, len(good))
-    assert len(got) >= 1              # and it recovers
+@pytest.mark.parametrize("junk", [b"\x02", b"\x02\x14", b"\x02\x50\x00", b"\x02\xc8",
+                                  b"\x03\x00\x14", b"\x00\x02\x02\x02"])
+def test_stray_bytes_cost_no_good_frame(junk):
+    link, u = link_with()
+    feed(link, u, junk + GOOD + GOOD)
+    assert link.ok == 2
 
 
-def test_parser_never_false_accepts_corruption():
-    # CRC16 detects every single-bit error: any delivered frame from a
-    # 1-bit-corrupted stream must be byte-identical to the true payload,
-    # and recovery must cost at most one following good frame.
-    rng = random.Random(99)
-    payload = selective_payload(config.TELEM_MASK, erpm=1234, v_in=30.0)
-    frame = bytearray(make_frame(payload))
-    good = make_frame(payload)
-    for pos in range(len(frame)):
-        for _ in range(2):
-            mutated = bytearray(frame)
-            mutated[pos] ^= 1 << rng.randrange(8)
-            if bytes(mutated) == good:
-                continue
-            p, got = collect_parser()
-            p.feed(mutated, len(mutated))
-            assert all(g == payload for g in got)
-            p.feed(good, len(good))
-            p.feed(good, len(good))
-            assert got[-1] == payload
-            assert all(g == payload for g in got)
+def test_every_single_bit_flip_is_rejected_and_the_next_frame_survives():
+    good = bytearray(GOOD)
+    for pos in range(len(good)):
+        for bit in range(8):
+            bad = bytearray(good)
+            bad[pos] ^= 1 << bit
+            link, u = link_with()
+            feed(link, u, bytes(bad) + GOOD)
+            assert link.ok == 1, (pos, bit)
+            assert link.i_in == pytest.approx(5.34) and link.erpm == 1234.0
 
 
-def test_parser_recovers_from_garbage_flood():
-    rng = random.Random(5)
-    garbage = bytes(rng.randrange(256) for _ in range(5000))
-    p, got = collect_parser()
-    p.feed(garbage, len(garbage))
-    good = make_frame(selective_payload(config.TELEM_MASK, v_in=20.0))
-    p.feed(good, len(good))
-    p.feed(good, len(good))       # at worst one frame lost to a torn state
-    assert len(got) >= 1
+@pytest.mark.parametrize("seed", range(200))
+def test_garbage_then_the_first_good_frame_is_delivered(seed):
+    rng = random.Random(seed)
+    link, u = link_with()
+    feed(link, u, bytes(rng.randrange(256) for _ in range(rng.randrange(1, 600))))
+    before = link.ok
+    feed(link, u, GOOD)
+    assert link.ok == before + 1 and link.erpm == 1234.0
 
 
-def test_parser_truncated_then_good():
-    payload = selective_payload(config.TELEM_MASK, erpm=500)
-    frame = make_frame(payload)
-    p, got = collect_parser()
-    p.feed(frame[:8], 8)               # truncated: parser left mid-frame
-    good = make_frame(payload)
-    p.feed(good, len(good))
-    p.feed(good, len(good))
-    assert payload in got
+def test_truncated_frame_then_good():
+    link, u = link_with()
+    feed(link, u, GOOD[:8] + GOOD)
+    assert link.ok == 1
 
 
-# --- selective parse ---------------------------------------------------------
-def test_parse_selective_values():
-    v = vesc.Values()
-    payload = selective_payload(config.TELEM_MASK, erpm=-7940, v_in=39.4,
-                                i_in=-3.5, i_motor=-12.25, fault=0)
-    assert vesc.parse_selective(payload, len(payload), v)
-    assert v.erpm == -7940
-    assert abs(v.v_in - 39.4) < 1e-6
-    assert abs(v.i_in + 3.5) < 1e-6
-    assert abs(v.i_motor + 12.25) < 1e-6
-    assert v.fault == 0
-
-
-def test_parse_selective_with_temp_mask():
-    v = vesc.Values()
-    payload = selective_payload(config.TELEM_MASK_TEMP, temp_fet=71.5,
-                                v_in=20.0)
-    assert vesc.parse_selective(payload, len(payload), v)
-    assert abs(v.temp_fet - 71.5) < 1e-6
-
-
-def test_parse_selective_short_payload_rejected():
-    v = vesc.Values()
-    payload = selective_payload(config.TELEM_MASK)[:-3]
-    assert not vesc.parse_selective(payload, len(payload), v)
-
-
-# --- link scheduler ----------------------------------------------------------
-def test_link_schedule_and_values(uart, link):
-    for t in range(20):
-        link.tick(t * 10, 1.0)
-    # 20 commands + 10 telemetry requests
-    assert uart.tx.count(bytes([0x02, 5, vesc.COMM_SET_CURRENT])) == 20
-    assert uart.tx.count(bytes([0x02, 5,
-                                vesc.COMM_GET_VALUES_SELECTIVE])) == 10
-    uart.inject(make_frame(selective_payload(config.TELEM_MASK, erpm=1000,
-                                             v_in=25.0)))
-    link.tick(210, 0.0)
-    assert link.values.erpm == 1000
-    assert link.age_ms(215) == 5
-
-
-def test_link_rtt_and_fw(uart, link):
-    link.request_fw()
-    uart.inject(make_frame(fw_payload(5, 2)))
-    link.poll(30)
-    assert (link.values.fw_major, link.values.fw_minor) == (5, 2)
+def test_a_corrupted_reply_counts_as_bad():
+    link, u = link_with()
+    broken = bytearray(GOOD)
+    broken[12] ^= 0x40
+    feed(link, u, bytes(broken) + GOOD)
+    assert link.bad >= 1 and link.ok == 1
