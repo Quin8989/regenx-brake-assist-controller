@@ -60,8 +60,7 @@ def _seal(b, n):
 class Link:
     def __init__(self, uart):
         self.uart = uart
-        self._cmd = frame(bytes(5))
-        self._cmd[2] = COMM_SET_CURRENT
+        self._cmd = frame(bytes((COMM_SET_CURRENT, 0, 0, 0, 0)))
         self._req = frame(struct.pack(">BI", COMM_GET_VALUES_SELECTIVE, MASK))
         self._buf = bytearray(256)
         self._mv = memoryview(self._buf)

@@ -26,7 +26,7 @@ DT = TICK_MS / 1000           # never does time arithmetic: timeouts count ticks
                               # telemetry request (20 bytes) and gets a 27-byte
                               # reply: at most a quarter of either direction.
 LINK_TIMEOUT_TICKS = const(25)    # 250 ms of silence -> LIMP (D7)
-LINK_RECOVER_FRAMES = const(10)   # consecutive clean frames before RUN
+LINK_RECOVER_FRAMES = const(10)   # clean frames in a row before current flows
 
 # --- Mechanics ---------------------------------------------------------------
 # Sign convention, fixed by provisioning (tools/A1-SETUP.md): A1's motor

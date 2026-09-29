@@ -5,8 +5,8 @@
 # 25 ms over I2C, longer than a control tick, which is why this runs on the
 # second core.
 #
-# problems() is pure (host-tested); Oled and Core1 are target-only.
-# RGX-2-003 D14 as amended in Rev D.
+# problems() and draw() are pure (host-tested); Oled and run() are
+# target-only. RGX-2-003 D14 as amended in Rev D.
 
 import config as C
 import control as K
@@ -20,11 +20,8 @@ def problems(sn, errors=0):
     look.
     """
     out = []
-    st = sn[K.SN_STATE]
-    if st == K.LIMP_FAULT:
-        out.append("VESC FAULT %d" % sn[K.SN_FAULT])
-    elif st == K.LIMP_LINK:
-        out.append("NO LINK")
+    if not sn[K.SN_RUN]:
+        out.append("VESC FAULT %d" % sn[K.SN_FAULT] if sn[K.SN_FAULT] else "NO LINK")
     t = sn[K.SN_TFET]
     if t > C.TEMP_HOT:
         out.append("HOT %d C" % t)
@@ -37,6 +34,17 @@ def problems(sn, errors=0):
     if errors:
         out.append("SCREEN ERR %d" % errors)
     return out
+
+
+def draw(fb, sn, errors):
+    """The whole screen into a framebuffer: three readings, then up to three
+    problem lines."""
+    fb.fill(0)
+    fb.text("%5.1f km/h" % (sn[K.SN_WHEEL] * C.WHEEL_CIRC_M * 0.06), 0, 0)
+    fb.text("%5.1f V" % sn[K.SN_VIN], 0, 10)
+    fb.text("%+5.1f A" % sn[K.SN_IMOTOR], 0, 20)
+    for n, line in enumerate(problems(sn, errors)[:3]):
+        fb.text(line, 0, 34 + 10 * n)
 
 
 class Oled:
@@ -61,36 +69,22 @@ class Oled:
         self.i2c.writevto(C.OLED_ADDR, (b"\x40", self.buf))
 
 
-class Core1:
-    """Runs on core 1 via _thread. Never lets an exception end the thread."""
-
-    def __init__(self, sn):
-        from machine import I2C, Pin
-        self.sn = sn
-        self.i2c = I2C(0, sda=Pin(C.PIN_SDA), scl=Pin(C.PIN_SCL), freq=C.I2C_FREQ)
-        self.oled = None
-        self.errors = 0
-
-    def run(self):
-        import time
-        while True:
-            try:
-                self.render()
-            except Exception:           # display unplugged or an I2C glitch:
-                self.oled = None        # count it, set it up again next pass
-                self.errors += 1
-            time.sleep_ms(C.DISPLAY_MS)
-
-    def render(self):
-        o = self.oled
-        if o is None:
-            o = self.oled = Oled(self.i2c)
-        sn = self.sn
-        t = o.fb.text
-        o.fb.fill(0)
-        t("%5.1f km/h" % (sn[K.SN_WHEEL] * C.WHEEL_CIRC_M * 0.06), 0, 0)
-        t("%5.1f V" % sn[K.SN_VIN], 0, 10)
-        t("%+5.1f A" % sn[K.SN_IMOTOR], 0, 20)
-        for n, line in enumerate(problems(sn, self.errors)[:3]):
-            t(line, 0, 34 + 10 * n)
-        o.show()
+def run(sn):
+    """Core 1's loop: redraw every DISPLAY_MS. An error (display unplugged,
+    an I2C glitch) is counted and the display set up again on the next pass,
+    so nothing ends the thread."""
+    import time
+    from machine import I2C, Pin
+    oled = None
+    errors = 0
+    while True:
+        try:
+            if oled is None:
+                oled = Oled(I2C(0, sda=Pin(C.PIN_SDA), scl=Pin(C.PIN_SCL),
+                                freq=C.I2C_FREQ))
+            draw(oled.fb, sn, errors)
+            oled.show()
+        except Exception:
+            oled = None
+            errors += 1
+        time.sleep_ms(C.DISPLAY_MS)

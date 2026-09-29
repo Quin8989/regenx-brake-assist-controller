@@ -2,7 +2,7 @@
 # Specification sections 10.1 to 10.3.
 #
 # Wheel and Throttle take their hardware object as an argument, so the logic
-# runs on a desktop Python with stand-ins for the hardware. Only Sensors()
+# runs on a desktop Python with stand-ins for the hardware. Only pico()
 # touches the Pico's machine and rp2 modules.
 
 import config as C
@@ -85,46 +85,42 @@ class Throttle:
         return t if t < 1.0 else 1.0
 
 
-class Sensors:
-    """The sensors control.py reads. Runs on the Pico only."""
+def pico():
+    """The wheel and throttle on their Pico pins. Runs on the Pico only."""
+    import rp2
+    from machine import ADC, Pin
 
-    def __init__(self):
-        import rp2
-        from machine import ADC, Pin
+    @rp2.asm_pio()
+    def phases():
+        # State machine program: measure every high and every low phase of
+        # the wheel-speed signal and queue its length in microseconds (each
+        # counting loop takes 2 cycles at a 2 megahertz clock). It first
+        # waits for a rising edge so the first phase is whole.
+        wait(0, pin, 0)                 # noqa: F821 (assembler names)
+        wait(1, pin, 0)                 # noqa: F821
+        wrap_target()                   # noqa: F821
+        mov(x, invert(null))            # noqa: F821
+        label("hi")                     # noqa: F821
+        jmp(pin, "hi_c")                # noqa: F821
+        jmp("hi_d")                     # noqa: F821
+        label("hi_c")                   # noqa: F821
+        jmp(x_dec, "hi")                # noqa: F821
+        label("hi_d")                   # noqa: F821
+        mov(isr, invert(x))             # noqa: F821
+        push(noblock)                   # noqa: F821
+        mov(x, invert(null))            # noqa: F821
+        label("lo")                     # noqa: F821
+        jmp(pin, "lo_d")                # noqa: F821
+        jmp(x_dec, "lo")                # noqa: F821
+        label("lo_d")                   # noqa: F821
+        mov(isr, invert(x))             # noqa: F821
+        push(noblock)                   # noqa: F821
+        wrap()                          # noqa: F821
 
-        @rp2.asm_pio()
-        def phases():
-            # State machine program: measure every high and every low phase
-            # of the wheel-speed signal and queue its length in microseconds
-            # (each counting loop takes 2 cycles at a 2 megahertz clock).
-            # It first waits for a rising edge so the first phase is whole.
-            wait(0, pin, 0)                 # noqa: F821 (assembler names)
-            wait(1, pin, 0)                 # noqa: F821
-            wrap_target()                   # noqa: F821
-            mov(x, invert(null))            # noqa: F821
-            label("hi")                     # noqa: F821
-            jmp(pin, "hi_c")                # noqa: F821
-            jmp("hi_d")                     # noqa: F821
-            label("hi_c")                   # noqa: F821
-            jmp(x_dec, "hi")                # noqa: F821
-            label("hi_d")                   # noqa: F821
-            mov(isr, invert(x))             # noqa: F821
-            push(noblock)                   # noqa: F821
-            mov(x, invert(null))            # noqa: F821
-            label("lo")                     # noqa: F821
-            jmp(pin, "lo_d")                # noqa: F821
-            jmp(x_dec, "lo")                # noqa: F821
-            label("lo_d")                   # noqa: F821
-            mov(isr, invert(x))             # noqa: F821
-            push(noblock)                   # noqa: F821
-            wrap()                          # noqa: F821
-
-        spd = Pin(C.PIN_SPD, Pin.IN, Pin.PULL_UP)
-        sm = rp2.StateMachine(0, phases, freq=2_000_000, in_base=spd, jmp_pin=spd)
-        sm.active(1)
-        self.wheel = Wheel(sm)
-        # Build the analog-to-digital converter from a Pin object so
-        # MicroPython switches off the pin's internal pull-down resistor.
-        # Created from a bare channel number it stays on and drags the
-        # throttle reading down.
-        self.throttle = Throttle(ADC(Pin(C.PIN_THR)))
+    spd = Pin(C.PIN_SPD, Pin.IN, Pin.PULL_UP)
+    sm = rp2.StateMachine(0, phases, freq=2_000_000, in_base=spd, jmp_pin=spd)
+    sm.active(1)
+    # Build the analog-to-digital converter from a Pin object so MicroPython
+    # switches off the pin's internal pull-down resistor. Created from a bare
+    # channel number it stays on and drags the throttle reading down.
+    return Wheel(sm), Throttle(ADC(Pin(C.PIN_THR)))
