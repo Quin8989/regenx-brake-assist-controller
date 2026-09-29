@@ -1,10 +1,29 @@
 # ReGenX v2 — Firmware Architecture
 
-**Document** RGX-2-003 **Rev B** · against RGX-2-001 Rev C / RGX-2-100 Rev D /
-RGX-2-002 Rev A · 2026-08-02
+**Document** RGX-2-003 **Rev C** · against RGX-2-001 Rev C / RGX-2-100 Rev D /
+RGX-2-002 Rev A · 2026-09-29
 
-Design only — no code exists yet. The regen control law remains deferred; this
-document defines the machine it plugs into.
+Implemented in `v2/firmware/` (host tests in `v2/tests/`). The regen control
+law remains deferred; this document defines the machine it plugs into.
+
+## Rev C amendments (2026-09-29, after `reviews/firmware-1/`)
+
+These supersede the Rev B text below wherever they conflict. Rationale is in
+`research/decisions.md`, 2026-09-29.
+
+| Topic | Rev C rule | Supersedes |
+|---|---|---|
+| Sign | A1 is provisioned so +current drives the wheel forward (`tools/A1-SETUP.md` item 4). With the carrier held the rotor then turns at +k·wheel: ERPM ≥ 0 whenever torque flows, and s = 1 − ERPM/(pp·k·ω_wheel). No `DIR_SIGN`. | D10 `DIR_SIGN`, B-2 |
+| States | RUN iff `LINK_RECOVER_FRAMES` consecutive clean telemetry frames (fault = 0); else LIMP at 0 A, auto-recovering. Strategy exception or out-of-range/NaN return → DEAD, latched. RUN does not wait for the FW handshake; FW_VERSION is re-sent every 250 ms until answered. | §3 States, INIT |
+| Throttle | Outside 0.20–0.85 it reads 0 (assist stops, regen untouched; spec §10.3). Assist arms only after the throttle has read idle. Mapping uses measured idle/full, with a deadband. | §3 "throttle window fault → LIMP" |
+| Envelope | Slew the strategy's request 2 A/tick, then clamp. The clamps only shrink \|i\|, so they act in the same tick. Regen and assist caps hold A1's terminal in [9, 39] V via v_oc = v_in + i_in·R_BANK. No regen below ~3 km/h. The lever zeroes assist. | §3 envelope: 38→40 V taper, crossover guard |
+| Time | Control never reads a clock. Timeouts count ticks; the slew and strategy dt are per tick. | T9 `dt` measured |
+| Snapshot | One `array('f')`, core 0 the only writer. A reader may mix two consecutive ticks, which is harmless for display and log. | D12 seqlock |
+| Deleted | Live k cross-check (fit k offline from logs), RTT metric, full COMM_GET_VALUES fallback, `gc.disable()`, boot guard | D10 cross-check, D5 (a) |
+| Parser | A false start rescans from the next byte; LEN ≤ 80. A complete frame later in the buffer proves an incomplete earlier start false. | D11 "O(1) resync, no backtracking" |
+| Logging | ≤ 4 KB chunks at every standstill (wheel, throttle, lever, command and ERPM all quiet for 3 s). Oldest rides deleted below 200 KB free. Text header line (format, FW, k, pp, circumference). Only measurements are logged; speed and slip are derived by `tools/decode_log.py`. | D13 "flush when half full" |
+| C-0 | `SEND_CURRENT = False`: telemetry only, A1's ADC app drives. | D15 (unimplemented) |
+| UI | RIDE page in RUN, status page otherwise; link and loop health on both. | D14 three pages |
 
 **Rev B** restructures the document as a **decision register**: every choice
 lists the alternatives considered, the numbers that decided it, and the

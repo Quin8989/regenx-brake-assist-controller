@@ -1,250 +1,208 @@
-# ui.py — core 1: display pages, RAM ring logger, standstill flash flush,
-# USB bench stream. The record codec and Ring are pure (host-tested); the
-# display/flush sections are target-only. RGX-2-003 D13/D14.
+# ui.py — core 1: display, RAM ring log, flush to flash at standstill.
 #
-# XIP reality (D13): a flash write stalls BOTH cores; flush only ever runs
-# at verified standstill, which is exactly what the gate below enforces.
+# The record codec, ring and standstill test are pure (host-tested); Core1
+# and Oled are target-only. RGX-2-003 D13/D14.
+#
+# Flash writes stall BOTH cores (XIP), so they only happen at a standstill
+# that has lasted STANDSTILL_MS, one ~4 KB chunk per pass, re-checked every
+# pass. Every standstill flushes whatever is new, so a power-off loses at most
+# the records since the last stop.
 
 import struct
 from array import array
 
-import config
-import control
+import config as C
+import control as K
 
-try:
-    from machine import Pin, I2C
-    import framebuf
-    import time
-    import os
-    _ON_TARGET = True
-except ImportError:
-    _ON_TARGET = False
-
-# --- record codec (pure) -----------------------------------------------------
-REC_FMT = "<IHhHhhhHHHBB"
-REC_SIZE = struct.calcsize(REC_FMT)  # 24 B (verified by test)
+# ms, wheel rpm x10, erpm/10, v_in x100, i_in x100, i_motor x100, i_cmd x100,
+# throttle x1000, vsys x1000, temp_fet x10, state | brake<<2, fault.
+# Only measurements are logged; slip, speed and k are derived offline
+# (tools/decode_log.py).
+REC_FMT = "<IHhHhhhHHhBB"
+REC_SIZE = struct.calcsize(REC_FMT)  # 24
+STATE_NAMES = ("RUN", "NO LINK", "VESC FAULT", "DEAD")
 
 
-def pack_record(buf, off, ms, sn):
+def _i(x, lo, hi):
+    return lo if x < lo else (hi if x > hi else round(x))
+
+
+def pack(buf, off, ms, sn):
     struct.pack_into(
-        REC_FMT, buf, off,
-        ms & 0xFFFFFFFF,
-        min(65535, round(sn[control.SN_WHEEL_RPM] * 10)),
-        max(-32768, min(32767, round(sn[control.SN_ERPM] / 10))),
-        min(65535, round(sn[control.SN_VBANK] * 100)),
-        max(-32768, min(32767, round(sn[control.SN_IIN] * 100))),
-        max(-32768, min(32767, round(sn[control.SN_IMOTOR] * 100))),
-        max(-32768, min(32767, round(sn[control.SN_ICMD] * 100))),
-        min(65535, round(sn[control.SN_SLIP] * 1000)),
-        min(65535, round(sn[control.SN_THROTTLE] * 1000)),
-        min(65535, round(sn[control.SN_VSYS] * 1000)),
-        int(sn[control.SN_STATE]) & 0xFF,
-        int(sn[control.SN_FAULT]) & 0xFF,
-    )
+        REC_FMT, buf, off, ms & 0xFFFFFFFF,
+        _i(sn[K.SN_WHEEL] * 10, 0, 65535),
+        _i(sn[K.SN_ERPM] / 10, -32768, 32767),
+        _i(sn[K.SN_VIN] * 100, 0, 65535),
+        _i(sn[K.SN_IIN] * 100, -32768, 32767),
+        _i(sn[K.SN_IMOTOR] * 100, -32768, 32767),
+        _i(sn[K.SN_ICMD] * 100, -32768, 32767),
+        _i(sn[K.SN_THR] * 1000, 0, 65535),
+        _i(sn[K.SN_VSYS] * 1000, 0, 65535),
+        _i(sn[K.SN_TFET] * 10, -32768, 32767),
+        int(sn[K.SN_STATE]) | (4 if sn[K.SN_BRAKE] else 0),
+        _i(sn[K.SN_FAULT], 0, 255))
 
 
-def unpack_record(buf, off):
-    (ms, wr, erpm10, vb, iin, im, icmd, slip, thr, vsys, state,
-     fault) = struct.unpack_from(REC_FMT, buf, off)
-    return {
-        "ms": ms, "wheel_rpm": wr / 10.0, "erpm": erpm10 * 10.0,
-        "v_bank": vb / 100.0, "i_in": iin / 100.0, "i_motor": im / 100.0,
-        "i_cmd": icmd / 100.0, "slip": slip / 1000.0,
-        "throttle": thr / 1000.0, "vsys": vsys / 1000.0,
-        "state": state, "fault": fault,
-    }
+def header(fw):
+    return ("RGX2 rec=%s fw=%.2f k=%g pp=%d circ=%g\n" % (
+        REC_FMT, fw, C.K_RATIO, C.POLE_PAIRS, C.WHEEL_CIRC_M)).encode()
 
 
-class Ring:
-    """Fixed byte ring of REC_SIZE records; overwrites oldest. Pure."""
-
-    def __init__(self, n_records=None):
-        self.n = n_records or config.LOG_RING_RECORDS
-        self.buf = bytearray(self.n * REC_SIZE)
-        self.w = 0          # next record index
-        self.count = 0      # total stored (saturates at n)
-        self.dropped = 0
-
-    def append(self, ms, sn):
-        pack_record(self.buf, self.w * REC_SIZE, ms, sn)
-        self.w = (self.w + 1) % self.n
-        if self.count < self.n:
-            self.count += 1
-        else:
-            self.dropped += 1
-
-    def records(self):
-        """Yield (offset) of each stored record, oldest first."""
-        start = (self.w - self.count) % self.n
-        for i in range(self.count):
-            yield ((start + i) % self.n) * REC_SIZE
-
-    def clear(self):
-        self.w = 0
-        self.count = 0
+def still(sn):
+    """Nothing moving and nothing commanded: safe to stall both cores."""
+    return (sn[K.SN_WHEEL] == 0.0 and sn[K.SN_THR] == 0.0 and not sn[K.SN_BRAKE]
+            and -0.1 < sn[K.SN_ICMD] < 0.1 and -100.0 < sn[K.SN_ERPM] < 100.0)
 
 
-# --- everything below is target-only ----------------------------------------
-if _ON_TARGET:
+class Log:
+    """RAM ring of records plus a flush watermark. Pure."""
 
-    class SSD1306(framebuf.FrameBuffer):
-        """Minimal SSD1306 I2C driver (framebuf-backed)."""
+    def __init__(self, n):
+        self.n = n
+        self.buf = bytearray(n * REC_SIZE)
+        self._mv = memoryview(self.buf)
+        self.w = 0                  # records ever written
+        self.f = 0                  # records ever flushed (or overwritten)
 
-        def __init__(self, i2c):
-            self.i2c = i2c
-            self.addr = config.OLED_ADDR
-            self.w = config.OLED_W
-            self.h = config.OLED_H
-            self.pages = self.h // 8
-            self.buffer = bytearray(self.pages * self.w)
-            super().__init__(self.buffer, self.w, self.h, framebuf.MONO_VLSB)
-            self._cmdbuf = bytearray(2)
-            self._databuf = bytearray(1)
-            self.ok = True
-            self.reinits = 0
-            self.init_display()
+    def add(self, ms, sn):
+        pack(self.buf, (self.w % self.n) * REC_SIZE, ms, sn)
+        self.w += 1
+        if self.w - self.f > self.n:
+            self.f = self.w - self.n
 
-        def _cmd(self, c):
-            self._cmdbuf[0] = 0x80
-            self._cmdbuf[1] = c
-            self.i2c.writeto(self.addr, self._cmdbuf)
+    def chunk(self):
+        """Next contiguous run of unflushed records, or None."""
+        if self.f == self.w:
+            return None
+        s = self.f % self.n
+        k = min(self.w - self.f, self.n - s, C.FLUSH_RECORDS)
+        self.f += k
+        return self._mv[s * REC_SIZE:(s + k) * REC_SIZE]
 
-        def init_display(self):
-            for c in (0xAE, 0x20, 0x00, 0x40, 0xA1, 0xA8, self.h - 1, 0xC8,
-                      0xD3, 0x00, 0xDA, 0x12, 0xD5, 0x80, 0xD9, 0xF1,
-                      0xDB, 0x30, 0x81, 0xFF, 0xA4, 0xA6, 0x8D, 0x14, 0xAF):
-                self._cmd(c)
-            self.fill(0)
-            self.show()
 
-        def show(self):
-            self._cmd(0x21); self._cmd(0); self._cmd(self.w - 1)
-            self._cmd(0x22); self._cmd(0); self._cmd(self.pages - 1)
-            self.i2c.writevto(self.addr, (b"\x40", self.buffer))
+class Oled:
+    """Minimal SSD1306 128x64 on I2C."""
 
-    class Panel:
-        """Pages + lazy re-init. Never scheduled, never on core 0 (D14)."""
+    def __init__(self, i2c):
+        import framebuf
+        self.i2c = i2c
+        self.buf = bytearray(1024)
+        self.fb = framebuf.FrameBuffer(self.buf, 128, 64, framebuf.MONO_VLSB)
+        for c in (0xAE, 0x20, 0x00, 0x40, 0xA1, 0xA8, 63, 0xC8, 0xD3, 0x00,
+                  0xDA, 0x12, 0xD5, 0x80, 0xD9, 0xF1, 0xDB, 0x30, 0x81, 0xFF,
+                  0xA4, 0xA6, 0x8D, 0x14, 0xAF):
+            self._cmd(c)
 
-        def __init__(self):
-            self.i2c = I2C(0, sda=Pin(config.PIN_I2C_SDA),
-                           scl=Pin(config.PIN_I2C_SCL),
-                           freq=config.I2C_FREQ)
-            self.oled = None
-            self.errors = 0
-            self._try_init()
+    def _cmd(self, c):
+        self.i2c.writeto(C.OLED_ADDR, bytes((0x80, c)))
 
-        def _try_init(self):
+    def show(self):
+        for c in (0x21, 0, 127, 0x22, 0, 7):
+            self._cmd(c)
+        self.i2c.writevto(C.OLED_ADDR, (b"\x40", self.buf))
+
+
+class Core1:
+    """Runs on core 1 via _thread. Never lets an exception end the thread."""
+
+    def __init__(self, sn):
+        import os
+        from machine import I2C, Pin
+        self.sn = sn
+        self.cp = array("f", sn)
+        self.log = Log(C.LOG_RECORDS)
+        self.i2c = I2C(0, sda=Pin(C.PIN_SDA), scl=Pin(C.PIN_SCL), freq=C.I2C_FREQ)
+        self.oled = None
+        self.file = None
+        self.errors = 0
+        self._t_log = self._t_disp = self._t_move = 0
+        try:
+            os.mkdir(C.LOG_DIR)
+        except OSError:
+            pass
+        ids = [int(x[:4]) for x in os.listdir(C.LOG_DIR) if x[:4].isdigit()]
+        self.name = "%04d.bin" % (max(ids) + 1 if ids else 0)
+
+    def run(self):
+        import time
+        while True:
             try:
-                self.oled = SSD1306(self.i2c)
-            except OSError:
+                self.step(time.ticks_ms(), time.ticks_diff)
+            except Exception:
+                self.errors += 1
+            time.sleep_ms(20)
+
+    def step(self, now, diff):
+        cp = self.cp
+        cp[:] = self.sn
+        moving = not still(cp)
+        if moving:
+            self._t_move = now
+        if diff(now, self._t_log) >= (C.LOG_RIDE_MS if moving else C.LOG_IDLE_MS):
+            self._t_log = now
+            self.log.add(now, cp)
+        if diff(now, self._t_disp) >= C.DISPLAY_MS:
+            self._t_disp = now
+            try:
+                self._render(cp)
+            except OSError:             # display gone: re-init next time
                 self.oled = None
                 self.errors += 1
-
-        def render(self, sn):
-            if self.oled is None:
-                self._try_init()
-                if self.oled is None:
-                    return
-            o = self.oled
-            try:
-                o.fill(0)
-                st = int(sn[control.SN_STATE])
-                if st == control.LIMP or sn[control.SN_FAULT]:
-                    self._page_system(o, sn)
-                else:
-                    self._page_ride(o, sn)
-                o.show()
-            except OSError:
-                self.errors += 1
-                self.oled = None      # lazy re-init next render
-
-        def _page_ride(self, o, sn):
-            o.text("%5.1f km/h" % sn[control.SN_KMH], 0, 0)
-            o.text("%5.1f V" % sn[control.SN_VBANK], 0, 12)
-            o.text("%5.1f A %s" % (abs(sn[control.SN_ICMD]),
-                   "RGN" if sn[control.SN_ICMD] < 0 else "AST"), 0, 24)
-            # slip bar: full = freewheel, empty = held
-            w = int(sn[control.SN_SLIP] * (config.OLED_W - 2))
-            o.rect(0, 40, config.OLED_W, 10, 1)
-            o.fill_rect(1, 41, w, 8, 1)
-            o.text("rtt%3.0f e%d" % (sn[control.SN_RTT],
-                   int(sn[control.SN_CRCFAIL])), 0, 54)
-
-        def _page_system(self, o, sn):
-            o.text("STATE %d RSN %d" % (int(sn[control.SN_STATE]),
-                                        int(sn[control.SN_REASON])), 0, 0)
-            o.text("FAULT %d" % int(sn[control.SN_FAULT]), 0, 12)
-            o.text("VSYS %4.2f" % sn[control.SN_VSYS], 0, 24)
-            o.text("crc%d rs%d" % (int(sn[control.SN_CRCFAIL]),
-                                   int(sn[control.SN_RESYNC])), 0, 36)
-            o.text("miss%d gc%3.1f" % (int(sn[control.SN_DLMISS]),
-                                       sn[control.SN_GCMAX]), 0, 48)
-
-    class Core1:
-        """Entry for _thread on core 1. Reads snapshots, renders, logs,
-        flushes at standstill, streams on USB when enabled."""
-
-        def __init__(self, snapshot):
-            self.snapshot = snapshot
-            self.panel = Panel()
-            self.ring = Ring()
-            self._sn = array("f", [0.0] * control.SN_LEN)
-            self._still_since = -1
-            self._boot_id = self._next_boot_id()
-            self.bench_stream = False
-
-        def _next_boot_id(self):
-            try:
-                os.mkdir(config.LOG_DIR)
-            except OSError:
-                pass
-            try:
-                names = os.listdir(config.LOG_DIR)
-            except OSError:
-                return 0
-            return len(names)
-
-        def _standstill(self, now, sn):
-            moving = (sn[control.SN_WHEEL_RPM] > 0.5 or
-                      sn[control.SN_THROTTLE] > 0.02)
-            if moving:
-                self._still_since = -1
-                return False
-            if self._still_since < 0:
-                self._still_since = now
-            return now - self._still_since > config.STANDSTILL_MS
-
-        def _flush(self):
-            if self.ring.count == 0:
+        try:
+            if diff(now, self._t_move) >= C.STANDSTILL_MS and self._flush(cp):
                 return
-            path = "%s/ride%04d.bin" % (config.LOG_DIR, self._boot_id)
-            with open(path, "ab") as f:
-                mv = memoryview(self.ring.buf)
-                for off in self.ring.records():
-                    f.write(mv[off:off + REC_SIZE])
-            self.ring.clear()
+            self._close()
+        except OSError:
+            self.errors += 1
+            self.file = None
 
-        def run(self):
-            period_disp = 1000 // config.DISPLAY_HZ
-            last_disp = 0
-            last_log = 0
-            while True:
-                now = time.ticks_ms()
-                self.snapshot.read(self._sn)
-                sn = self._sn
-                still = self._standstill(now, sn)
-                hz = config.LOG_IDLE_HZ if still else config.LOG_RIDE_HZ
-                if time.ticks_diff(now, last_log) >= 1000 // hz:
-                    last_log = now
-                    self.ring.append(now, sn)
-                    if self.bench_stream:
-                        print("LOG,%d,%.1f,%.0f,%.2f,%.2f,%.2f,%.3f" % (
-                            now, sn[control.SN_KMH], sn[control.SN_ERPM],
-                            sn[control.SN_VBANK], sn[control.SN_ICMD],
-                            sn[control.SN_VSYS], sn[control.SN_SLIP]))
-                if time.ticks_diff(now, last_disp) >= period_disp:
-                    last_disp = now
-                    self.panel.render(sn)
-                if still and self.ring.count >= self.ring.n // 2:
-                    self._flush()          # both cores stall briefly: D13
-                time.sleep_ms(20)
+    def _flush(self, cp):
+        mv = self.log.chunk()
+        if mv is None:
+            return False
+        if self.file is None:
+            self._open(cp)
+        self.file.write(mv)
+        return True
+
+    def _open(self, cp):
+        import os
+        names = sorted(os.listdir(C.LOG_DIR))
+        while names and names[0] != self.name:     # make room: oldest first
+            st = os.statvfs("/")
+            if st[0] * st[3] >= C.LOG_MIN_FREE:
+                break
+            os.remove(C.LOG_DIR + "/" + names.pop(0))
+        new = self.name not in names
+        self.file = open(C.LOG_DIR + "/" + self.name, "ab")
+        if new:
+            self.file.write(header(cp[K.SN_FW]))
+
+    def _close(self):
+        f = self.file
+        if f is not None:
+            self.file = None
+            f.close()
+
+    def _render(self, sn):
+        o = self.oled
+        if o is None:
+            o = self.oled = Oled(self.i2c)
+        t = o.fb.text
+        o.fb.fill(0)
+        st = int(sn[K.SN_STATE])
+        if st == K.RUN:
+            t("%5.1f km/h %4.1fV" % (sn[K.SN_WHEEL] * C.WHEEL_CIRC_M * 0.06,
+                                     sn[K.SN_VIN]), 0, 0)
+            t("%+6.1f A %5.0f W" % (sn[K.SN_ICMD], sn[K.SN_VIN] * sn[K.SN_IIN]),
+              0, 20)
+        else:
+            t(STATE_NAMES[st], 0, 0)
+            t("fault %d fw %.2f" % (sn[K.SN_FAULT], sn[K.SN_FW]), 0, 12)
+            t("%4.1fV %3.0fC %.2fV" % (sn[K.SN_VIN], sn[K.SN_TFET],
+                                       sn[K.SN_VSYS]), 0, 24)
+        # link and loop health on every page (FW-7 needs them green)
+        t("fr%d bad%d" % (sn[K.SN_FRAMES], sn[K.SN_BAD]), 0, 44)
+        t("miss%d %.1fms e%d" % (sn[K.SN_MISS], sn[K.SN_TMAX] / 1000,
+                                 self.errors), 0, 54)
+        o.show()

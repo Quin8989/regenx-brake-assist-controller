@@ -13,6 +13,56 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-09-29 — Firmware simplified after review 1 (RGX-2-003 Rev C)
+
+**Decided.** The firmware was reviewed (`reviews/firmware-1/`), and the fixes
+were made by removing machinery rather than adding checks. Production code
+went from 1 226 lines / 16.1 KB bytecode to about 800 lines / 10.7 KB. Tests
+went from 43 to 266, now written against a Willis/clutch plant.
+
+- **Sign fixed by provisioning, not configured.** A1's direction is set so
+  +current drives the wheel forward. With the carrier held, the rotor then
+  turns at +k·wheel, so ERPM ≥ 0 whenever torque flows. `DIR_SIGN` is deleted.
+  Review F01 showed that a free sign could turn a brake touch into sustained
+  motoring. B-2 is now "set A1's direction" (`tools/A1-SETUP.md` item 4).
+- **States derived, not tracked.** RUN iff `LINK_RECOVER_FRAMES` consecutive
+  clean telemetry frames have arrived; otherwise LIMP (0 A). A strategy
+  exception or an out-of-range/NaN return is DEAD, latched. INIT is gone: RUN
+  no longer waits for the FW handshake, which is re-requested until answered
+  (F04).
+- **Throttle faults stop assist only** (spec §10.3; corrects Rev B §3). The
+  throttle reads 0 when outside its window and arms only after it has been
+  seen at idle, so there is no throttle fault state at all (F03, F05, F18).
+- **No time arithmetic in control.** Timeouts count ticks and the slew is per
+  tick, so ticks_ms wrap and stall-scaled steps cannot happen (F20, F21).
+- **One voltage rule replaces the taper and the crossover guard.** The regen
+  and assist caps keep A1's terminal inside [9, 39] V using
+  v_oc = v_in + i_in·R_BANK. This is stable for any true ESR ≤ R_BANK, ends
+  1 V below A1's 40 V OV trip, and adds the brownout floor (F09, F19). The
+  crossover guard is removed: zeroing the command cannot stop body-diode
+  rectification (F08, spec §9). Bank-full fade stays accepted.
+- **Slew then clamp.** Limits act in the same tick (C02). There is no regen
+  below ~3 km/h (design sweep F8).
+- **Deleted:** seqlock (a torn display/log sample between two ticks is
+  harmless), the live k cross-check (k is fitted offline from logs), the RTT
+  metric, the full COMM_GET_VALUES fallback, gc.disable() (it turned heap
+  exhaustion into MemoryError), and the boot guard (A1's timeout plus the WDT
+  are the failure policy).
+- **Parser rescans after a false start** and caps LEN at 80. A complete frame
+  later in the buffer proves an earlier incomplete start false. Every
+  single-bit flip and 200 garbage seeds deliver the next good frame (F06, F26,
+  F35).
+- **Logging** flushes ≤ 4 KB chunks at every standstill, deletes the oldest
+  rides below 200 KB free, writes a header, and catches every exception on
+  core 1 (F13, F14, F23, F25, F42).
+- **C-0 observer mode:** `SEND_CURRENT = False` (F11).
+
+Open for the owner: fit the lever sensor (without it the carrier lever cannot
+override a held throttle, C01); C6 1 nF → 100 nF for shell-sensor glitch
+immunity (F31).
+
+---
+
 ## 2026-08-02 — Firmware implementation started; host core green
 
 **Decided.** Final pre-code verification passed (21/21 numeric checks: mask

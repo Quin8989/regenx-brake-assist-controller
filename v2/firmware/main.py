@@ -1,82 +1,51 @@
-# main.py — boot, wiring, core 1 launch, the 100 Hz loop. Target-only.
+# main.py — wiring, core 1 launch, the fixed-rate 100 Hz loop. Target only.
 #
-# Boot philosophy (RGX-2-003 §3): if anything here fails, the safe state is
-# "no commands" — A1's 200 ms app timeout releases the motor without our
-# help. The top-level guard therefore never tries to be clever.
+# Failure policy is the hardware's: if this script dies before the WDT is
+# armed the Pico sits at the REPL and A1's 200 ms UART timeout releases the
+# motor; after that the 2 s WDT reboots it. Either way the motor gets 0 A,
+# so no exception handling is needed here.
 
+import os
+
+if "nomain" in os.listdir("/"):     # bench escape for tools/deploy.sh
+    raise SystemExit
+
+import _thread
 import gc
 import time
-import _thread
 
-import machine
-from machine import UART, Pin, WDT
+from machine import UART, WDT, Pin
 
-import config
+import config as C
 import control
 import sensors
 import strategy
 import ui
 import vesc
 
+uart = UART(C.UART_ID, baudrate=C.UART_BAUD, tx=Pin(C.PIN_UART_TX),
+            rx=Pin(C.PIN_UART_RX), rxbuf=C.UART_RXBUF, timeout=0)
+loop = control.Control(vesc.Link(uart), sensors.Sensors(), strategy.Placeholder())
+sn = loop.sn
+_thread.start_new_thread(ui.Core1(sn).run, ())
+wdt = WDT(timeout=C.WDT_MS)
 
-def build():
-    uart = UART(config.UART_ID, baudrate=config.UART_BAUD,
-                tx=Pin(config.PIN_UART_TX), rx=Pin(config.PIN_UART_RX),
-                rxbuf=config.UART_RXBUF, txbuf=config.UART_TXBUF,
-                timeout=0)
-    link = vesc.VescLink(uart, config)
-    bank = sensors.SensorBank()
-    loop = control.ControlLoop(link, bank, strategy.Placeholder())
-    return loop
-
-
-def run():
-    loop = build()
-    core1 = ui.Core1(loop.snapshot)
-    _thread.start_new_thread(core1.run, ())
-
-    # INIT: fw handshake (state machine exits INIT on first fw + telemetry)
-    loop.link.request_fw()
-
-    wdt = WDT(timeout=config.WDT_MS) if config.WDT_ENABLE else None
-    gc.collect()
-    gc.disable()                      # collections are scheduled, not random
-
-    tick = 0
-    next_ms = time.ticks_add(time.ticks_ms(), config.TICK_MS)
-    while True:
-        if wdt:
-            wdt.feed()
-        t0 = time.ticks_us()
-        now = time.ticks_ms()
-
-        loop.tick(now)
-
-        tick += 1
-        if tick % config.GC_DIV == 0:
-            g0 = time.ticks_us()
-            gc.collect()
-            g_ms = time.ticks_diff(time.ticks_us(), g0) / 1000.0
-            if g_ms > loop.gc_max_ms:
-                loop.gc_max_ms = g_ms
-
-        # fixed-rate alignment: a late tick is counted, never stretched
-        if time.ticks_diff(time.ticks_us(), t0) > (config.TICK_MS - 1) * 1000:
-            loop.deadline_miss += 1
-        while time.ticks_diff(next_ms, time.ticks_ms()) > 0:
-            time.sleep_ms(1)
-        next_ms = time.ticks_add(next_ms, config.TICK_MS)
-        # if we fell behind, realign instead of bursting
-        if time.ticks_diff(time.ticks_ms(), next_ms) > 0:
-            next_ms = time.ticks_add(time.ticks_ms(), config.TICK_MS)
-
-
-try:
-    run()
-except Exception as e:  # last resort: leave the motor to A1's timeout
-    try:
-        import sys
-        sys.print_exception(e)
-    except Exception:
-        pass
-    machine.reset() if config.WDT_ENABLE else None
+n = 0
+due = time.ticks_ms()
+while True:
+    wdt.feed()
+    t0 = time.ticks_us()
+    loop.tick()
+    n += 1
+    if n % C.GC_DIV == 0:
+        gc.collect()                # scheduled, so pauses land in known slots
+    t = time.ticks_diff(time.ticks_us(), t0)
+    if t > sn[control.SN_TMAX]:
+        sn[control.SN_TMAX] = t     # worst tick incl. GC, us (gate FW-2)
+    due = time.ticks_add(due, C.TICK_MS)
+    wait = time.ticks_diff(due, time.ticks_ms())
+    if wait > 0:
+        time.sleep_ms(wait)
+    else:                           # late: count it and realign, never burst
+        sn[control.SN_MISS] += 1
+        due = time.ticks_ms()

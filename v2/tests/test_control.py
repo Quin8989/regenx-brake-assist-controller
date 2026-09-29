@@ -1,200 +1,199 @@
-import array
+import math
 
-import config
+import pytest
+
+import config as C
 import control
 import strategy
-import vesc
-from conftest import FakeUART, FakeSensors, make_frame, selective_payload, \
-    fw_payload
+from conftest import Rig, last_current, rotor_erpm
+from control import envelope, slip
+
+W = 150.0          # wheel rpm, ~19 km/h
 
 
-def make_loop(strat=None):
-    uart = FakeUART()
-    link = vesc.VescLink(uart, config)
-    sensors = FakeSensors()
-    loop = control.ControlLoop(link, sensors, strat or strategy.Placeholder())
-    return loop, uart, link, sensors
+# --- slip --------------------------------------------------------------------
+def test_slip_follows_the_plant():
+    assert slip(rotor_erpm(W, 1.0), W) == 1.0     # coasting: rotor parked
+    assert slip(rotor_erpm(W, 0.0), W) == 0.0     # carrier held
+    assert slip(rotor_erpm(W, 0.4), W) == pytest.approx(0.4)
+    assert slip(rotor_erpm(W, 0.0), C.W_MIN_RPM - 1) == 1.0   # too slow to tell
 
 
-def feed_telem(uart, link, now, **kw):
-    uart.inject(make_frame(selective_payload(config.TELEM_MASK, **kw)))
-    link.poll(now)
+# --- envelope ------------------------------------------------------------------
+def test_slew_limits_the_request():
+    assert envelope(40.0, 0.0, 25.0, 0.0, W, False) == C.SLEW_STEP_A
+    assert envelope(-40.0, 0.0, 25.0, 0.0, W, False) == -C.SLEW_STEP_A
 
 
-def goto_run(loop, uart, link, now=0):
-    uart.inject(make_frame(fw_payload()))
-    feed_telem(uart, link, now, v_in=20.0)
-    loop.tick(now)
-    assert loop.state == control.RUN
-    return now
+def test_clamps_act_in_the_same_tick():
+    # bank at the terminal limit: regen goes to 0 at once, not at the slew rate
+    assert envelope(-30.0, -30.0, C.V_TERM_MAX, 0.0, W, False) == 0.0
+    # lever pulled: assist goes to 0 at once
+    assert envelope(30.0, 30.0, 25.0, 0.0, W, True) == 0.0
+    # below W_MIN_RPM: no regen (it would back the wheel up)
+    assert envelope(-30.0, -30.0, 25.0, 0.0, C.W_MIN_RPM - 1, False) == 0.0
 
 
-# --- envelope ----------------------------------------------------------------
-def big_dt():
-    return 10.0  # seconds: disables the slew term in envelope unit tests
+def test_regen_cap_uses_open_circuit_voltage():
+    # 10 A of regen lifts the terminal by I*R; the cap must not mistake that
+    # for a full bank (v_oc = 38.5 - 3.67 = 34.8 V -> cap 11.4 A)
+    assert envelope(-10.0, -10.0, 38.5, -10.0, W, False) == -10.0
 
 
-def test_envelope_taper_midpoint():
-    # at 39 V the 38->40 taper halves regen
-    out = control.envelope(-20.0, 39.0, 10.0, False, True, -20.0, big_dt())
-    assert abs(out + 10.0) < 1e-6
+def test_assist_floor_protects_a1_supply():
+    cap = (10.0 - C.V_TERM_MIN) / C.R_BANK
+    assert envelope(30.0, 30.0, 10.0, 0.0, W, False) == pytest.approx(cap)
+    assert envelope(30.0, 30.0, C.V_TERM_MIN, 0.0, W, False) == 0.0
 
 
-def test_envelope_full_bank_zeroes_regen():
-    out = control.envelope(-20.0, 40.0, 10.0, False, True, -20.0, big_dt())
-    assert out == 0.0
+def test_caps_never_flip_the_sign():
+    assert envelope(-30.0, -30.0, 45.0, 0.0, W, False) == 0.0
+    assert envelope(30.0, 30.0, 5.0, 0.0, W, False) == 0.0
 
 
-def test_envelope_crossover_guard():
-    # bank nearly full + above crossover speed -> regen forced to zero
-    out = control.envelope(-20.0, 39.5, 29.0, False, True, -20.0, big_dt())
-    assert out == 0.0
-    # same bank voltage, slow -> only tapered, not zeroed
-    out2 = control.envelope(-20.0, 39.5, 20.0, False, True, -20.0, big_dt())
-    assert out2 < 0.0
+@pytest.mark.parametrize("r_true", [0.187, 0.27, 0.367])
+def test_full_bank_settles_below_the_ov_trip(r_true):
+    # closed loop against a bank with unknown ESR and one tick of telemetry
+    # delay: the terminal must settle at or under V_TERM_MAX without cycling
+    v_oc, i, seen = 38.0, 0.0, (38.0, 0.0)
+    trace = []
+    for _ in range(300):
+        i = envelope(-40.0, i, seen[0], seen[1], W, False)
+        v_in = v_oc - i * r_true                  # regen (i < 0) lifts the terminal
+        seen = (v_in, i)                          # A1 reports i_in = i here
+        v_oc += -i * 0.01 / 6.67                  # bank charges
+        trace.append(v_in)
+    assert max(trace) <= C.V_TERM_MAX + C.SLEW_STEP_A * r_true + 1e-6
+    tail = trace[-50:]
+    assert max(tail) - min(tail) < 0.05
 
 
-def test_envelope_caps():
-    assert control.envelope(500.0, 20.0, 10.0, False, False, 500.0,
-                            big_dt()) == config.I_ASSIST_MAX_A
-    assert control.envelope(-500.0, 20.0, 10.0, False, True, -500.0,
-                            big_dt()) == -config.I_REGEN_MAX_A
+# --- the loop, driven through the plant ------------------------------------------
+def test_boot_commands_nothing_until_the_link_is_clean():
+    r = Rig()
+    for _ in range(C.LINK_RECOVER_FRAMES - 1):
+        assert r.step(wheel=W, s=0.0, thr=0.5) == 0.0
+        assert r.state == control.LIMP_LINK
+    assert r.step(wheel=W, s=0.0, thr=0.5) > 0.0     # no FW handshake needed
+    assert r.state == control.RUN
 
 
-def test_envelope_slew_limit():
-    dt = 0.01
-    out = control.envelope(40.0, 20.0, 10.0, False, False, 0.0, dt)
-    assert abs(out - config.SLEW_A_PER_S * dt) < 1e-9
+def test_assist_stays_assist_with_the_carrier_held(rig):
+    # review F02: s = 0 during assist too; the throttle must win
+    rig.boot()
+    for _ in range(40):
+        i = rig.step(wheel=W, s=0.0, thr=0.5)
+    assert i == pytest.approx(C.I_ASSIST_MAX * 0.5)
+    assert last_current(rig.uart.tx) > 0 and rig.link.erpm > 0    # motoring
 
 
-def test_envelope_brake_wins_over_assist():
-    assert control.envelope(30.0, 20.0, 10.0, False, True, 30.0,
-                            big_dt()) == 0.0
+def test_braking_regenerates(rig):
+    # review F01: with the carrier held the rotor turns forward (+ERPM) and
+    # regen is negative current, so the VESC generates instead of motoring
+    rig.boot()
+    for _ in range(40):
+        i = rig.step(wheel=W, s=0.1)
+    assert i < -10.0
+    assert last_current(rig.uart.tx) < 0 and rig.link.erpm > 0     # generating
 
 
-def test_envelope_throttle_failed_no_assist():
-    assert control.envelope(30.0, 20.0, 10.0, True, False, 30.0,
-                            big_dt()) == 0.0
-    # regen unaffected by throttle failure
-    assert control.envelope(-10.0, 20.0, 10.0, True, True, -10.0,
-                            big_dt()) < 0.0
+def test_coasting_commands_nothing(rig):
+    rig.boot()
+    for _ in range(20):
+        assert rig.step(wheel=W, s=1.0) == 0.0
 
 
-# --- state machine -----------------------------------------------------------
-def test_init_to_run_requires_fw_and_telemetry():
-    loop, uart, link, sensors = make_loop()
-    loop.tick(0)
-    assert loop.state == control.INIT
-    goto_run(loop, uart, link, 10)
+def test_throttle_loss_keeps_regen(rig):
+    # review F03: a dead throttle reads 0 (sensors.Throttle); that only stops
+    # assist, the loop stays in RUN and braking still regenerates
+    rig.boot()
+    for _ in range(20):
+        rig.step(wheel=W, s=0.0, thr=0.5)
+    for _ in range(40):
+        i = rig.step(wheel=W, s=0.1, thr=0.0)
+    assert rig.state == control.RUN and i < -10.0
 
 
-def test_link_timeout_limps_and_recovers():
-    loop, uart, link, sensors = make_loop()
-    goto_run(loop, uart, link, 0)
-    t = config.LINK_TIMEOUT_MS + 50
-    loop.tick(t)
-    assert loop.state == control.LIMP and loop.reason == control.R_LINK
-    assert loop.i_cmd == 0.0
-    # recovery: enough fresh frames
-    for i in range(config.LINK_RECOVER_FRAMES + 1):
-        t += 10
-        feed_telem(uart, link, t, v_in=20.0)
-        loop.tick(t)
-    assert loop.state == control.RUN
+def test_lever_wins_over_throttle(rig):
+    rig.boot()
+    for _ in range(20):
+        rig.step(wheel=W, s=0.0, thr=0.5)
+    assert rig.step(wheel=W, s=0.0, thr=0.5, brake=True) == 0.0    # assist cut at once
+    assert rig.step(wheel=W, s=0.0, thr=0.5, brake=True) < 0.0     # then regen ramps
 
 
-def test_strategy_exception_latches_limp():
-    class Bomb(strategy.Strategy):
-        """Behaves on the first call (so INIT->RUN survives), then raises."""
-        def __init__(self):
-            self.calls = 0
-
-        def update(self, *a):
-            self.calls += 1
-            if self.calls > 1:
-                raise ValueError("boom")
-            return 0.0
-
-    loop, uart, link, sensors = make_loop(Bomb())
-    goto_run(loop, uart, link, 0)
-    loop.tick(10)
-    assert loop.state == control.LIMP
-    assert loop.reason == control.R_STRATEGY
-    # stays latched even with a healthy link
-    for i in range(50):
-        feed_telem(uart, link, 20 + i * 10, v_in=20.0)
-        loop.tick(20 + i * 10)
-    assert loop.state == control.LIMP
+def test_link_silence_zeroes_at_once_and_recovers(rig):
+    rig.boot()
+    for _ in range(20):
+        rig.step(wheel=W, s=0.0, thr=0.5)
+    for _ in range(C.LINK_TIMEOUT_TICKS):
+        assert rig.step(wheel=W, s=0.0, thr=0.5, reply=False) > 0.0
+    assert rig.step(wheel=W, s=0.0, thr=0.5, reply=False) == 0.0
+    assert rig.state == control.LIMP_LINK
+    n = len(rig.uart.tx)
+    rig.step(reply=False)
+    assert len(rig.uart.tx) > n                        # keepalive continues at 0 A
+    assert last_current(rig.uart.tx) == 0.0
+    for _ in range(C.LINK_RECOVER_FRAMES):
+        i = rig.step(wheel=W, s=0.0, thr=0.5)
+    assert rig.state == control.RUN and i == C.SLEW_STEP_A    # ramps from 0
 
 
-def test_vesc_fault_limps_until_clear():
-    loop, uart, link, sensors = make_loop()
-    goto_run(loop, uart, link, 0)
-    feed_telem(uart, link, 10, v_in=20.0, fault=3)
-    loop.tick(10)
-    assert loop.state == control.LIMP
-    assert loop.reason == control.R_VESC_FAULT
-    feed_telem(uart, link, 20, v_in=20.0, fault=0)
-    loop.tick(20)
-    assert loop.state == control.RUN
+def test_vesc_fault_limps_until_ten_clean_frames(rig):
+    rig.boot()
+    rig.step(wheel=W, s=0.0, thr=0.5, fault=5)
+    assert rig.state == control.LIMP_FAULT and rig.loop.i == 0.0
+    for _ in range(C.LINK_RECOVER_FRAMES - 1):
+        rig.step(wheel=W, s=0.0, thr=0.5)
+        assert rig.state != control.RUN
+    rig.step(wheel=W, s=0.0, thr=0.5)
+    assert rig.state == control.RUN
 
 
-def test_limp_commands_zero_on_wire():
-    loop, uart, link, sensors = make_loop()
-    goto_run(loop, uart, link, 0)
-    sensors.thr = 0.5
-    loop.tick(10)
-    assert loop.i_cmd > 0.0
-    loop.tick(config.LINK_TIMEOUT_MS + 100)      # LIMP via silence
-    assert loop.i_cmd == 0.0
-    n = len(uart.tx)
-    loop.tick(config.LINK_TIMEOUT_MS + 110)      # keepalive continues at 0 A
-    assert len(uart.tx) > n
+class _Raises(strategy.Strategy):
+    def update(self, *a):
+        raise ValueError("boom")
 
 
-# --- integration: placeholder strategy through the loop ----------------------
-def test_assist_flows_and_snapshot_publishes():
-    loop, uart, link, sensors = make_loop()
-    goto_run(loop, uart, link, 0)
-    sensors.thr = 0.5
-    sensors.rpm = 100.0
-    t = 0
-    for i in range(30):
-        t += 10
-        feed_telem(uart, link, t, v_in=20.0, erpm=1000)
-        loop.tick(t)
-    assert loop.i_cmd > 5.0
-    dst = array.array("f", [0.0] * control.SN_LEN)
-    loop.snapshot.read(dst)
-    assert abs(dst[control.SN_ICMD] - loop.i_cmd) < 1e-6
-    assert dst[control.SN_STATE] == control.RUN
-    assert dst[control.SN_VBANK] == 20.0
+class _NaN(strategy.Strategy):
+    def update(self, *a):
+        return math.nan
 
 
-def test_regen_ramps_when_carrier_dragged():
-    loop, uart, link, sensors = make_loop()
-    goto_run(loop, uart, link, 0)
-    sensors.rpm = 150.0                     # riding
-    # carrier being held: motor counter-rotating near lock
-    erpm = int(-config.K_RATIO * 150.0 * config.POLE_PAIRS * 0.9)
-    t = 0
-    for i in range(30):
-        t += 10
-        feed_telem(uart, link, t, v_in=20.0, erpm=erpm)
-        loop.tick(t)
-    assert loop.i_cmd < -1.0                # regen commanded
+@pytest.mark.parametrize("strat", [_Raises(), _NaN()])
+def test_bad_strategy_latches_dead(strat):
+    r = Rig(strat)
+    for _ in range(C.LINK_RECOVER_FRAMES):
+        r.step(wheel=W, s=0.0, thr=0.5)
+    assert r.state == control.DEAD and r.loop.i == 0.0
+    for _ in range(50):
+        assert r.step(wheel=W, s=0.0, thr=0.5) == 0.0
+    assert r.state == control.DEAD
 
 
-def test_snapshot_seqlock_versioning():
-    sn = control.Snapshot()
-    src = array.array("f", [float(i) for i in range(control.SN_LEN)])
-    sn.write(src)
-    assert sn.version % 2 == 0
-    dst = array.array("f", [0.0] * control.SN_LEN)
-    sn.read(dst)
-    assert list(dst) == [float(i) for i in range(control.SN_LEN)]
-    src[0] = 99.0
-    sn.write(src)
-    sn.read(dst)
-    assert dst[0] == 99.0
-    assert sn.version == 4
+def test_strategy_reset_on_every_entry_to_run():
+    class Counting(strategy.Placeholder):
+        resets = 0
+
+        def reset(self):
+            self.resets += 1
+
+    strat = Counting()
+    r = Rig(strat)
+    r.boot()
+    for _ in range(C.LINK_TIMEOUT_TICKS + 1):
+        r.step(reply=False)
+    r.boot()
+    assert strat.resets == 2
+
+
+def test_snapshot_publishes_the_tick(rig):
+    rig.boot()
+    for _ in range(30):
+        rig.step(wheel=W, s=0.0, thr=0.5, v_in=31.5, temp=40.0)
+    sn = rig.loop.sn
+    assert sn[control.SN_ICMD] == pytest.approx(rig.loop.i)
+    assert sn[control.SN_VIN] == pytest.approx(31.5)
+    assert sn[control.SN_WHEEL] == W
+    assert sn[control.SN_TFET] == pytest.approx(40.0)
+    assert sn[control.SN_STATE] == control.RUN

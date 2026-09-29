@@ -1,36 +1,37 @@
 # strategy.py — the deferred control law's socket (RGX-2-003 D10).
 #
-# The real law is the output of the scoring work; it must implement update()
-# with this exact signature and be pure (no allocation, no I/O). Everything
-# here is replaceable scaffolding — ride-able, deliberately not the product.
+# The real law comes out of the scoring work. It implements update() with this
+# signature, stays pure, and may raise: control.py turns any exception or
+# out-of-range return into DEAD (0 A until power cycle). The envelope clamps
+# whatever it returns, so a strategy never needs its own safety checks.
 
-import config
+import config as C
 
 
 class Strategy:
     """Contract. + amps = assist, - amps = regen."""
+
+    def reset(self):
+        """Called on every entry to RUN (boot, after LIMP): drop stale state."""
 
     def update(self, s, omega_wheel, v_bank, throttle, brake, i_motor, dt):
         raise NotImplementedError
 
 
 class Placeholder(Strategy):
-    """Minimal proportional scaffold.
+    """Ride-able scaffold, deliberately not the product.
 
-    Assist: throttle maps linearly to assist current.
-    Regen:  when the lever is present it announces intent instantly (D9);
-            otherwise slip departure from freewheel (s dropping below ~0.97)
-            reveals the rider dragging the carrier. Current rises as the
-            carrier is held harder: I = I_max * (1 - s).
-    The safety envelope in control.py clamps everything after this.
+    The lever (when fitted) and a held carrier with the throttle released both
+    mean braking; regen grows as the carrier is held harder, I = Imax (1 - s).
+    Slip alone cannot mean braking while the throttle is open, because the
+    clutch holds the carrier during assist as well (s = 0 in both).
+    Regenerating when the rider is not braking is harmless: with the carrier
+    free the motor has nothing to push against and only slows its own rotor.
     """
 
     REGEN_ONSET_S = 0.97
 
     def update(self, s, omega_wheel, v_bank, throttle, brake, i_motor, dt):
-        braking = brake or (omega_wheel > 30.0 and s < self.REGEN_ONSET_S)
-        if braking:
-            return -config.I_REGEN_MAX_A * (1.0 - s)
-        if throttle > 0.0:
-            return config.I_ASSIST_MAX_A * throttle
-        return 0.0
+        if brake or (throttle == 0.0 and s < self.REGEN_ONSET_S):
+            return -C.I_REGEN_MAX * (1.0 - s)
+        return C.I_ASSIST_MAX * throttle

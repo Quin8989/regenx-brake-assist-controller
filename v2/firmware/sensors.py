@@ -1,136 +1,123 @@
-# sensors.py — PIO wheel-speed capture, throttle validation, brake, VSYS.
+# sensors.py — wheel speed (PIO), throttle, brake, VSYS. Spec §10.1-10.3.
 #
-# Hardware-facing; imports are guarded so the module *imports* under CPython
-# (classes then require injected fakes — see tests). Spec §10.1-10.3,
-# RGX-2-003 §7.
+# Wheel and Throttle take their hardware object as an argument, so the logic
+# runs under CPython with fakes. Only Sensors() touches machine/rp2.
 
-import config
-import kinematics
-
-try:
-    import rp2
-    from machine import Pin, ADC
-    _ON_TARGET = True
-except ImportError:
-    _ON_TARGET = False
+import config as C
 
 
-if _ON_TARGET:
-    # Period capture: two symmetric 2-cycle loops count the high phase and
-    # the low phase between edges; each phase count is pushed (inverted x).
-    # At 2 MHz PIO clock every loop iteration is exactly 1 us. §7.1 / D-PIO.
-    @rp2.asm_pio()
-    def _period_pio():
-        wrap_target()
-        mov(x, invert(null))          # x = 0xFFFFFFFF
-        label("high")
-        jmp(pin, "high_cont")         # 1 cycle
-        jmp("high_done")
-        label("high_cont")
-        jmp(x_dec, "high")            # 1 cycle -> 2 per iteration
-        label("high_done")
-        mov(isr, invert(x))
-        push(noblock)
-        mov(x, invert(null))
-        label("low")
-        jmp(pin, "low_done")          # 1 cycle
-        jmp(x_dec, "low")             # 1 cycle -> 2 per iteration
-        label("low_done")
-        mov(isr, invert(x))
-        push(noblock)
-        wrap()
+class Wheel:
+    """Wheel rpm from the PIO phase lengths (us), one read per tick.
 
+    Every high and every low phase arrives as its own word, so any two
+    consecutive phases make a full period and the estimate refreshes at each
+    edge. A phase shorter than SPD_MIN_PHASE_US is a glitch (or the counter
+    running out after 71 min) and restarts the pairing. Between edges the
+    estimate is capped by the time since the last edge, so it decays while
+    braking instead of holding a stale period, and reads 0 once stopped.
+    """
 
-class WheelSpeed:
-    """Drain the PIO FIFO each tick; pair high+low phase counts into a full
-    period. Zero-speed by timeout (a stopped wheel emits nothing)."""
+    def __init__(self, sm):
+        self.sm = sm
+        self.rpm = 0.0
+        self._prev = 0
+        self._age = 0
 
-    _US_PER_COUNT = 1.0  # 2 cycles @ 2 MHz
-
-    def __init__(self):
-        if not _ON_TARGET:
-            raise RuntimeError("WheelSpeed is target-only; inject a fake")
-        pin = Pin(config.PIN_SPD, Pin.IN, Pin.PULL_UP)  # spec §10.2
-        self._sm = rp2.StateMachine(0, _period_pio, freq=2_000_000,
-                                    in_base=pin, jmp_pin=pin)
-        self._sm.active(1)
-        self._pending = -1          # first-of-pair phase count
-        self._period_us = 0.0
-        self._last_edge_ms = -config.SPD_ZERO_MS
-        self._rpm = 0.0
-
-    def _push_period(self, us, now_ms):
-        if us < config.SPD_MIN_PERIOD_US:      # >60 km/h equiv = noise
-            return
-        self._period_us = us
-        self._last_edge_ms = now_ms
-        self._rpm = kinematics.wheel_rpm_from_period_us(us)
-
-    def wheel_rpm(self, now_ms):
-        sm = self._sm
+    def read(self):
+        sm = self.sm
         while sm.rx_fifo():
-            count = sm.get()
-            if self._pending < 0:
-                self._pending = count
-            else:
-                self._push_period((self._pending + count)
-                                  * self._US_PER_COUNT, now_ms)
-                self._pending = -1
-        if now_ms - self._last_edge_ms > config.SPD_ZERO_MS:
-            self._rpm = 0.0
-        return self._rpm
+            ph = sm.get()
+            if ph < C.SPD_MIN_PHASE_US:
+                self._prev = 0
+                continue
+            if self._prev:
+                self.rpm = C.SPD_K / (self._prev + ph)
+            self._prev = ph
+            self._age = 0
+        self._age += 1
+        cap = C.SPD_K / (self._age * C.TICK_MS * 1000)
+        if self.rpm > cap:
+            if cap > C.SPD_MIN_RPM:
+                self.rpm = cap
+            else:                       # stopped: next start pairs fresh phases
+                self.rpm = 0.0
+                self._prev = 0
+        return self.rpm
 
 
 class Throttle:
-    """ADC0, median-of-3, spec §10.3 window with 50 ms fail persistence."""
+    """0..1 with deadband, or 0 when not trustworthy (spec §10.3).
+
+    Out of the [THR_LO, THR_HI] window (open wire reads 0 V through R2, a
+    short reads rail) the throttle simply reads 0: assist stops, regen is
+    untouched, and there is no fault state to manage. Assist arms only once
+    the throttle has been seen at idle, so a held or stuck throttle at
+    power-on gives nothing.
+    """
+
+    def __init__(self, adc):
+        self.adc = adc
+        self.armed = False
+
+    def read(self):
+        f = self.adc.read_u16() / 65535
+        if not C.THR_LO < f < C.THR_HI:
+            return 0.0
+        t = (f - C.THR_IDLE) / (C.THR_FULL - C.THR_IDLE)
+        if t < C.THR_DEADBAND:
+            self.armed = True
+            return 0.0
+        if not self.armed:
+            return 0.0
+        t = (t - C.THR_DEADBAND) / (1.0 - C.THR_DEADBAND)
+        return t if t < 1.0 else 1.0
+
+
+class Sensors:
+    """The bundle control.py consumes. Target only."""
 
     def __init__(self):
-        if not _ON_TARGET:
-            raise RuntimeError("Throttle is target-only; inject a fake")
-        self._adc = ADC(config.ADC_THROTTLE)
-        self._s = [0, 0, 0]
-        self._i = 0
-        self._bad_since = -1
-        self.failed = False
+        import rp2
+        from machine import ADC, Pin
 
-    def throttle(self, now_ms):
-        self._s[self._i] = self._adc.read_u16()
-        self._i = (self._i + 1) % 3
-        a, b, c = self._s
-        med = max(min(a, b), min(max(a, b), c))
-        frac = med / 65535.0
-        if frac < config.THROTTLE_LO or frac > config.THROTTLE_HI:
-            if self._bad_since < 0:
-                self._bad_since = now_ms
-            elif now_ms - self._bad_since > config.THROTTLE_FAIL_MS:
-                self.failed = True
-            return 0.0, self.failed
-        self._bad_since = -1
-        self.failed = False
-        span = config.THROTTLE_HI - config.THROTTLE_LO
-        return (frac - config.THROTTLE_LO) / span, False
+        @rp2.asm_pio()
+        def phases():
+            # Push the length of every high and low phase in us (2 cycles per
+            # loop at 2 MHz). Sync to a rising edge first so the first phase
+            # is whole.
+            wait(0, pin, 0)                 # noqa: F821 (PIO assembler names)
+            wait(1, pin, 0)                 # noqa: F821
+            wrap_target()                   # noqa: F821
+            mov(x, invert(null))            # noqa: F821
+            label("hi")                     # noqa: F821
+            jmp(pin, "hi_c")                # noqa: F821
+            jmp("hi_d")                     # noqa: F821
+            label("hi_c")                   # noqa: F821
+            jmp(x_dec, "hi")                # noqa: F821
+            label("hi_d")                   # noqa: F821
+            mov(isr, invert(x))             # noqa: F821
+            push(noblock)                   # noqa: F821
+            mov(x, invert(null))            # noqa: F821
+            label("lo")                     # noqa: F821
+            jmp(pin, "lo_d")                # noqa: F821
+            jmp(x_dec, "lo")                # noqa: F821
+            label("lo_d")                   # noqa: F821
+            mov(isr, invert(x))             # noqa: F821
+            push(noblock)                   # noqa: F821
+            wrap()                          # noqa: F821
 
-
-class SensorBank:
-    """The duck type control.py consumes; wires the concrete sensors."""
-
-    def __init__(self):
-        self._wheel = WheelSpeed()
-        self._throttle = Throttle()
-        self._vsys = ADC(config.ADC_VSYS)
-        if config.BRAKE_FITTED:
-            self._brake = Pin(config.PIN_BRAKE, Pin.IN, Pin.PULL_UP)
-        else:
-            self._brake = None
-
-    def wheel_rpm(self, now_ms):
-        return self._wheel.wheel_rpm(now_ms)
-
-    def throttle(self, now_ms):
-        return self._throttle.throttle(now_ms)
+        spd = Pin(C.PIN_SPD, Pin.IN, Pin.PULL_UP)
+        sm = rp2.StateMachine(0, phases, freq=2_000_000, in_base=spd, jmp_pin=spd)
+        sm.active(1)
+        self.wheel = Wheel(sm)
+        # ADCs built from Pins so MicroPython disables the pad pull-down
+        # (by channel number it stays on and VSYS reads about half).
+        self.throttle = Throttle(ADC(Pin(C.PIN_THR)))
+        self._vsys = ADC(Pin(C.PIN_VSYS))
+        self._brake = Pin(C.PIN_BRAKE, Pin.IN, Pin.PULL_UP) if C.BRAKE_FITTED else None
 
     def brake(self):
-        return (self._brake is not None) and (self._brake.value() == 0)
+        return self._brake is not None and self._brake.value() == 0
 
     def vsys(self):
-        return self._vsys.read_u16() * 3.0 * 3.3 / 65535.0
+        return self._vsys.read_u16() * (3 * 3.3 / 65535)

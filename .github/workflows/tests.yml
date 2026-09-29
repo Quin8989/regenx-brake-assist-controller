@@ -2,23 +2,38 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "claude/**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
-  pytest:
+  v1-legacy:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v1-legacy
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - name: Install deps
-        run: pip install pytest numpy scipy
-      - name: Run v1 tests
-        working-directory: v1-legacy
-        run: python -m pytest -q
-      - name: Run v2 firmware tests
+      - run: pip install pytest numpy scipy
+      - run: python -m pytest -q
+
+  v2:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
         working-directory: v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest mpy-cross
+      - name: Host tests
         run: python -m pytest -q
+      - name: Cross-compile firmware for the RP2040 (MicroPython syntax, viper CRC)
+        working-directory: v2/firmware
+        run: for f in *.py; do mpy-cross -march=armv6m "$f"; done
