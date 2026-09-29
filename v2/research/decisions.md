@@ -13,6 +13,33 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-09-29 — Drawing Rev F, spec Rev E: Pico ground at A1's UART connector
+
+**Decided.** The owner left Rev F to judgement after the link-noise
+discussion (v1 lost the UART on large current steps at every baud rate, which
+points to a ground offset, not timing).
+
+- **U2's ground return lands on the GND pin of A1's UART connector**, not the
+  V− star. A1's UART signals are measured against its logic ground, which
+  reached the star through A1's V− pigtail. That pigtail carries the battery
+  current, so its drop sat between the two grounds. Now U2's single ground
+  path ends at the reference its UART signals use, and carries only U2's own
+  supply current. It is still the only U2 ground path. The star rule (sheet 1
+  NOTE 2, sheet 2 NOTE 1) is now stated for power grounds.
+- **UART_TX, UART_RX, +5V and +5V_RTN run as one twisted bundle**, clear of
+  phase and bank leads (sheet 3 NOTE 9), keeping the signal loop area small.
+- **RS-422 transceivers are not fitted.** Build with this wiring and watch
+  `BAD FRAMES` and `NO LINK` on the display through hard stops and
+  full-throttle steps. Transceivers need no firmware change if that fails.
+- **Sheet 3 NOTE 7 and spec §10 item 6 (VSYS logging) withdrawn**, as queued
+  by RGX-2-003 Rev D.
+- **J1 is M1's single Higo Z910 cable and W1 its splitter**, queued since
+  RGX-2-002 Rev A. J1 pins are unnumbered: Z910 internals vary, so they are
+  continuity-mapped before first power (RGX-2-002 Inspection item 1). All nine
+  Z910 conductors are used, so the G020 has no separate thermistor wire.
+
+---
+
 ## 2026-09-29 — Display current, fault retry and cores (owner answers)
 
 **Decided (owner).**

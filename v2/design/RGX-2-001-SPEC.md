@@ -1,7 +1,10 @@
 # ReGenX v2 — Design Specification
 
-**Document** RGX-2-001 Rev D · **Drawing** RGX-2-100 Rev E · 2026-09-29
+**Document** RGX-2-001 Rev E · **Drawing** RGX-2-100 Rev F · 2026-09-29
 
+Rev E: U2's ground lands on the GND pin of A1's UART connector, and the UART
+and BEC wires run as one twisted bundle (§8). J1 and W1 are M1's single Higo
+Z910 cable and its splitter (§7). §10 item 6 (VSYS logging) withdrawn.
 Rev D: C6 1 → 10 nF (§7). Everything else is unchanged from Rev C.
 
 ---
@@ -443,11 +446,11 @@ No PRECHARGE state. No FAULT contactor state. No sleep state.
 
 | Ref | Description | Specification |
 |---|---|---|
-| M1 | Motor, geared hub | Bafang G020, rear. Single-stage planetary ~5:1. Halls ×3 + shell speed 6 PPR. **No thermal protection fitted** |
+| M1 | Motor, geared hub | Bafang G020, rear. Single-stage planetary ~5:1. Halls ×3 + shell speed 6 PPR. One 9-pin Higo Z910 cable, every pin used: no thermistor conductor. **No thermal protection fitted** |
 | U2 | Assembly, MCU | Raspberry Pi Pico, RP2040. VSYS 1.8–5.5 V, +3V3 ≥300 mA. GPIO 3.3 V, **not 5 V tolerant**, integral Schmitt. ADC 12-bit ref AVDD; ADC3 = VSYS/3 |
-| J1 | Connector, motor sensor | 6-way, M1 supplied. +5 V, GND, H1–H3, SPD |
+| J1 | Connector, motor cable | Higo Z910 9-way, M1 supplied: phases, +5 V, GND, H1–H3, SPD. Pin assignment by continuity map before first power: Z910 internals vary |
 | J2 | Connector, controller hall | JST-PH 6-way. Pin 6 unconnected |
-| W1 | Cable assembly | J1 → J2, 5 conductors through; SPD branched to R6 |
+| W1 | Cable assembly, splitter | Cut Z910 extension. Phases to A1; +5 V, GND, H1–H3 to J2; SPD branched to R6 |
 | R5 | Resistor | 10 kΩ ±5 %, 1/4 W. SPD pull-up to +3V3 |
 | R6 | Resistor | 1 kΩ ±5 %, 1/4 W. Series. Fault injection limit 1.7 mA at 5 V |
 | C6 | Capacitor | 10 nF, ≥50 V, C0G. R6·C6 = 10 µs noise filter; rising edge (R5+R6)·C6 = 110 µs; signal band ≤30 Hz |
@@ -461,7 +464,7 @@ No PRECHARGE state. No FAULT contactor state. No sleep state.
 | C4 | Capacitor | **220 µF ±20 %**, ≥10 V, aluminium electrolytic, **105 °C, ≥2 000 h endurance**. Hold-up 6.8 ms nominal, 5.5 ms at −20 % |
 | C5 | Capacitor | 100 nF, ≥16 V, X7R. Adjacent to U2 VSYS |
 | DS1 | Display | SSD1306 128×64 OLED, I²C 400 kHz, 3.3 V, addr 0x3C, ~20 mA |
-| — | Wire, signal | 24 AWG. SPD twisted with GND; UART twisted pair |
+| — | Wire, signal | 24 AWG. SPD twisted with GND. UART_TX, UART_RX, +5V and +5V_RTN as one twisted bundle |
 
 ---
 
@@ -473,25 +476,29 @@ No PRECHARGE state. No FAULT contactor state. No sleep state.
 | SW+ | S1 | A1 V+, F2 | power, 8 AWG |
 | GND | A1 V− star | BT1 −, C3 −, U1 − | power. 8 AWG C3 − leg; 18 AWG BT1 − leg; 22 AWG U1 − leg |
 | +5V | A1 BEC | U2 VSYS via L1, C4, C5 | power, 22 AWG pair |
-| +5V_RTN | U2 GND | A1 V− star | return, 22 AWG. **Sole U2 ground path** |
+| +5V_RTN | U2 GND | A1 GND pin, UART connector | return, 22 AWG. **Sole U2 ground path** |
 | +3V3 | U2 3V3 out | J3, DS1, R5 | power, 24 AWG |
-| SPD | J1 pin 6 | U2 GP13 via R6 | digital, 5 V at source, 6 PPR, 8–24 Hz |
+| SPD | J1 SPD (white) | U2 GP13 via R6 | digital, 5 V at source, 6 PPR, 8–24 Hz |
 | THR | J3 SIG | U2 GP26 **via R7** | analog, 0–3.3 V |
 | THR_RTN | J3 GND | U2 local signal ground | return, 24 AWG |
 | DS1_RTN | DS1 GND | U2 local signal ground | return, 24 AWG |
 | UART_TX | U2 GP0 via R3 | A1 UART RX | digital 3.3 V, 115200 |
 | UART_RX | A1 UART TX | U2 GP1 via R4 | digital 3.3 V, 115200 |
 | SDA / SCL | U2 GP4 / GP5 | DS1 | I²C 3.3 V, 400 kHz |
-| H1–H3 | J1 pins 3–5 | J2 pins 3–5 | digital 5 V, A1 domain |
+| H1–H3 | J1 H1–H3 | J2 pins 3–5 | digital 5 V, A1 domain |
 | CHG | J4 | BT1 BMS charge input | power, 18 AWG |
 
 Motor speed reaches U2 as ERPM over UART. Bank voltage reaches U2 as `v_in` over
 UART. No divider on either.
 
-**U2's ground reaches the star via the BEC return only.** No separate heavy
-conductor to U2 — that would form a loop around the motor-current path. Signal
-returns (THR_RTN, DS1_RTN) land locally at U2, then to the star through
-+5V_RTN.
+**U2's ground reaches A1 via the BEC return only, landed on the GND pin of
+A1's UART connector.** That pin is the ground A1's UART signals are measured
+against, and no battery current flows between it and U2. Landing at the V−
+star instead would put the drop of A1's V− pigtail, which carries the battery
+current, between the two grounds. No separate heavy conductor to U2 — that
+would form a loop around the motor-current path. Signal returns (THR_RTN,
+DS1_RTN) land locally at U2, then to A1 through +5V_RTN. UART_TX, UART_RX,
++5V and +5V_RTN run as one twisted bundle, clear of phase and bank leads.
 
 Nine U2 pins used, with header positions:
 
@@ -546,7 +553,7 @@ Constraints only. Control law out of scope.
 5. A1 motor-temperature sensing disabled in controller configuration.
 5a. A1 maximum input voltage set to 40 V in controller configuration. This is the
     only element that limits bank voltage at regen currents.
-6. VSYS logged via ADC3.
+6. Withdrawn at Rev E (was VSYS logging). BEC sag is measured on the bench (§11 item 10).
 7. Bank voltage and motor ERPM read from A1 telemetry, not from local sensing.
 8. Regen taper to zero as bank approaches 40 V.
 9. UART RX buffer explicitly sized. No synchronous flash writes while moving.

@@ -8,7 +8,7 @@ except ImportError:  # CPython (host tests)
     def const(x):
         return x
 
-# --- Pins (drawing RGX-2-100 Rev D sheet 3, spec §8) -------------------------
+# --- Pins (drawing RGX-2-100 Rev F sheet 3, spec §8) -------------------------
 PIN_UART_TX = const(0)        # -> A1 UART RX via R3
 PIN_UART_RX = const(1)        # <- A1 UART TX via R4
 PIN_SDA = const(4)            # DS1

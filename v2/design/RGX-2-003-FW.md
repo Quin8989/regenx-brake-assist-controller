@@ -1,6 +1,6 @@
 # ReGenX v2 — Firmware Architecture
 
-**Document** RGX-2-003 **Rev D** · against RGX-2-001 Rev D / RGX-2-100 Rev E /
+**Document** RGX-2-003 **Rev D** · against RGX-2-001 Rev E / RGX-2-100 Rev F /
 RGX-2-002 Rev A · 2026-09-29
 
 Implemented in `v2/firmware/` (host tests in `v2/tests/`). The regen control
@@ -33,7 +33,7 @@ wherever they conflict. Rationale is in `research/decisions.md`, 2026-09-29.
 | Cores | (Rev D) Two, confirmed (owner): core 1 only draws the display, so no display I/O can delay the VESC link. The single-core fallback of D2 stays the fallback, taken only on measured headroom. | — |
 | C-0 | (Rev D) Dropped (owner). Without a log it would only prove the drivetrain, which the bench does from VESC Tool with the wheel off the ground. The Pico always commands current. | D15, gate C-0, B-10, `SEND_CURRENT` |
 | UI | (Rev D) One screen: speed, bank voltage and the motor current A1 measures, then one line per problem while it lasts, most serious first: `NO LINK` or `VESC FAULT n`, `HOT`/`COLD`, `BAD FRAMES`, `LATE TICKS`, `SCREEN ERR`. The last three are counts since power-on. | D14 three pages; Rev C RIDE and status pages |
-| VSYS | (Rev D) Not read. Drawing sheet 3 NOTE 7 and spec §10 item 6 ("VSYS logged via ADC3") are queued for withdrawal at the next drawing and spec revisions. BEC sag is characterised on the bench instead (spec §11 item 10). | Sheet 3 NOTE 7 |
+| VSYS | (Rev D) Not read. Drawing sheet 3 NOTE 7 and spec §10 item 6 ("VSYS logged via ADC3") are withdrawn at drawing Rev F / spec Rev E. BEC sag is characterised on the bench instead (spec §11 item 10). | Sheet 3 NOTE 7 |
 
 **Rev B** restructures the document as a **decision register**: every choice
 lists the alternatives considered, the numbers that decided it, and the
