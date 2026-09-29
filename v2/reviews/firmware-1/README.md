@@ -32,6 +32,13 @@ another check.
 | **Open: measure on a Pico** | F32, F33, F58 (allocation, GC scan, parser speed: gates FW-1/FW-2), C03 |
 | **Open: minor** | C05 (logged `i_in` keeps the VESC sign: + = drawing from the bank) |
 
+**RGX-2-003 Rev D (same day, owner):** the ride log, observer mode (C-0),
+the firmware-version request, the supply-voltage reading, the worst-tick
+metric and the viper CRC were removed. Findings against them no longer apply:
+F11, F13, F14, F23, F25, F42, F43, F44, F45 and C05, the log half of F36,
+F39's worst-tick half, and F58's CRC half. F53 is now fully fixed: the parser
+accepts only the one reply length.
+
 ## Method
 
 **Firmware.** Six independent reviewers each covered one area:

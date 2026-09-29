@@ -5,7 +5,7 @@ import pytest
 
 import config as C
 import vesc
-from conftest import FakeUART, fw_reply, telem
+from conftest import FakeUART, telem
 
 
 def link_with():
@@ -53,39 +53,25 @@ def count(tx, frame):
     return bytes(tx).count(bytes(frame))
 
 
-def test_schedule_keepalive_telemetry_temp_and_fw_retry():
+def test_every_tick_sends_the_command_then_the_request():
     link, u = link_with()
     for _ in range(100):
         link.send(0.0)
     assert bytes(u.tx).count(bytes((2, 5, vesc.COMM_SET_CURRENT))) == 100
-    assert count(u.tx, link._req) + count(u.tx, link._req_t) == 100 // C.TELEM_DIV
-    assert count(u.tx, link._req_t) == 1
-    assert count(u.tx, link._req_fw) == 100 // C.FW_REQ_DIV       # retried
-    feed(link, u, fw_reply(6, 6))
-    assert link.fw == pytest.approx(6.06)
-    n = count(u.tx, link._req_fw)
-    for _ in range(100):
-        link.send(0.0)
-    assert count(u.tx, link._req_fw) == n                         # answered: stops
-
-
-def test_observer_mode_never_commands_current(monkeypatch):
-    monkeypatch.setattr(C, "SEND_CURRENT", False)
-    link, u = link_with()
-    for _ in range(20):
-        link.send(30.0)
-    assert bytes((2, 5, vesc.COMM_SET_CURRENT)) not in bytes(u.tx)
-    assert count(u.tx, link._req) == 10
+    assert count(u.tx, link._req) == 100
+    assert len(u.tx) == 100 * 20
 
 
 # --- decode and link health ------------------------------------------------------
-def test_decode_both_masks():
+def test_reply_is_the_fixed_length_the_parser_expects():
+    assert len(telem()) == vesc._FRAME
+
+
+def test_decode():
     link, u = link_with()
-    feed(link, u, telem(erpm=-7940, v_in=39.4, i_in=-3.5, i_motor=-12.25))
-    assert (link.erpm, link.v_in, link.i_in, link.i_motor, link.fault) == \
-        (-7940.0, pytest.approx(39.4), -3.5, -12.25, 0)
-    feed(link, u, telem(v_in=20.0, temp=71.5))
-    assert link.temp_fet == pytest.approx(71.5) and link.v_in == pytest.approx(20.0)
+    feed(link, u, telem(erpm=-7940, v_in=39.4, i_in=-3.5, temp=-12.5, fault=0))
+    assert (link.erpm, link.v_in, link.i_in, link.temp_fet, link.fault) == \
+        (-7940.0, pytest.approx(39.4), -3.5, -12.5, 0)
 
 
 def test_ok_counts_clean_frames_and_resets_on_fault_or_silence():
@@ -104,12 +90,13 @@ def test_ok_counts_clean_frames_and_resets_on_fault_or_silence():
 
 def test_unknown_opcode_is_ignored():
     link, u = link_with()
-    feed(link, u, bytes(vesc.frame(bytes((36,)) + bytes(16))) + telem(erpm=100))
-    assert link.frames == 1 and link.erpm == 100.0
+    other = bytes(vesc.frame(bytes((36,)) + bytes(vesc._LEN - 1)))   # same length
+    feed(link, u, other + bytes(vesc.frame(bytes((36,)) + bytes(16))) + telem(erpm=100))
+    assert link.ok == 1 and link.erpm == 100.0
 
 
 # --- parser robustness (RGX-2-003 §4; review F06/F26/F35) ------------------------
-GOOD = telem(erpm=1234, v_in=30.0, i_motor=5.5)      # i_motor raw 0x226: holds a 0x02
+GOOD = telem(erpm=1234, v_in=30.0, i_in=5.3)   # i_in raw 0x0212: a false start inside
 
 
 def test_random_chunking_roundtrip():
@@ -123,7 +110,7 @@ def test_random_chunking_roundtrip():
         n = rng.randrange(1, 40)
         feed(link, u, stream[i:i + n])
         i += n
-    assert link.frames == 60 and link.bad == 0
+    assert link.ok == 60 and link.bad == 0
 
 
 @pytest.mark.parametrize("junk", [b"\x02", b"\x02\x14", b"\x02\x50\x00", b"\x02\xc8",
@@ -131,7 +118,7 @@ def test_random_chunking_roundtrip():
 def test_stray_bytes_cost_no_good_frame(junk):
     link, u = link_with()
     feed(link, u, junk + GOOD + GOOD)
-    assert link.frames == 2
+    assert link.ok == 2
 
 
 def test_every_single_bit_flip_is_rejected_and_the_next_frame_survives():
@@ -142,8 +129,8 @@ def test_every_single_bit_flip_is_rejected_and_the_next_frame_survives():
             bad[pos] ^= 1 << bit
             link, u = link_with()
             feed(link, u, bytes(bad) + GOOD)
-            assert link.frames == 1, (pos, bit)
-            assert link.i_motor == 5.5 and link.erpm == 1234.0
+            assert link.ok == 1, (pos, bit)
+            assert link.i_in == pytest.approx(5.3) and link.erpm == 1234.0
 
 
 @pytest.mark.parametrize("seed", range(200))
@@ -151,12 +138,20 @@ def test_garbage_then_the_first_good_frame_is_delivered(seed):
     rng = random.Random(seed)
     link, u = link_with()
     feed(link, u, bytes(rng.randrange(256) for _ in range(rng.randrange(1, 600))))
-    before = link.frames
+    before = link.ok
     feed(link, u, GOOD)
-    assert link.frames == before + 1 and link.erpm == 1234.0
+    assert link.ok == before + 1 and link.erpm == 1234.0
 
 
 def test_truncated_frame_then_good():
     link, u = link_with()
     feed(link, u, GOOD[:8] + GOOD)
-    assert link.frames == 1
+    assert link.ok == 1
+
+
+def test_a_corrupted_reply_counts_as_bad():
+    link, u = link_with()
+    broken = bytearray(GOOD)
+    broken[12] ^= 0x40
+    feed(link, u, bytes(broken) + GOOD)
+    assert link.bad >= 1 and link.ok == 1

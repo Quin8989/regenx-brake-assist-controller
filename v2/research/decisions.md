@@ -13,6 +13,41 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-09-29 — No ride log; the display shows problems (RGX-2-003 Rev D)
+
+**Decided (owner).** The Pico keeps no ride log. On v1, the RAM ring could
+not hold data at a resolution that meant much, and its buffer caused RAM
+trouble. The display is the only output. It shows speed, bank voltage and
+current, and below them one line per problem, only while there is one: no
+link or a VESC fault, A1 too hot or too cold, bad frames, late ticks, display
+errors. A1's FET temperature is checked all the time but shown only outside
+80 °C / −10 °C ([BENCH]). The observer stage C-0 is dropped: without a log it
+would only prove the drivetrain, which the bench does from VESC Tool.
+
+What falls out with it:
+
+- **One telemetry request per tick**, always with temperature (mask
+  `0x8189`, 18-byte reply). The 50 Hz poll, the 1 Hz temperature request and
+  the second reply format are gone, and the slip reading is 10 ms fresher.
+  Motor current is no longer requested: nothing reads it.
+- **The parser accepts only that one reply.** With every frame the same
+  length, a start still waiting for bytes can never be followed by a complete
+  frame, so the Rev C rescan-with-keep logic is unnecessary.
+- **No firmware-version request, VSYS reading, worst-tick metric or viper
+  CRC.** The plain table CRC costs well under 1 ms of the 10 ms tick, and a
+  late tick now shows on the display, so any overrun is visible.
+- **Core 1 only draws the screen.** No flash writes at all, so the XIP stall
+  that shaped D13 no longer exists.
+- **Queued for the next drawing and spec revisions:** withdraw sheet 3 NOTE 7
+  and spec §10 item 6 ("VSYS logged via ADC3"). BEC sag is characterised on
+  the bench (spec §11 item 10).
+
+Production firmware: 814 → 596 lines, 10.3 → 6.9 KB bytecode, 7 → 6 files.
+Rules out: ride logs as tuning input (the slip PI gains are tuned in the sim
+and then by feel), and `tools/decode_log.py`.
+
+---
+
 ## 2026-09-29 — One control law, built in
 
 **Decided.** The regen law is the slip PI, and only the slip PI (owner). It now

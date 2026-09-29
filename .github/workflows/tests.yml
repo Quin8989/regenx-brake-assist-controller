@@ -34,6 +34,6 @@ jobs:
       - run: pip install pytest mpy-cross
       - name: Host tests
         run: python -m pytest -q
-      - name: Cross-compile firmware for the RP2040 (MicroPython syntax, viper CRC)
+      - name: Cross-compile firmware for the RP2040 (MicroPython syntax)
         working-directory: v2/firmware
         run: for f in *.py; do mpy-cross -march=armv6m "$f"; done

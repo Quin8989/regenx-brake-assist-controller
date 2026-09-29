@@ -1,4 +1,4 @@
-# sensors.py — wheel speed, throttle and the Pico's supply voltage.
+# sensors.py — wheel speed and throttle.
 # Specification sections 10.1 to 10.3.
 #
 # Wheel and Throttle take their hardware object as an argument, so the logic
@@ -123,12 +123,8 @@ class Sensors:
         sm = rp2.StateMachine(0, phases, freq=2_000_000, in_base=spd, jmp_pin=spd)
         sm.active(1)
         self.wheel = Wheel(sm)
-        # Build the analog-to-digital converters from Pin objects so
+        # Build the analog-to-digital converter from a Pin object so
         # MicroPython switches off the pin's internal pull-down resistor.
-        # Created from a bare channel number it stays on, and the supply
-        # voltage reads about half its true value.
+        # Created from a bare channel number it stays on and drags the
+        # throttle reading down.
         self.throttle = Throttle(ADC(Pin(C.PIN_THR)))
-        self._vsys = ADC(Pin(C.PIN_VSYS))
-
-    def vsys(self):
-        return self._vsys.read_u16() * (3 * 3.3 / 65535)

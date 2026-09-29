@@ -30,20 +30,16 @@ def run():
     due = time.ticks_ms()
     while True:
         wdt.feed()
-        t0 = time.ticks_us()
         loop.tick()
         n += 1
         if n % C.GC_DIV == 0:
             gc.collect()            # scheduled, so pauses land in known slots
-        t = time.ticks_diff(time.ticks_us(), t0)
-        if t > sn[control.SN_TMAX]:
-            sn[control.SN_TMAX] = t  # worst tick incl. GC, us (gate FW-2)
         due = time.ticks_add(due, C.TICK_MS)
         wait = time.ticks_diff(due, time.ticks_ms())
         if wait > 0:
             time.sleep_ms(wait)
-        else:                       # late: count it and realign, never burst
-            sn[control.SN_MISS] += 1
+        else:                       # late: count it (the display shows it)
+            sn[control.SN_LATE] += 1    # and realign, never burst
             due = time.ticks_ms()
 
 

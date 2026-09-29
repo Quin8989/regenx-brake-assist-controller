@@ -49,23 +49,13 @@ class FakeSensors:
         self.wheel = _Value()
         self.throttle = _Value()
 
-    def vsys(self):
-        return 5.0
-
 
 # --- what A1 sends ----------------------------------------------------------
-def telem(erpm=0.0, v_in=25.0, i_in=0.0, i_motor=0.0, fault=0, temp=None):
+def telem(erpm=0.0, v_in=25.0, i_in=0.0, fault=0, temp=30.0):
     """A COMM_GET_VALUES_SELECTIVE reply frame."""
-    im, ii, e, v = int(i_motor * 100), int(i_in * 100), int(erpm), int(v_in * 10)
-    if temp is None:
-        p = struct.pack(">BIiiihB", 50, vesc.MASK, im, ii, e, v, fault)
-    else:
-        p = struct.pack(">BIhiiihB", 50, vesc.MASK_T, int(temp * 10), im, ii, e, v, fault)
+    p = struct.pack(">BIhiihB", 50, vesc.MASK, round(temp * 10), round(i_in * 100),
+                    int(erpm), round(v_in * 10), fault)
     return bytes(vesc.frame(p))
-
-
-def fw_reply(major=6, minor=6):
-    return bytes(vesc.frame(bytes((0, major, minor)) + b"FSESC4.20\x00"))
 
 
 def rotor_erpm(wheel_rpm, s):

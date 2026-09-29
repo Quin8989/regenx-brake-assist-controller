@@ -1,7 +1,7 @@
 # control.py — the 100 Hz tick: sense, decide, clamp, send, publish.
 #
 # Pure logic, host-testable: collaborators are duck-typed (tests/conftest.py)
-# and nothing here reads a clock. RGX-2-003 §3, D8-D10 (as amended in Rev C).
+# and nothing here reads a clock. RGX-2-003 §3, D8-D10 (as amended in Rev D).
 #
 # States fall out of the link instead of being tracked:
 #   RUN    link.ok >= LINK_RECOVER_FRAMES (clean telemetry, no VESC fault)
@@ -11,13 +11,12 @@ from array import array
 
 import config as C
 
-# snapshot layout: one array('f') shared with core 1. Core 0 is the only
-# writer; a reader may see a mix of two consecutive ticks, which is harmless
-# for display and logging, so no lock or seqlock is needed.
-(SN_WHEEL, SN_ERPM, SN_VIN, SN_IIN, SN_IMOTOR, SN_ICMD, SN_THR, SN_VSYS,
- SN_TFET, SN_STATE, SN_FAULT, SN_FW, SN_FRAMES, SN_BAD, SN_MISS,
- SN_TMAX) = range(16)
-SN_LEN = 16
+# snapshot layout: one array('f') the display on core 1 reads. Core 0 is the
+# only writer; the display may see a mix of two consecutive ticks, which is
+# harmless, so no lock is needed. SN_LATE is written by main.py.
+(SN_WHEEL, SN_VIN, SN_ICMD, SN_TFET, SN_STATE, SN_FAULT, SN_BAD,
+ SN_LATE) = range(8)
+SN_LEN = 8
 
 RUN, LIMP_LINK, LIMP_FAULT = 0, 1, 2
 
@@ -104,17 +103,10 @@ class Control:
 
         sn = self.sn
         sn[SN_WHEEL] = w
-        sn[SN_ERPM] = L.erpm
         sn[SN_VIN] = L.v_in
-        sn[SN_IIN] = L.i_in
-        sn[SN_IMOTOR] = L.i_motor
         sn[SN_ICMD] = i
-        sn[SN_THR] = thr
-        sn[SN_VSYS] = S.vsys()
         sn[SN_TFET] = L.temp_fet
         sn[SN_STATE] = RUN if run else (LIMP_FAULT if L.fault else LIMP_LINK)
         sn[SN_FAULT] = L.fault
-        sn[SN_FW] = L.fw
-        sn[SN_FRAMES] = L.frames
         sn[SN_BAD] = L.bad
         return i

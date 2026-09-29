@@ -15,19 +15,16 @@ PIN_SDA = const(4)            # DS1
 PIN_SCL = const(5)
 PIN_SPD = const(13)           # shell speed sensor via R6, pull-up on
 PIN_THR = const(26)           # ADC0, throttle
-PIN_VSYS = const(29)          # ADC3, VSYS/3 on the plain Pico
 
 # --- VESC link (RGX-2-003 D3-D7) --------------------------------------------
 UART_ID = const(0)
 UART_BAUD = const(115200)
 UART_RXBUF = const(1024)
-SEND_CURRENT = True           # False = C-0 observer: telemetry only, A1's own
-                              # ADC app drives the motor (D15)
 TICK_MS = const(10)           # 100 Hz (D8). The loop is fixed-rate, so control
 DT = TICK_MS / 1000           # never does time arithmetic: timeouts count ticks.
-TELEM_DIV = const(2)          # telemetry request every 2nd tick (50 Hz)
-TEMP_DIV = const(50)          # every 50th request adds FET temp (1 Hz)
-FW_REQ_DIV = const(25)        # re-ask the FW tuple every 250 ms until it arrives
+                              # Each tick sends a current command and a
+                              # telemetry request (20 bytes) and gets a 23-byte
+                              # reply: about 20 % of each wire direction.
 LINK_TIMEOUT_TICKS = const(25)    # 250 ms of silence -> LIMP (D7)
 LINK_RECOVER_FRAMES = const(10)   # consecutive clean frames before RUN
 
@@ -39,7 +36,7 @@ LINK_RECOVER_FRAMES = const(10)   # consecutive clean frames before RUN
 # direction parameter to get wrong.
 K_RATIO = 5.0                 # [BENCH] ring/sun, teardown item 9
 POLE_PAIRS = 10               # [BENCH] spec §11 item 2
-WHEEL_CIRC_M = 2.10           # [BENCH] measure the actual tyre
+WHEEL_CIRC_M = 2.10           # [BENCH] measure the actual tyre (display only)
 SPD_K = 60_000_000 / 6        # rpm x us: wheel rpm = SPD_K / period_us (6 PPR)
 SPD_MIN_PHASE_US = 3000       # shorter half-period = glitch (60 km/h is ~10 ms)
 SPD_MIN_RPM = 10.0            # below ~1.3 km/h the wheel reads 0
@@ -76,16 +73,13 @@ THR_DEADBAND = 0.05           # fraction of span; also where assist arms
 WDT_MS = const(2000)
 GC_DIV = const(10)            # scheduled gc.collect() every N ticks
 
-# --- Logging (RGX-2-003 D13) -------------------------------------------------
-LOG_RECORDS = const(4096)     # x 24 B = 96 KB RAM ring
-LOG_RIDE_MS = const(100)      # 10 Hz while moving
-LOG_IDLE_MS = const(1000)     # 1 Hz at standstill
-STANDSTILL_MS = const(3000)   # still this long before touching flash
-FLUSH_RECORDS = const(170)    # ~4 KB per write: one erase at most
-LOG_DIR = "/logs"
-LOG_MIN_FREE = const(200_000)  # delete oldest rides below this
-
-# --- Display -----------------------------------------------------------------
+# --- Display (RGX-2-003 D14 as amended) ----------------------------------------
 OLED_ADDR = const(0x3C)
 I2C_FREQ = const(400_000)
 DISPLAY_MS = const(200)       # 5 Hz
+TEMP_HOT = 80.0               # [BENCH] A1 transistor temperature, degrees C. A1
+                              # starts cutting current at its own "MOSFET temp
+                              # cutoff start" (85 by default): warn just before.
+TEMP_COLD = -10.0             # [BENCH] at rest this is roughly the air
+                              # temperature. Colder, the bank's resistance rises
+                              # past R_BANK and the voltage limits lose margin.

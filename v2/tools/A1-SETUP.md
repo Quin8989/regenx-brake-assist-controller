@@ -11,7 +11,7 @@ under it (RGX-2-003 D6). Save the final motor and app XML into
 | 2 | LispBM | **Stop and erase** the v1 script | It pushes 100 Hz custom frames that would take ~19 % of the link |
 | 3 | Motor detection | FOC, sensored (halls H1–H3) | Spec §7 |
 | 4 | **Motor direction** | Set *Invert Motor Direction* so that **+2 A (Current test) turns the wheel forward** with the carrier on its clutch (no brake). Then spin the wheel forward with the carrier held and confirm **ERPM > 0**. | The firmware's only sign convention (`config.py`, review F01). With this set there is no `DIR_SIGN` to get wrong. |
-| 5 | App to use | UART, 115200 baud. For C-0 observer rides use "ADC and UART" and set `SEND_CURRENT = False` in `config.py`. | D4, D15. v1's most-missed step. |
+| 5 | App to use | UART, 115200 baud | D4. v1's most-missed step. |
 | 6 | App timeout | 200 ms, timeout brake current 0 A | A dead Pico or cut wire releases the motor in ≤ 0.2 s (D7) |
 | 7 | Motor current max / min | +40 A / −40 A | Matches `I_ASSIST_MAX` / `I_REGEN_MAX` |
 | 8 | Battery current max / min | +40 A / −40 A | Spec §10.4. Set the regen (min) side explicitly. |
