@@ -27,7 +27,8 @@ another check.
 |---|---|
 | **Fixed** | F01 (sign fixed by A1 provisioning; `DIR_SIGN` deleted), F02, F03, F04, F05, F06, F08 (guard removed), F09, F10, F11, F13, F14, F15, F18, F19, F20, F21, F22, F23, F25, F26, F28, F29, F30, F34, F35, F38 (metric removed), F41, F42, F44 (stream removed), F45, F46, F48 and F55 (k cross-check removed), F50, F51, F54, F56, F57, F59, C02, C04 |
 | **Partly** | F16 (`tools/A1-SETUP.md` checklist, no automated provisioning), F31 (µs glitches rejected, partial phases can still read up to ~2× for one or two samples), F36 (Wheel, Throttle and Log host-tested; `main.py` and Core1 target-only), F37, F39 (worst tick incl. GC, and misses), F40 (health counters on every page, no separate LINK page), F43 (brake, state, temperature added), F49, F53 (exact reply lengths), F62, F63 |
-| **Open: needs the owner or hardware** | C01 (fit the lever sensor), F31 residual (C6 1 nF → 100 nF), F17 (VESC fault recovery has no back-off), F27 (slew rate versus the D9 latency budget), F52 (lever debounce and open-wire detection, once fitted) |
+| **Closed by owner decision** | C01 and F52: no lever sensor. Regen is a slip regulator and the throttle ends regen; with the throttle held, the carrier lever cannot brake (accepted) |
+| **Open: needs the owner or hardware** | F31 residual (C6 value: scope the sensor under PWM first, spec §11 item 8), F17 (VESC fault recovery has no back-off), F27 (slew rate versus the D9 latency budget) |
 | **Open: measure on a Pico** | F32, F33, F58 (allocation, GC scan, parser speed: gates FW-1/FW-2), C03 |
 | **Open: minor** | C05 (logged `i_in` keeps the VESC sign: + = drawing from the bank) |
 

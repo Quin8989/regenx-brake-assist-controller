@@ -21,38 +21,36 @@ def test_slip_follows_the_plant():
 
 # --- envelope ------------------------------------------------------------------
 def test_slew_limits_only_the_build_up():
-    assert envelope(40.0, 0.0, 25.0, 0.0, W, False) == C.SLEW_STEP_A
-    assert envelope(-40.0, 0.0, 25.0, 0.0, W, False) == -C.SLEW_STEP_A
-    assert envelope(10.0, 20.0, 25.0, 0.0, W, False) == 10.0      # release: at once
-    assert envelope(0.0, 20.0, 25.0, 0.0, W, False) == 0.0
-    assert envelope(-36.0, 20.0, 25.0, 0.0, W, False) == -C.SLEW_STEP_A   # reversal
-    assert envelope(-10.0, -30.0, 25.0, 0.0, W, False) == -10.0
+    assert envelope(40.0, 0.0, 25.0, 0.0, W) == C.SLEW_STEP_A
+    assert envelope(-40.0, 0.0, 25.0, 0.0, W) == -C.SLEW_STEP_A
+    assert envelope(10.0, 20.0, 25.0, 0.0, W) == 10.0      # release: at once
+    assert envelope(0.0, 20.0, 25.0, 0.0, W) == 0.0
+    assert envelope(-36.0, 20.0, 25.0, 0.0, W) == -C.SLEW_STEP_A   # reversal
+    assert envelope(-10.0, -30.0, 25.0, 0.0, W) == -10.0
 
 
 def test_clamps_act_in_the_same_tick():
     # bank at the terminal limit: regen goes to 0 at once, not at the slew rate
-    assert envelope(-30.0, -30.0, C.V_TERM_MAX, 0.0, W, False) == 0.0
-    # lever pulled: assist goes to 0 at once
-    assert envelope(30.0, 30.0, 25.0, 0.0, W, True) == 0.0
+    assert envelope(-30.0, -30.0, C.V_TERM_MAX, 0.0, W) == 0.0
     # below W_MIN_RPM: no regen (it would back the wheel up)
-    assert envelope(-30.0, -30.0, 25.0, 0.0, C.W_MIN_RPM - 1, False) == 0.0
+    assert envelope(-30.0, -30.0, 25.0, 0.0, C.W_MIN_RPM - 1) == 0.0
 
 
 def test_regen_cap_uses_open_circuit_voltage():
     # 10 A of regen lifts the terminal by I*R; the cap must not mistake that
     # for a full bank (v_oc = 38.5 - 3.67 = 34.8 V -> cap 11.4 A)
-    assert envelope(-10.0, -10.0, 38.5, -10.0, W, False) == -10.0
+    assert envelope(-10.0, -10.0, 38.5, -10.0, W) == -10.0
 
 
 def test_assist_floor_protects_a1_supply():
     cap = (10.0 - C.V_TERM_MIN) / C.R_BANK
-    assert envelope(30.0, 30.0, 10.0, 0.0, W, False) == pytest.approx(cap)
-    assert envelope(30.0, 30.0, C.V_TERM_MIN, 0.0, W, False) == 0.0
+    assert envelope(30.0, 30.0, 10.0, 0.0, W) == pytest.approx(cap)
+    assert envelope(30.0, 30.0, C.V_TERM_MIN, 0.0, W) == 0.0
 
 
 def test_caps_never_flip_the_sign():
-    assert envelope(-30.0, -30.0, 45.0, 0.0, W, False) == 0.0
-    assert envelope(30.0, 30.0, 5.0, 0.0, W, False) == 0.0
+    assert envelope(-30.0, -30.0, 45.0, 0.0, W) == 0.0
+    assert envelope(30.0, 30.0, 5.0, 0.0, W) == 0.0
 
 
 @pytest.mark.parametrize("r_true", [0.187, 0.27, 0.367])
@@ -62,7 +60,7 @@ def test_full_bank_settles_below_the_ov_trip(r_true):
     v_oc, i, seen = 38.0, 0.0, (38.0, 0.0)
     trace = []
     for _ in range(300):
-        i = envelope(-40.0, i, seen[0], seen[1], W, False)
+        i = envelope(-40.0, i, seen[0], seen[1], W)
         v_in = v_oc - i * r_true                  # regen (i < 0) lifts the terminal
         seen = (v_in, i)                          # A1 reports i_in = i here
         v_oc += -i * 0.01 / 6.67                  # bank charges
@@ -95,8 +93,8 @@ def test_braking_regenerates(rig):
     # review F01: with the carrier held the rotor turns forward (+ERPM) and
     # regen is negative current, so the VESC generates instead of motoring
     rig.boot()
-    for _ in range(40):
-        i = rig.step(wheel=W, s=0.1)
+    for _ in range(100):
+        i = rig.step(wheel=W, s=0.0)
     assert i < -10.0
     assert last_current(rig.uart.tx) < 0 and rig.link.erpm > 0     # generating
 
@@ -120,16 +118,9 @@ def test_throttle_loss_keeps_regen(rig):
     rig.boot()
     for _ in range(20):
         rig.step(wheel=W, s=0.0, thr=0.5)
-    for _ in range(40):
-        i = rig.step(wheel=W, s=0.1, thr=0.0)
+    for _ in range(100):
+        i = rig.step(wheel=W, s=0.0, thr=0.0)
     assert rig.state == control.RUN and i < -10.0
-
-
-def test_lever_wins_over_throttle(rig):
-    rig.boot()
-    for _ in range(20):
-        rig.step(wheel=W, s=0.0, thr=0.5)
-    assert rig.step(wheel=W, s=0.0, thr=0.5, brake=True) == -C.SLEW_STEP_A  # at once
 
 
 def test_link_silence_zeroes_at_once_and_recovers(rig):
@@ -170,7 +161,7 @@ class _NaN(strategy.Strategy):
         return math.nan
 
 
-class _BadReset(strategy.Placeholder):
+class _BadReset(strategy.SlipRegulator):
     def reset(self):
         raise RuntimeError("boom")
 
@@ -187,10 +178,11 @@ def test_bad_strategy_latches_dead(strat):
 
 
 def test_strategy_reset_on_every_entry_to_run():
-    class Counting(strategy.Placeholder):
+    class Counting(strategy.SlipRegulator):
         resets = 0
 
         def reset(self):
+            super().reset()
             self.resets += 1
 
     strat = Counting()
@@ -212,3 +204,48 @@ def test_snapshot_publishes_the_tick(rig):
     assert sn[control.SN_WHEEL] == W
     assert sn[control.SN_TFET] == pytest.approx(40.0)
     assert sn[control.SN_STATE] == control.RUN
+
+
+# --- the slip regulator, closed loop ---------------------------------------------
+def band_plant(i_band, seconds, delay_ticks=6, thr_at=None):
+    """Carrier held by a friction band that grips up to i_band worth of motor
+    current: slip grows while regen exceeds the grip and shrinks while it is
+    below (an integrating plant). The regulator sees slip delay_ticks late,
+    as 6 PPR wheel sensing gives it."""
+    st, s, i, seen, trace = strategy.SlipRegulator(), 0.0, 0.0, [1.0] * delay_ticks, []
+    for n in range(int(seconds / C.DT)):
+        thr = 0.5 if thr_at is not None and n * C.DT >= thr_at else 0.0
+        req = st.update(seen[-delay_ticks], W, thr, i, C.DT)
+        i = envelope(req, i, 25.0, 0.0, W)
+        s = min(1.0, max(0.0, s + 0.2 * (-i - i_band) * C.DT))   # fixed carrier inertia
+        seen.append(s)
+        trace.append((s, i))
+    return trace
+
+
+@pytest.mark.parametrize("grip", [8.0, 25.0, 32.0])
+def test_regen_settles_where_the_rider_squeezes(grip):
+    tail = band_plant(grip, 6.0)[-200:]
+    assert all(abs(s - C.SLIP_SET) < 0.01 for s, _ in tail)       # at the allowed slip
+    assert all(abs(-i - grip) < 0.5 for _, i in tail)             # torque = the squeeze
+
+
+def test_a_grip_beyond_the_envelope_just_holds_the_carrier():
+    # the bank cap (38 A at 25 V) binds first: full allowed regen, carrier held
+    tail = band_plant(60.0, 6.0)[-50:]
+    cap = (C.V_TERM_MAX - 25.0) / C.R_BANK
+    assert all(s == 0.0 and abs(-i - cap) < 1e-6 for s, i in tail)
+
+
+def test_the_throttle_ends_regen_at_once():
+    trace = band_plant(25.0, 4.0, thr_at=3.0)
+    n = int(3.0 / C.DT)
+    assert trace[n - 1][1] < -20.0 and trace[n][1] > 0.0
+
+
+def test_no_regen_while_coasting():
+    st = strategy.SlipRegulator()
+    i = 0.0
+    for _ in range(100):
+        i = envelope(st.update(1.0, W, 0.0, i, C.DT), i, 25.0, 0.0, W)
+    assert i == 0.0

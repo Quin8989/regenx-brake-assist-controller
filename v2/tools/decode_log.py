@@ -24,8 +24,7 @@ def records(data):
     k, pp, circ = float(meta["k"]), float(meta["pp"]), float(meta["circ"])
     for off in range(0, len(body) - size + 1, size):
         r = dict(zip(FIELDS, (v / s for v, s in zip(struct.unpack_from(fmt, body, off), SCALE))))
-        flags = int(r["state"])
-        r["state"], r["brake"] = STATES[flags & 3], flags >> 2 & 1
+        r["state"] = STATES[int(r["state"])]
         r["kmh"] = r["wheel_rpm"] * circ * 0.06
         w = r["wheel_rpm"]
         r["slip"] = min(1.0, max(0.0, 1 - r["erpm"] / (pp * k * w))) if w >= W_MIN_RPM else ""

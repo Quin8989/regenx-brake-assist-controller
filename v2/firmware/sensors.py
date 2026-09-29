@@ -1,4 +1,4 @@
-# sensors.py — wheel speed (PIO), throttle, brake, VSYS. Spec §10.1-10.3.
+# sensors.py — wheel speed (PIO), throttle, VSYS. Spec §10.1-10.3.
 #
 # Wheel and Throttle take their hardware object as an argument, so the logic
 # runs under CPython with fakes. Only Sensors() touches machine/rp2.
@@ -116,10 +116,6 @@ class Sensors:
         # (by channel number it stays on and VSYS reads about half).
         self.throttle = Throttle(ADC(Pin(C.PIN_THR)))
         self._vsys = ADC(Pin(C.PIN_VSYS))
-        self._brake = Pin(C.PIN_BRAKE, Pin.IN, Pin.PULL_UP) if C.BRAKE_FITTED else None
-
-    def brake(self):
-        return self._brake is not None and self._brake.value() == 0
 
     def vsys(self):
         return self._vsys.read_u16() * (3 * 3.3 / 65535)

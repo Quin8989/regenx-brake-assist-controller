@@ -15,7 +15,7 @@ import config as C
 import control as K
 
 # ms, wheel rpm x10, erpm/10, v_in x100, i_in x100, i_motor x100, i_cmd x100,
-# throttle x1000, vsys x1000, temp_fet x10, state | brake<<2, fault.
+# throttle x1000, vsys x1000, temp_fet x10, state, fault.
 # Only measurements are logged; slip, speed and k are derived offline
 # (tools/decode_log.py).
 REC_FMT = "<IHhHhhhHHhBB"
@@ -39,7 +39,7 @@ def pack(buf, off, ms, sn):
         _i(sn[K.SN_THR] * 1000, 0, 65535),
         _i(sn[K.SN_VSYS] * 1000, 0, 65535),
         _i(sn[K.SN_TFET] * 10, -32768, 32767),
-        int(sn[K.SN_STATE]) | (4 if sn[K.SN_BRAKE] else 0),
+        int(sn[K.SN_STATE]),
         _i(sn[K.SN_FAULT], 0, 255))
 
 
@@ -50,7 +50,7 @@ def header(fw):
 
 def still(sn):
     """Nothing moving and nothing commanded: safe to stall both cores."""
-    return (sn[K.SN_WHEEL] == 0.0 and sn[K.SN_THR] == 0.0 and not sn[K.SN_BRAKE]
+    return (sn[K.SN_WHEEL] == 0.0 and sn[K.SN_THR] == 0.0
             and -0.1 < sn[K.SN_ICMD] < 0.1 and -100.0 < sn[K.SN_ERPM] < 100.0)
 
 

@@ -26,8 +26,9 @@ bench measurement schedule (spec §11), gated on:
 The firmware exists and is host-tested. Values that need the bench are marked
 `[BENCH]` in `firmware/config.py`. The regen control law is deliberately out of
 scope: it is the output of the scoring work in `../v1-legacy/sim/`, to be
-revamped against v2's sensing model. `strategy.Placeholder` is a ride-able
-scaffold, not that law.
+revamped against v2's sensing model. `strategy.SlipRegulator` holds carrier
+slip at a setpoint with the throttle as the override; its gains are `[BENCH]`
+until the sim tunes them.
 
 ## Research notes index
 

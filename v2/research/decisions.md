@@ -61,9 +61,18 @@ independent re-review of the rewrite found 8 defects, all fixed before merge.
   F14, F23, F25, F42).
 - **C-0 observer mode:** `SEND_CURRENT = False` (F11).
 
-Open for the owner: fit the lever sensor (without it the carrier lever cannot
-override a held throttle, C01); C6 1 nF → 100 nF for shell-sensor glitch
-immunity (F31).
+- **No lever sensor (owner decision).** The brake acts on the carrier, so the
+  system only needs rotor and wheel speed: their ratio is carrier slip, and
+  slip *is* rider intent. The regen law is a slip regulator (`SlipRegulator`,
+  PI toward `SLIP_SET`): regen grows until the rider's brake just slips, so
+  braking torque follows the squeeze. The throttle is the override: any
+  throttle ends regen. Accepted: with the throttle held the carrier lever
+  cannot brake (the clutch already holds the carrier; release the throttle to
+  brake), and regen onset is limited by 6 PPR slip sensing (D9). Rules out
+  GP14 / the D9 lever fast path.
+
+Open: C6 value on the shell-sensor input, decided by scoping the signal with
+the motor under PWM (spec §11 item 8), not by default (F31).
 
 ---
 

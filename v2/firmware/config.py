@@ -16,10 +16,6 @@ PIN_SCL = const(5)
 PIN_SPD = const(13)           # shell speed sensor via R6, pull-up on
 PIN_THR = const(26)           # ADC0, throttle
 PIN_VSYS = const(29)          # ADC3, VSYS/3 on the plain Pico
-PIN_BRAKE = const(14)         # lever sensor, active low (RGX-2-003 D9)
-BRAKE_FITTED = False          # not on drawing Rev D. Without it, pulling the
-                              # carrier lever while holding the throttle is
-                              # indistinguishable from assist (review F-C01).
 
 # --- VESC link (RGX-2-003 D3-D7) --------------------------------------------
 UART_ID = const(0)
@@ -49,6 +45,17 @@ SPD_MIN_PHASE_US = 3000       # shorter half-period = glitch (60 km/h is ~10 ms)
 SPD_MIN_RPM = 10.0            # below ~1.3 km/h the wheel reads 0
 W_MIN_RPM = 24.0              # ~3 km/h: slip undefined and no regen below this
                               # (regen current near standstill backs the wheel up)
+
+# --- Regen: slip regulation ------------------------------------------------
+# The rider's carrier brake sets how much torque the carrier can hold; regen
+# current is driven until the carrier just slips at SLIP_SET, so braking
+# follows the lever and (1 - SLIP_SET) of it is harvested.
+SLIP_SET = 0.12               # [BENCH] allowed slip = pad-loss fraction. 6 PPR
+                              # staleness needs >= 0.10-0.15 (motor-selection §4)
+SLIP_KP = 100.0               # [BENCH] A per unit slip error. The carrier is an
+SLIP_KI = 300.0               # [BENCH] A/s per unit   integrating plant, so I-only
+                              # control limit-cycles; these settle with <= 60 ms of
+                              # slip staleness in a toy plant. Tune in the sim.
 
 # --- Safety envelope (spec §3, §10; RGX-2-003 §3 as amended) -----------------
 I_ASSIST_MAX = 40.0           # A1 battery limit mirror (spec §10.4)

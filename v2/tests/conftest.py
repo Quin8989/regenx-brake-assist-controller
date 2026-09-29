@@ -49,10 +49,6 @@ class FakeSensors:
     def __init__(self):
         self.wheel = _Value()
         self.throttle = _Value()
-        self.brk = False
-
-    def brake(self):
-        return self.brk
 
     def vsys(self):
         return 5.0
@@ -97,14 +93,13 @@ class Rig:
         self.uart = FakeUART()
         self.link = vesc.Link(self.uart)
         self.sensors = FakeSensors()
-        self.loop = control.Control(self.link, self.sensors, strat or strategy.Placeholder())
+        self.loop = control.Control(self.link, self.sensors, strat or strategy.SlipRegulator())
 
-    def step(self, wheel=0.0, s=1.0, thr=0.0, brake=False, reply=True, **kw):
+    def step(self, wheel=0.0, s=1.0, thr=0.0, reply=True, **kw):
         """One tick. The plant sets ERPM from wheel speed and slip unless
         erpm= is given; reply=False simulates a lost telemetry reply."""
         self.sensors.wheel.value = wheel
         self.sensors.throttle.value = thr
-        self.sensors.brk = brake
         if reply:
             kw.setdefault("erpm", rotor_erpm(wheel, s))
             self.uart.inject(telem(**kw))

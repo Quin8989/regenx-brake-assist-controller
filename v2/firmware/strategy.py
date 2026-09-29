@@ -1,9 +1,9 @@
-# strategy.py — the deferred control law's socket (RGX-2-003 D10).
+# strategy.py — the regen law behind the D10 socket.
 #
-# The real law comes out of the scoring work. It implements update() with this
-# signature, stays pure, and may raise: control.py turns any exception or
-# out-of-range return into DEAD (0 A until power cycle). The envelope clamps
-# whatever it returns, so a strategy never needs its own safety checks.
+# A strategy implements update() with this signature, stays pure, and may
+# raise: control.py turns any exception or out-of-range return into DEAD (0 A
+# until power cycle). The envelope clamps whatever it returns, so a strategy
+# needs no safety checks of its own. Gains and setpoint are tuned in the sim.
 
 import config as C
 
@@ -14,24 +14,34 @@ class Strategy:
     def reset(self):
         """Called on every entry to RUN (boot, after LIMP): drop stale state."""
 
-    def update(self, s, omega_wheel, v_bank, throttle, brake, i_motor, dt):
+    def update(self, s, w_rpm, throttle, i_last, dt):
+        """s: carrier slip; i_last: the current actually sent last tick."""
         raise NotImplementedError
 
 
-class Placeholder(Strategy):
-    """Ride-able scaffold, deliberately not the product.
+class SlipRegulator(Strategy):
+    """PI on carrier slip toward SLIP_SET; the throttle ends regen.
 
-    The lever (when fitted) and a held carrier with the throttle released both
-    mean braking; regen grows as the carrier is held harder, I = Imax (1 - s).
-    Slip alone cannot mean braking while the throttle is open, because the
-    clutch holds the carrier during assist as well (s = 0 in both).
-    Regenerating when the rider is not braking is harmless: with the carrier
-    free the motor has nothing to push against and only slows its own rotor.
+    Velocity form: each tick adjusts the current actually sent last tick, so
+    nothing winds up while the envelope clamps it. While the rider holds the
+    carrier (s < SLIP_SET) regen grows until the brake just slips, so the
+    braking torque is whatever the rider's squeeze can hold; when they let go
+    the carrier freewheels (s -> 1) and regen falls to 0. Regenerating with
+    nobody braking is harmless: with the carrier free the motor has nothing to
+    push against and only slows its own rotor.
     """
 
-    REGEN_ONSET_S = 0.97
+    def __init__(self):
+        self._e = None
 
-    def update(self, s, omega_wheel, v_bank, throttle, brake, i_motor, dt):
-        if brake or (throttle == 0.0 and s < self.REGEN_ONSET_S):
-            return -C.I_REGEN_MAX * (1.0 - s)
-        return C.I_ASSIST_MAX * throttle
+    def reset(self):
+        self._e = None
+
+    def update(self, s, w_rpm, throttle, i_last, dt):
+        e = C.SLIP_SET - s
+        de = 0.0 if self._e is None else e - self._e
+        self._e = e
+        if throttle > 0.0:
+            return C.I_ASSIST_MAX * throttle
+        r = (-i_last if i_last < 0.0 else 0.0) + C.SLIP_KP * de + C.SLIP_KI * e * dt
+        return -r if r > 0.0 else 0.0
