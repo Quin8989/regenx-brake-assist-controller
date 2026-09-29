@@ -23,8 +23,8 @@ UART_RXBUF = const(1024)
 TICK_MS = const(10)           # 100 Hz (D8). The loop is fixed-rate, so control
 DT = TICK_MS / 1000           # never does time arithmetic: timeouts count ticks.
                               # Each tick sends a current command and a
-                              # telemetry request (20 bytes) and gets a 23-byte
-                              # reply: about 20 % of each wire direction.
+                              # telemetry request (20 bytes) and gets a 27-byte
+                              # reply: at most a quarter of either direction.
 LINK_TIMEOUT_TICKS = const(25)    # 250 ms of silence -> LIMP (D7)
 LINK_RECOVER_FRAMES = const(10)   # consecutive clean frames before RUN
 

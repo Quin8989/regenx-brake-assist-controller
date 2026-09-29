@@ -13,6 +13,28 @@ Reversing a decision means adding a new entry, not editing an old one.
 
 ---
 
+## 2026-09-29 — Display current, fault retry and cores (owner answers)
+
+**Decided (owner).**
+
+- **The display shows the motor current A1 measures**, not the commanded
+  current, so it is honest when A1 limits itself. The telemetry mask gains
+  motor current again (`0x818D`, 22-byte reply). This reverses the "motor
+  current is no longer requested" line of the entry below.
+- **VESC faults auto-retry** (review F17 closed). RUN resumes after
+  `LINK_RECOVER_FRAMES` clean replies and ramps from 0 A. A hold-off until
+  the rider lets go was offered and declined; a recurring fault is visible on
+  the display.
+- **Problems are listed by name only.** No derived "NO REAR BRAKE" line: the
+  rider infers it from `NO LINK` or `VESC FAULT`. A full bank is not listed.
+- **Two cores stay.** Moving the display onto core 0 in eighth-screen slices
+  was offered. The owner keeps it on core 1 so no display I/O can ever delay
+  the VESC link, after v1's display corruption, which is attributed to a
+  single core missing sync. D2's single-core fallback remains, taken only if
+  headroom is measured on a Pico.
+
+---
+
 ## 2026-09-29 — No ride log; the display shows problems (RGX-2-003 Rev D)
 
 **Decided (owner).** The Pico keeps no ride log. On v1, the RAM ring could

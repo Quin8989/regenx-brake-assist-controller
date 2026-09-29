@@ -82,7 +82,7 @@ def test_riding_screen(core1):
     sn = core1.sn
     sn[K.SN_WHEEL] = 150.0
     sn[K.SN_VIN] = 31.5
-    sn[K.SN_ICMD] = -12.5
+    sn[K.SN_IMOTOR] = -12.5
     core1.render()
     assert [s for _, s in core1.oled.lines] == [
         " 18.9 km/h", " 31.5 V", "-12.5 A"]

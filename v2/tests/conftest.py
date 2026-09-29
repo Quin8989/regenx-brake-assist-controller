@@ -51,10 +51,10 @@ class FakeSensors:
 
 
 # --- what A1 sends ----------------------------------------------------------
-def telem(erpm=0.0, v_in=25.0, i_in=0.0, fault=0, temp=30.0):
+def telem(erpm=0.0, v_in=25.0, i_in=0.0, i_motor=0.0, fault=0, temp=30.0):
     """A COMM_GET_VALUES_SELECTIVE reply frame."""
-    p = struct.pack(">BIhiihB", 50, vesc.MASK, round(temp * 10), round(i_in * 100),
-                    int(erpm), round(v_in * 10), fault)
+    p = struct.pack(">BIhiiihB", 50, vesc.MASK, round(temp * 10), round(i_motor * 100),
+                    round(i_in * 100), int(erpm), round(v_in * 10), fault)
     return bytes(vesc.frame(p))
 
 

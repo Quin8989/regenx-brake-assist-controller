@@ -69,9 +69,10 @@ def test_reply_is_the_fixed_length_the_parser_expects():
 
 def test_decode():
     link, u = link_with()
-    feed(link, u, telem(erpm=-7940, v_in=39.4, i_in=-3.5, temp=-12.5, fault=0))
-    assert (link.erpm, link.v_in, link.i_in, link.temp_fet, link.fault) == \
-        (-7940.0, pytest.approx(39.4), -3.5, -12.5, 0)
+    feed(link, u, telem(erpm=-7940, v_in=39.4, i_in=-3.5, i_motor=-12.25,
+                        temp=-12.5, fault=0))
+    assert (link.erpm, link.v_in, link.i_in, link.i_motor, link.temp_fet, link.fault) == \
+        (-7940.0, pytest.approx(39.4), -3.5, -12.25, -12.5, 0)
 
 
 def test_ok_counts_clean_frames_and_resets_on_fault_or_silence():
@@ -96,7 +97,7 @@ def test_unknown_opcode_is_ignored():
 
 
 # --- parser robustness (RGX-2-003 §4; review F06/F26/F35) ------------------------
-GOOD = telem(erpm=1234, v_in=30.0, i_in=5.3)   # i_in raw 0x0212: a false start inside
+GOOD = telem(erpm=1234, v_in=30.0, i_in=5.34)  # i_in raw 0x0216: a false start inside
 
 
 def test_random_chunking_roundtrip():
@@ -130,7 +131,7 @@ def test_every_single_bit_flip_is_rejected_and_the_next_frame_survives():
             link, u = link_with()
             feed(link, u, bytes(bad) + GOOD)
             assert link.ok == 1, (pos, bit)
-            assert link.i_in == pytest.approx(5.3) and link.erpm == 1234.0
+            assert link.i_in == pytest.approx(5.34) and link.erpm == 1234.0
 
 
 @pytest.mark.parametrize("seed", range(200))

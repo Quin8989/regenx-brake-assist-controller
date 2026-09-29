@@ -1,7 +1,7 @@
 # ui.py — core 1: the display.
 #
-# Speed, bank voltage and current, and below them one line per problem, only
-# while there is one. Redrawing the screen takes about 25 ms over I2C, longer
+# Speed, bank voltage and the motor current A1 measures, and below them one
+# line per problem, only while there is one. Redrawing the screen takes about 25 ms over I2C, longer
 # than a control tick, which is why this runs on the second core.
 #
 # problems() is pure (host-tested); Oled and Core1 are target-only.
@@ -89,7 +89,7 @@ class Core1:
         o.fb.fill(0)
         t("%5.1f km/h" % (sn[K.SN_WHEEL] * C.WHEEL_CIRC_M * 0.06), 0, 0)
         t("%5.1f V" % sn[K.SN_VIN], 0, 10)
-        t("%+5.1f A" % sn[K.SN_ICMD], 0, 20)
+        t("%+5.1f A" % sn[K.SN_IMOTOR], 0, 20)
         for n, line in enumerate(problems(sn, self.errors)[:3]):
             t(line, 0, 34 + 10 * n)
         o.show()

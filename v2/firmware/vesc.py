@@ -13,8 +13,8 @@ import config as C
 
 COMM_SET_CURRENT = 6
 COMM_GET_VALUES_SELECTIVE = 50
-MASK = 0x8189                 # temp_fet, i_in, erpm, v_in, fault
-_LEN = 18                     # reply payload: command, mask echo, the 5 values
+MASK = 0x818D                 # temp_fet, i_motor, i_in, erpm, v_in, fault
+_LEN = 22                     # reply payload: command, mask echo, the 6 values
 _FRAME = _LEN + 5             # start, length, payload, CRC (2), end
 
 
@@ -66,7 +66,7 @@ class Link:
         self._buf = bytearray(256)
         self._mv = memoryview(self._buf)
         self._n = 0
-        self.erpm = self.v_in = self.i_in = self.temp_fet = 0.0
+        self.erpm = self.v_in = self.i_in = self.i_motor = self.temp_fet = 0.0
         self.fault = 0
         self.ok = 0               # consecutive clean telemetry frames
         self.silent = 0           # ticks since the last telemetry frame
@@ -115,8 +115,9 @@ class Link:
         self._n = end - i
 
     def _decode(self, p):
-        t, ii, e, v, f = struct.unpack_from(">hiihB", self._buf, p)
+        t, im, ii, e, v, f = struct.unpack_from(">hiiihB", self._buf, p)
         self.temp_fet = t / 10
+        self.i_motor = im / 100
         self.i_in = ii / 100
         self.erpm = float(e)
         self.v_in = v / 10

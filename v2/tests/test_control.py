@@ -151,9 +151,9 @@ def test_vesc_fault_limps_until_ten_clean_frames(rig):
 def test_snapshot_publishes_the_tick(rig):
     rig.boot()
     for _ in range(30):
-        rig.step(wheel=W, s=0.0, thr=0.5, v_in=31.5, temp=40.0)
+        rig.step(wheel=W, s=0.0, thr=0.5, v_in=31.5, i_motor=19.5, temp=40.0)
     sn = rig.loop.sn
-    assert sn[control.SN_ICMD] == pytest.approx(rig.loop.i)
+    assert sn[control.SN_IMOTOR] == pytest.approx(19.5)
     assert sn[control.SN_VIN] == pytest.approx(31.5)
     assert sn[control.SN_WHEEL] == W
     assert sn[control.SN_TFET] == pytest.approx(40.0)

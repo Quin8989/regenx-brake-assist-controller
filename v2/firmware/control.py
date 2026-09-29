@@ -14,7 +14,7 @@ import config as C
 # snapshot layout: one array('f') the display on core 1 reads. Core 0 is the
 # only writer; the display may see a mix of two consecutive ticks, which is
 # harmless, so no lock is needed. SN_LATE is written by main.py.
-(SN_WHEEL, SN_VIN, SN_ICMD, SN_TFET, SN_STATE, SN_FAULT, SN_BAD,
+(SN_WHEEL, SN_VIN, SN_IMOTOR, SN_TFET, SN_STATE, SN_FAULT, SN_BAD,
  SN_LATE) = range(8)
 SN_LEN = 8
 
@@ -104,7 +104,7 @@ class Control:
         sn = self.sn
         sn[SN_WHEEL] = w
         sn[SN_VIN] = L.v_in
-        sn[SN_ICMD] = i
+        sn[SN_IMOTOR] = L.i_motor
         sn[SN_TFET] = L.temp_fet
         sn[SN_STATE] = RUN if run else (LIMP_FAULT if L.fault else LIMP_LINK)
         sn[SN_FAULT] = L.fault
