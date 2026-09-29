@@ -71,8 +71,17 @@ independent re-review of the rewrite found 8 defects, all fixed before merge.
   brake), and regen onset is limited by 6 PPR slip sensing (D9). Rules out
   GP14 / the D9 lever fast path.
 
-Open: C6 value on the shell-sensor input, decided by scoping the signal with
-the motor under PWM (spec §11 item 8), not by default (F31).
+- **C6 = 10 nF** (drawing Rev E, spec Rev D; was 1 nF). The speed wire runs
+  beside PWM-switched phase leads, and wheel speed now feeds the control
+  variable directly. R6·C6 = 10 µs filters µs-scale spikes (a 1 µs, 5 V spike
+  reaches the pin at ≈ 0.5 V) at no code cost. The rising edge through
+  R5+R6 is 110 µs, about 1 % of a half-period at 60 km/h, and the period
+  measurement is unaffected (one rise and one fall per period). 100 nF was
+  rejected: 1.1 ms rising edges for no further benefit. Still scope the
+  signal at spec §11 item 8.
+  Drawing Rev E carries only this change. The Higo Z910 W1 change, earlier
+  "queued as drawing Rev E", moves to Rev F (BOM Compatibility and Queued
+  changes sheets updated).
 
 ---
 

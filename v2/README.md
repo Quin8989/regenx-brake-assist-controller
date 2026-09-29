@@ -7,8 +7,8 @@ hub, buffered by supercapacitors, returning energy as a few short boosts.
 
 | Path | What it is | Authority |
 |---|---|---|
-| [`design/`](design/) | The **released design**: spec RGX-2-001 Rev C, drawing RGX-2-100 Rev D, BOM RGX-2-002, firmware architecture RGX-2-003 Rev C | **Authoritative** |
-| [`firmware/`](firmware/) | The v2 firmware (MicroPython, per RGX-2-003 Rev C, ~835 lines). Host core green and cross-compiles for the RP2040; on-target gates FW-0..FW-2 pending a Pico | Implementation |
+| [`design/`](design/) | The **released design**: spec RGX-2-001 Rev D, drawing RGX-2-100 Rev E, BOM RGX-2-002, firmware architecture RGX-2-003 Rev C | **Authoritative** |
+| [`firmware/`](firmware/) | The v2 firmware (MicroPython, per RGX-2-003 Rev C, ~845 lines). Host core green and cross-compiles for the RP2040; on-target gates FW-0..FW-2 pending a Pico | Implementation |
 | [`tools/`](tools/) | Host side: `deploy.sh` (mpremote, WDT-safe), `decode_log.py` (ride logs → CSV with speed and slip), `A1-SETUP.md` (VESC Tool checklist, including motor direction) | — |
 | [`tests/`](tests/) | CPython test suite for the firmware's pure core, driven through a Willis/clutch plant (`python -m pytest` from `v2/`). Runs in CI as its own job, with an `mpy-cross` build | — |
 | [`research/`](research/) | Working analysis, decision log, sourcing notes — the *why* behind the design | History; where it disagrees with `design/`, the design wins |

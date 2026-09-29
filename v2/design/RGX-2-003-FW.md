@@ -1,6 +1,6 @@
 # ReGenX v2 — Firmware Architecture
 
-**Document** RGX-2-003 **Rev C** · against RGX-2-001 Rev C / RGX-2-100 Rev D /
+**Document** RGX-2-003 **Rev C** · against RGX-2-001 Rev D / RGX-2-100 Rev E /
 RGX-2-002 Rev A · 2026-09-29
 
 Implemented in `v2/firmware/` (host tests in `v2/tests/`). The regen control

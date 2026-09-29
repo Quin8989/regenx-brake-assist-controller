@@ -1,5 +1,5 @@
 <meta charset="utf-8">
-<title>ReGenX v2 — Schematic Set Rev D</title>
+<title>ReGenX v2 — Schematic Set Rev E</title>
 <style>
   :root {
     --ground:#F2F4F4; --surface:#FFFFFF; --surface-2:#EAEDED;
@@ -84,7 +84,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Document RGX-2-100 · Rev D</div>
+  <div class="eyebrow">Document RGX-2-100 · Rev E</div>
   <h1>ReGenX v2 — Schematic Set</h1>
 </header>
 
@@ -201,9 +201,9 @@
     <text class="tt" x="1040" y="772">ReGenX v2</text>
     <text class="t"  x="1040" y="802">System block diagram</text>
     <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
-    <text class="ts" x="1240" y="828">REV  D</text>
+    <text class="ts" x="1240" y="828">REV  E</text>
     <text class="ts" x="1040" y="856">SHEET 1 OF 3</text>
-    <text class="ts" x="1240" y="856">2026-08-02</text>
+    <text class="ts" x="1240" y="856">2026-09-29</text>
   </svg>
   </div>
 </section>
@@ -370,9 +370,9 @@
     <text class="tt" x="1040" y="772">ReGenX v2</text>
     <text class="t"  x="1040" y="802">Power distribution and protection</text>
     <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
-    <text class="ts" x="1240" y="828">REV  D</text>
+    <text class="ts" x="1240" y="828">REV  E</text>
     <text class="ts" x="1040" y="856">SHEET 2 OF 3</text>
-    <text class="ts" x="1240" y="856">2026-08-02</text>
+    <text class="ts" x="1240" y="856">2026-09-29</text>
   </svg>
   </div>
 
@@ -616,9 +616,9 @@
     <text class="tt" x="1040" y="772">ReGenX v2</text>
     <text class="t"  x="1040" y="802">MCU, sensors and interfaces</text>
     <text class="ts" x="1040" y="828">DWG  RGX-2-100</text>
-    <text class="ts" x="1240" y="828">REV  D</text>
+    <text class="ts" x="1240" y="828">REV  E</text>
     <text class="ts" x="1040" y="856">SHEET 3 OF 3</text>
-    <text class="ts" x="1240" y="856">2026-08-02</text>
+    <text class="ts" x="1240" y="856">2026-09-29</text>
   </svg>
   </div>
 
@@ -634,7 +634,7 @@
         <tr><td class="r">W1</td><td class="z">A1</td><td>Cable assembly, adapter</td><td class="m">J1 6-way → J2 JST-PH 6-way. 5 conductors through; shell-speed conductor branched to R6</td></tr>
         <tr><td class="r">R5</td><td class="z">B1</td><td>Resistor</td><td class="m">10 kΩ ±5 %, 1/4 W. Shell-speed pull-up to +3V3</td></tr>
         <tr><td class="r">R6</td><td class="z">B1</td><td>Resistor</td><td class="m">1 kΩ ±5 %, 1/4 W. Series. Fault injection limit 1.7 mA at 5 V</td></tr>
-        <tr><td class="r">C6</td><td class="z">B2</td><td>Capacitor</td><td class="m">1 nF, ≥50 V, C0G. R6·C6 = 1 µs; signal band ≤ 30 Hz</td></tr>
+        <tr><td class="r">C6</td><td class="z">B2</td><td>Capacitor</td><td class="m">10 nF, ≥50 V, C0G. R6·C6 = 10 µs noise filter (a 1 µs, 5 V spike reaches the pin at ≈ 0.5 V); rising edge (R5+R6)·C6 = 110 µs; signal band ≤ 30 Hz</td></tr>
         <tr><td class="r">J3</td><td class="z">C1</td><td>Connector, throttle</td><td class="m">3-way. Hall throttle, ratiometric, supplied from +3V3</td></tr>
         <tr><td class="r">D3</td><td class="z">C1</td><td>Diode, TVS</td><td class="m">Unidirectional, V<sub>RWM</sub> 3.3 V, <strong>V<sub>C</sub> ≤ 4.5 V @ 1 A</strong>, SOD-323 or larger. U2 GPIO absolute max = IOVDD + 0.5 = 3.8 V</td></tr>
         <tr><td class="r">R2</td><td class="z">C2</td><td>Resistor</td><td class="m">100 kΩ ±5 %, 1/4 W. Throttle pulldown, open-circuit detection. R2·C7 = 10 ms</td></tr>
@@ -690,6 +690,7 @@
         <tr><td class="r">B</td><td class="z">2026-08-02</td><td>Added J4, S2, R5, R6, C6, C7, D3. F1 → 50 A Class T. F3 → 5 A time-delay. D1 → 6 A. R3, R4 → 1 kΩ. U1 conduction threshold 19.2 V, setpoints added. Sheet 1 +5V source corrected to A1. Zone references corrected. NOTES 4–8 added.</td></tr>
         <tr><td class="r">C</td><td class="z">2026-08-02</td><td>Added R7 in THR series. D3 respecified by V<sub>C</sub> and redrawn as TVS. Bank circuit 10 → 8 AWG. R1 50 → 100 W, energy 650 → 832 J. S1 make 150 → 300 A, zone A3 → B3. C4 100 → 220 µF, zone A3 → B3. S2 auto → manual reset, voltage rating added. C1–C3 absolute 48.6 → 45.4 V. +5V_RTN added and U2 removed from the GND net. SHEET 2 NOTES 2, 4, 6, 8 and SHEET 3 NOTE 2 revised.</td></tr>
         <tr><td class="r">D</td><td class="z">2026-08-02</td><td>D3 symbol orientation corrected (cathode to THR). S2 redrawn normally-closed. SHEET 2 flags 2 and 4 exchanged to match renumbered notes. Junction dots added at C3 −, U1 − and R2 tees; crossing convention stated in SHEET 1 NOTE 5. R5 branch tee moved to its junction. P/N TBD marked on S1, S2, F1 block, J4. A1 pigtail termination noted. F2 and R2 symbols rotated to match branch direction. D2 return rerouted clear of the bank stack. Polarity marks added to BT1, J4, C1–C3. Title blocks to REV D and titles matched to sheet headings. Sheet-boundary nets renamed +5V, SPD, THR. UART nets labelled; A1 pin sides marked. F3 holder designated BT1 service disconnect; NOTE 7 revised. Zone listings corrected: R1 B1–B2, F2 B3–C3, DS1 B4–C4.</td></tr>
+        <tr><td class="r">E</td><td class="z">2026-09-29</td><td>C6 1 → 10 nF: shell-speed input filtered against phase-lead PWM coupling (R6·C6 1 → 10 µs; rising edge 110 µs, about 1 % of a half-period at 60 km/h). Title blocks to REV E.</td></tr>
       </tbody>
     </table>
   </div>

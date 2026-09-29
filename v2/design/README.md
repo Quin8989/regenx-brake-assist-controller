@@ -8,10 +8,10 @@ other document disagrees with these files, these win.
 
 | File | Contents |
 |---|---|
-| [`RGX-2-001-SPEC.md`](RGX-2-001-SPEC.md) | Specification, **Rev C**. Parameters, governing equations, computed performance, component and interface schedules, protection coordination, unverified parameters, measurement schedule |
+| [`RGX-2-001-SPEC.md`](RGX-2-001-SPEC.md) | Specification, **Rev D**. Parameters, governing equations, computed performance, component and interface schedules, protection coordination, unverified parameters, measurement schedule |
 | [`RGX-2-002-BOM.xlsx`](RGX-2-002-BOM.xlsx) | Bill of materials, **Rev A**. Five sheets: sourced parts with live price totals (CAD), compatibility verification, incoming-inspection checklist, queued spec/drawing changes, sources |
 | [`RGX-2-003-FW.md`](RGX-2-003-FW.md) | Firmware architecture, **Rev C**. Rev C amendments table (what review 1 changed), then the Rev B decision register: every choice with alternatives, numbers and its overturning measurement; two-core design with soak gate and fallback; VESC link decisions; latency budget; commissioning plan |
-| [`RGX-2-100-schematic.html`](RGX-2-100-schematic.html) | Drawing RGX-2-100, **Rev D**. Three sheets, parts lists, notes, interface schedule, revision history. Open in a browser |
+| [`RGX-2-100-schematic.html`](RGX-2-100-schematic.html) | Drawing RGX-2-100, **Rev E**. Three sheets, parts lists, notes, interface schedule, revision history. Open in a browser |
 | [`planetary-freegen-sim.html`](planetary-freegen-sim.html) | Interactive planetary model: torque directions for assist, coast and regen. Open in a browser |
 | `regenx-v2-design-package.zip` | The files above, bundled for sending to a reviewer |
 

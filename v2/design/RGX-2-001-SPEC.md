@@ -1,6 +1,8 @@
 # ReGenX v2 — Design Specification
 
-**Document** RGX-2-001 Rev C · **Drawing** RGX-2-100 Rev D · 2026-08-02
+**Document** RGX-2-001 Rev D · **Drawing** RGX-2-100 Rev E · 2026-09-29
+
+Rev D: C6 1 → 10 nF (§7). Everything else is unchanged from Rev C.
 
 ---
 
@@ -448,7 +450,7 @@ No PRECHARGE state. No FAULT contactor state. No sleep state.
 | W1 | Cable assembly | J1 → J2, 5 conductors through; SPD branched to R6 |
 | R5 | Resistor | 10 kΩ ±5 %, 1/4 W. SPD pull-up to +3V3 |
 | R6 | Resistor | 1 kΩ ±5 %, 1/4 W. Series. Fault injection limit 1.7 mA at 5 V |
-| C6 | Capacitor | 1 nF, ≥50 V, C0G. R6·C6 = 1 µs; signal band ≤30 Hz |
+| C6 | Capacitor | 10 nF, ≥50 V, C0G. R6·C6 = 10 µs noise filter; rising edge (R5+R6)·C6 = 110 µs; signal band ≤30 Hz |
 | J3 | Connector, throttle | 3-way. Hall, ratiometric, supplied from +3V3 |
 | **R7** | Resistor | **1 kΩ ±5 %, 1/4 W. THR series, between J3 SIG and the C7 node.** Fault injection limit 1.7 mA at 5 V. R7·C7 = 100 µs vs ~10 Hz signal band |
 | R2 | Resistor | 100 kΩ ±5 %, 1/4 W. Pulldown, open-circuit detection. R2·C7 = 10 ms |
