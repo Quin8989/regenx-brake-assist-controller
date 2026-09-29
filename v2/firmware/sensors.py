@@ -1,20 +1,29 @@
-# sensors.py — wheel speed (PIO), throttle, VSYS. Spec §10.1-10.3.
+# sensors.py — wheel speed, throttle and the Pico's supply voltage.
+# Specification sections 10.1 to 10.3.
 #
 # Wheel and Throttle take their hardware object as an argument, so the logic
-# runs under CPython with fakes. Only Sensors() touches machine/rp2.
+# runs on a desktop Python with stand-ins for the hardware. Only Sensors()
+# touches the Pico's machine and rp2 modules.
 
 import config as C
 
 
 class Wheel:
-    """Wheel rpm from the PIO phase lengths (us), one read per tick.
+    """Wheel speed in revolutions per minute, updated once per control tick.
 
-    Every high and every low phase arrives as its own word, so any two
-    consecutive phases make a full period and the estimate refreshes at each
-    edge. A phase shorter than SPD_MIN_PHASE_US is a glitch (or the counter
-    running out after 71 min) and restarts the pairing. Between edges the
-    estimate is capped by the time since the last edge, so it decays while
-    braking instead of holding a stale period, and reads 0 once stopped.
+    The wheel-speed sensor gives 6 pulses per revolution. A programmable
+    input/output state machine on the Pico (hardware that runs on its own,
+    independent of the processor cores) times how long the signal stays high
+    and how long it stays low, in microseconds, and queues each of those
+    phase lengths for this code to read.
+
+    Any two consecutive phases, one high and one low, add up to one full
+    pulse period, so the speed estimate refreshes at every edge. A phase
+    shorter than SPD_MIN_PHASE_US is electrical noise (or the state machine's
+    counter running out after 71 minutes at a standstill) and restarts the
+    pairing. Between edges the estimate is capped by the time since the last
+    edge, so it falls while braking instead of holding an out-of-date period,
+    and reads zero once the wheel has stopped.
     """
 
     def __init__(self, sm):
@@ -39,21 +48,22 @@ class Wheel:
         if self.rpm > cap:
             if cap > C.SPD_MIN_RPM:
                 self.rpm = cap
-            else:                       # stopped: next start pairs fresh phases
+            else:                       # stopped: pair only new phases on restart
                 self.rpm = 0.0
                 self._prev = 0
         return self.rpm
 
 
 class Throttle:
-    """0..1 with deadband, or 0 when not trustworthy (spec §10.3).
+    """Throttle position from 0 to 1 with a dead band at idle, or 0 when the
+    reading cannot be trusted (specification section 10.3).
 
-    Out of the [THR_LO, THR_HI] window (open wire reads 0 V through R2, a
-    short reads rail) the throttle simply reads 0: assist stops, regen is
-    untouched, and there is no fault state to manage. Assist arms only once
-    the throttle has been seen at idle, at power-on and after any
-    out-of-window reading, so a held, stuck or flickering throttle gives
-    nothing until it is released.
+    Outside the THR_LO to THR_HI window (a broken wire reads 0 volts through
+    R2, a short circuit reads the supply rail) the throttle simply reads 0:
+    assist stops, regenerative braking is untouched, and there is no fault
+    state to manage. Assist is only enabled once the throttle has been seen
+    at idle, both at power-on and after any out-of-window reading, so a held,
+    stuck or flickering throttle does nothing until it is released.
     """
 
     def __init__(self, adc):
@@ -76,7 +86,7 @@ class Throttle:
 
 
 class Sensors:
-    """The bundle control.py consumes. Target only."""
+    """The sensors control.py reads. Runs on the Pico only."""
 
     def __init__(self):
         import rp2
@@ -84,10 +94,11 @@ class Sensors:
 
         @rp2.asm_pio()
         def phases():
-            # Push the length of every high and low phase in us (2 cycles per
-            # loop at 2 MHz). Sync to a rising edge first so the first phase
-            # is whole.
-            wait(0, pin, 0)                 # noqa: F821 (PIO assembler names)
+            # State machine program: measure every high and every low phase
+            # of the wheel-speed signal and queue its length in microseconds
+            # (each counting loop takes 2 cycles at a 2 megahertz clock).
+            # It first waits for a rising edge so the first phase is whole.
+            wait(0, pin, 0)                 # noqa: F821 (assembler names)
             wait(1, pin, 0)                 # noqa: F821
             wrap_target()                   # noqa: F821
             mov(x, invert(null))            # noqa: F821
@@ -112,8 +123,10 @@ class Sensors:
         sm = rp2.StateMachine(0, phases, freq=2_000_000, in_base=spd, jmp_pin=spd)
         sm.active(1)
         self.wheel = Wheel(sm)
-        # ADCs built from Pins so MicroPython disables the pad pull-down
-        # (by channel number it stays on and VSYS reads about half).
+        # Build the analog-to-digital converters from Pin objects so
+        # MicroPython switches off the pin's internal pull-down resistor.
+        # Created from a bare channel number it stays on, and the supply
+        # voltage reads about half its true value.
         self.throttle = Throttle(ADC(Pin(C.PIN_THR)))
         self._vsys = ADC(Pin(C.PIN_VSYS))
 
