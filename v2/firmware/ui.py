@@ -1,8 +1,9 @@
 # ui.py — core 1: the display.
 #
 # Speed, bank voltage and the motor current A1 measures, and below them one
-# line per problem, only while there is one. Redrawing the screen takes about 25 ms over I2C, longer
-# than a control tick, which is why this runs on the second core.
+# line per problem, only while there is one. Redrawing the screen takes about
+# 25 ms over I2C, longer than a control tick, which is why this runs on the
+# second core.
 #
 # problems() is pure (host-tested); Oled and Core1 are target-only.
 # RGX-2-003 D14 as amended in Rev D.
