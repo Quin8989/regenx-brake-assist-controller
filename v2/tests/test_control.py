@@ -18,36 +18,34 @@ def test_slip_follows_the_plant():
 
 # --- envelope ------------------------------------------------------------------
 def test_slew_limits_only_the_build_up():
-    assert envelope(40.0, 0.0, 25.0, 0.0, W) == C.SLEW_STEP_A
-    assert envelope(-40.0, 0.0, 25.0, 0.0, W) == -C.SLEW_STEP_A
-    assert envelope(10.0, 20.0, 25.0, 0.0, W) == 10.0      # release: at once
-    assert envelope(0.0, 20.0, 25.0, 0.0, W) == 0.0
-    assert envelope(-36.0, 20.0, 25.0, 0.0, W) == -C.SLEW_STEP_A   # reversal
-    assert envelope(-10.0, -30.0, 25.0, 0.0, W) == -10.0
+    assert envelope(40.0, 0.0, 25.0, 0.0) == C.SLEW_STEP_A
+    assert envelope(-40.0, 0.0, 25.0, 0.0) == -C.SLEW_STEP_A
+    assert envelope(10.0, 20.0, 25.0, 0.0) == 10.0      # release: at once
+    assert envelope(0.0, 20.0, 25.0, 0.0) == 0.0
+    assert envelope(-36.0, 20.0, 25.0, 0.0) == -C.SLEW_STEP_A   # reversal
+    assert envelope(-10.0, -30.0, 25.0, 0.0) == -10.0
 
 
 def test_clamps_act_in_the_same_tick():
     # bank at the terminal limit: regen goes to 0 at once, not at the slew rate
-    assert envelope(-30.0, -30.0, C.V_TERM_MAX, 0.0, W) == 0.0
-    # below W_MIN_RPM: no regen (it would back the wheel up)
-    assert envelope(-30.0, -30.0, 25.0, 0.0, C.W_MIN_RPM - 1) == 0.0
+    assert envelope(-30.0, -30.0, C.V_TERM_MAX, 0.0) == 0.0
 
 
 def test_regen_cap_uses_open_circuit_voltage():
     # 10 A of regen lifts the terminal by I*R; the cap must not mistake that
     # for a full bank (v_oc = 38.5 - 3.67 = 34.8 V -> cap 11.4 A)
-    assert envelope(-10.0, -10.0, 38.5, -10.0, W) == -10.0
+    assert envelope(-10.0, -10.0, 38.5, -10.0) == -10.0
 
 
 def test_assist_floor_protects_a1_supply():
     cap = (10.0 - C.V_TERM_MIN) / C.R_BANK
-    assert envelope(30.0, 30.0, 10.0, 0.0, W) == pytest.approx(cap)
-    assert envelope(30.0, 30.0, C.V_TERM_MIN, 0.0, W) == 0.0
+    assert envelope(30.0, 30.0, 10.0, 0.0) == pytest.approx(cap)
+    assert envelope(30.0, 30.0, C.V_TERM_MIN, 0.0) == 0.0
 
 
 def test_caps_never_flip_the_sign():
-    assert envelope(-30.0, -30.0, 45.0, 0.0, W) == 0.0
-    assert envelope(30.0, 30.0, 5.0, 0.0, W) == 0.0
+    assert envelope(-30.0, -30.0, 45.0, 0.0) == 0.0
+    assert envelope(30.0, 30.0, 5.0, 0.0) == 0.0
 
 
 @pytest.mark.parametrize("r_true", [0.187, 0.27, 0.367])
@@ -57,7 +55,7 @@ def test_full_bank_settles_below_the_ov_trip(r_true):
     v_oc, i, seen = 38.0, 0.0, (38.0, 0.0)
     trace = []
     for _ in range(300):
-        i = envelope(-40.0, i, seen[0], seen[1], W)
+        i = envelope(-40.0, i, seen[0], seen[1])
         v_in = v_oc - i * r_true                  # regen (i < 0) lifts the terminal
         seen = (v_in, i)                          # A1 reports i_in = i here
         v_oc += -i * 0.01 / 6.67                  # bank charges
@@ -72,9 +70,9 @@ def test_boot_commands_nothing_until_the_link_is_clean():
     r = Rig()
     for _ in range(C.LINK_RECOVER_FRAMES - 1):
         assert r.step(wheel=W, s=0.0, thr=0.5) == 0.0
-        assert r.state == control.LIMP_LINK
+        assert not r.running
     assert r.step(wheel=W, s=0.0, thr=0.5) > 0.0     # no FW handshake needed
-    assert r.state == control.RUN
+    assert r.running
 
 
 def test_assist_stays_assist_with_the_carrier_held(rig):
@@ -111,13 +109,13 @@ def test_releasing_the_throttle_cuts_assist_at_once(rig):
 
 def test_throttle_loss_keeps_regen(rig):
     # review F03: a dead throttle reads 0 (sensors.Throttle); that only stops
-    # assist, the loop stays in RUN and braking still regenerates
+    # assist, the link stays up and braking still regenerates
     rig.boot()
     for _ in range(20):
         rig.step(wheel=W, s=0.0, thr=0.5)
     for _ in range(100):
         i = rig.step(wheel=W, s=0.0, thr=0.0)
-    assert rig.state == control.RUN and i < -10.0
+    assert rig.running and i < -10.0
 
 
 def test_link_silence_zeroes_at_once_and_recovers(rig):
@@ -127,25 +125,25 @@ def test_link_silence_zeroes_at_once_and_recovers(rig):
     for _ in range(C.LINK_TIMEOUT_TICKS):
         assert rig.step(wheel=W, s=0.0, thr=0.5, reply=False) > 0.0
     assert rig.step(wheel=W, s=0.0, thr=0.5, reply=False) == 0.0
-    assert rig.state == control.LIMP_LINK
+    assert not rig.running and rig.link.fault == 0
     n = len(rig.uart.tx)
     rig.step(reply=False)
     assert len(rig.uart.tx) > n                        # keepalive continues at 0 A
     assert last_current(rig.uart.tx) == 0.0
     for _ in range(C.LINK_RECOVER_FRAMES):
         i = rig.step(wheel=W, s=0.0, thr=0.5)
-    assert rig.state == control.RUN and i == C.SLEW_STEP_A    # ramps from 0
+    assert rig.running and i == C.SLEW_STEP_A    # ramps from 0
 
 
 def test_vesc_fault_limps_until_ten_clean_frames(rig):
     rig.boot()
     rig.step(wheel=W, s=0.0, thr=0.5, fault=5)
-    assert rig.state == control.LIMP_FAULT and rig.loop.i == 0.0
+    assert not rig.running and rig.link.fault == 5 and rig.loop.i == 0.0
     for _ in range(C.LINK_RECOVER_FRAMES - 1):
         rig.step(wheel=W, s=0.0, thr=0.5)
-        assert rig.state != control.RUN
+        assert not rig.running
     rig.step(wheel=W, s=0.0, thr=0.5)
-    assert rig.state == control.RUN
+    assert rig.running
 
 
 def test_snapshot_publishes_the_tick(rig):
@@ -157,7 +155,7 @@ def test_snapshot_publishes_the_tick(rig):
     assert sn[control.SN_VIN] == pytest.approx(31.5)
     assert sn[control.SN_WHEEL] == W
     assert sn[control.SN_TFET] == pytest.approx(40.0)
-    assert sn[control.SN_STATE] == control.RUN
+    assert sn[control.SN_RUN] == 1.0
 
 
 # --- the slip PI, closed loop through the whole tick --------------------------------
@@ -198,9 +196,25 @@ def test_the_throttle_ends_regen_at_once():
     assert trace[n - 1][1] < -20.0 and trace[n][1] > 0.0
 
 
+def test_no_regen_near_a_standstill(rig):
+    # slip reads 1 below W_MIN_RPM, so even a held carrier gets no regen
+    # (it would back the wheel up); the request alone guarantees it
+    rig.boot()
+    for _ in range(50):
+        i = rig.step(wheel=W, s=0.0)
+    assert i < -10.0
+    assert rig.step(wheel=C.W_MIN_RPM - 1, s=0.0) == 0.0
+    for _ in range(100):
+        assert rig.step(wheel=C.W_MIN_RPM - 1, s=0.0) == 0.0
+
+
+def test_request_caps_regen():
+    assert request(1.0, 1.0, 0.0, -C.I_REGEN_MAX) == -C.I_REGEN_MAX
+
+
 def test_request_never_regenerates_while_coasting():
     i = 0.0
     for _ in range(100):
         e = C.SLIP_SET - 1.0
-        i = envelope(request(e, 0.0, 0.0, i), i, 25.0, 0.0, W)
+        i = envelope(request(e, 0.0, 0.0, i), i, 25.0, 0.0)
     assert i == 0.0

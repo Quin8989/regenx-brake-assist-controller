@@ -22,9 +22,10 @@ import vesc
 def run():
     uart = UART(C.UART_ID, baudrate=C.UART_BAUD, tx=Pin(C.PIN_UART_TX),
                 rx=Pin(C.PIN_UART_RX), rxbuf=C.UART_RXBUF, timeout=0)
-    loop = control.Control(vesc.Link(uart), sensors.Sensors())
+    wheel, throttle = sensors.pico()
+    loop = control.Control(vesc.Link(uart), wheel, throttle)
     sn = loop.sn
-    _thread.start_new_thread(ui.Core1(sn).run, ())
+    _thread.start_new_thread(ui.run, (sn,))
     wdt = WDT(timeout=C.WDT_MS)
     n = 0
     due = time.ticks_ms()

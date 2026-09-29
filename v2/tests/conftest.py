@@ -44,12 +44,6 @@ class _Value:
         return self.value
 
 
-class FakeSensors:
-    def __init__(self):
-        self.wheel = _Value()
-        self.throttle = _Value()
-
-
 # --- what A1 sends ----------------------------------------------------------
 def telem(erpm=0.0, v_in=25.0, i_in=0.0, i_motor=0.0, fault=0, temp=30.0):
     """A COMM_GET_VALUES_SELECTIVE reply frame."""
@@ -81,14 +75,15 @@ class Rig:
     def __init__(self):
         self.uart = FakeUART()
         self.link = vesc.Link(self.uart)
-        self.sensors = FakeSensors()
-        self.loop = control.Control(self.link, self.sensors)
+        self.wheel = _Value()
+        self.throttle = _Value()
+        self.loop = control.Control(self.link, self.wheel, self.throttle)
 
     def step(self, wheel=0.0, s=1.0, thr=0.0, reply=True, **kw):
         """One tick. The plant sets ERPM from wheel speed and slip unless
         erpm= is given; reply=False simulates a lost telemetry reply."""
-        self.sensors.wheel.value = wheel
-        self.sensors.throttle.value = thr
+        self.wheel.value = wheel
+        self.throttle.value = thr
         if reply:
             kw.setdefault("erpm", rotor_erpm(wheel, s))
             self.uart.inject(telem(**kw))
@@ -97,11 +92,11 @@ class Rig:
     def boot(self, **kw):
         for _ in range(C.LINK_RECOVER_FRAMES):
             self.step(**kw)
-        assert self.state == control.RUN
+        assert self.running
 
     @property
-    def state(self):
-        return int(self.loop.sn[control.SN_STATE])
+    def running(self):
+        return self.loop.sn[control.SN_RUN] == 1.0
 
 
 @pytest.fixture

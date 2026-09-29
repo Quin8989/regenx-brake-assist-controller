@@ -60,9 +60,10 @@ def _seal(b, n):
 class Link:
     def __init__(self, uart):
         self.uart = uart
-        self._cmd = frame(bytes(5))
-        self._cmd[2] = COMM_SET_CURRENT
-        self._req = frame(struct.pack(">BI", COMM_GET_VALUES_SELECTIVE, MASK))
+        # each tick's whole transmission: the current command, then the
+        # telemetry request; only the command's amps and CRC change
+        self._out = (frame(bytes((COMM_SET_CURRENT, 0, 0, 0, 0)))
+                     + frame(struct.pack(">BI", COMM_GET_VALUES_SELECTIVE, MASK)))
         self._buf = bytearray(256)
         self._mv = memoryview(self._buf)
         self._n = 0
@@ -78,10 +79,9 @@ class Link:
         self.silent += 1
         if self.silent > C.LINK_TIMEOUT_TICKS:
             self.ok = 0
-        struct.pack_into(">i", self._cmd, 3, int(amps * 1000))
-        _seal(self._cmd, 5)
-        self.uart.write(self._cmd)
-        self.uart.write(self._req)
+        struct.pack_into(">i", self._out, 3, int(amps * 1000))
+        _seal(self._out, 5)
+        self.uart.write(self._out)
 
     def poll(self):
         """Start of tick: drain RX and decode every complete reply.

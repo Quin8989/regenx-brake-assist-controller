@@ -58,7 +58,8 @@ def test_every_tick_sends_the_command_then_the_request():
     for _ in range(100):
         link.send(0.0)
     assert bytes(u.tx).count(bytes((2, 5, vesc.COMM_SET_CURRENT))) == 100
-    assert count(u.tx, link._req) == 100
+    req = vesc.frame(struct.pack(">BI", vesc.COMM_GET_VALUES_SELECTIVE, vesc.MASK))
+    assert count(u.tx, req) == 100
     assert len(u.tx) == 100 * 20
 
 
