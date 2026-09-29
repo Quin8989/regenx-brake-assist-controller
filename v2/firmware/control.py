@@ -62,24 +62,19 @@ def envelope(req, last, v_in, i_in):
 
     The slew only limits how fast torque builds (SLEW_STEP_A per tick away
     from zero); any reduction, including a reversal through zero, is taken
-    at once. The clamps only ever shrink |i|, so every limit and a released
-    throttle act in the same tick. Both use the open-circuit estimate
-    v_oc = v_in + i_in*R_BANK (VESC i_in > 0 = drawing from the bank). Regen
-    current is capped so A1's terminal stays below V_TERM_MAX and assist so
-    it stays above V_TERM_MIN. That single formula is the bank-full taper and
-    the brownout floor, and it cannot limit-cycle on the bank's I*R step.
+    at once. The clamp then keeps A1's terminal voltage v_oc - i*R_BANK
+    inside [V_TERM_MIN, V_TERM_MAX], using the open-circuit estimate
+    v_oc = v_in + i_in*R_BANK (VESC i_in > 0 = drawing from the bank). It
+    only ever shrinks |i|, never flips its sign, and acts in the same tick.
+    That one rule is the bank-full taper and the brownout floor, and it
+    cannot limit-cycle on the bank's I*R step.
     """
-    s = C.SLEW_STEP_A
-    if req > 0.0:
-        i = min(req, (last if last > 0.0 else 0.0) + s)
-    else:
-        i = max(req, (last if last < 0.0 else 0.0) - s)
     v_oc = v_in + i_in * C.R_BANK
-    if i > 0.0:
-        cap = (v_oc - C.V_TERM_MIN) / C.R_BANK
-        return i if i < cap else (cap if cap > 0.0 else 0.0)
-    cap = (C.V_TERM_MAX - v_oc) / C.R_BANK
-    return i if i > -cap else (-cap if cap > 0.0 else 0.0)
+    if req > 0.0:
+        i = min(req, (last if last > 0.0 else 0.0) + C.SLEW_STEP_A)
+        return min(i, max((v_oc - C.V_TERM_MIN) / C.R_BANK, 0.0))  # assist: >= MIN
+    i = max(req, (last if last < 0.0 else 0.0) - C.SLEW_STEP_A)
+    return max(i, min((v_oc - C.V_TERM_MAX) / C.R_BANK, 0.0))  # regen: <= MAX
 
 
 class Control:
